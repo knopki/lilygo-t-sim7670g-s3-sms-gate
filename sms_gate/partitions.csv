@@ -1,0 +1,11 @@
+# Custom partition table for LilyGO T-SIM7670G-S3.
+# appcfg is isolated so USB bootloader recovery can erase network/web settings
+# without touching the default NVS partition used by future subsystems.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x5000,
+otadata,    data, ota,     0xe000,   0x2000,
+app0,       app,  ota_0,   0x10000,  0x300000,
+app1,       app,  ota_1,   0x310000, 0x300000,
+appcfg,     data, nvs,     0x610000, 0x6000,
+ffat,       data, fat,     0x616000, 0x9DA000,
+coredump,   data, coredump,0xFF0000, 0x10000,

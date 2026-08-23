@@ -1,0 +1,19 @@
+[settings]
+all_compile = false
+
+[tools]
+arduino-cli = "1.5.1"
+clang-format = "22.1.8"
+"pipx:cppcheck" = "1.5.1"
+
+[tasks."fmt"]
+description = "Format Arduino C++ source and headers"
+run = "clang-format -i sms_gate/sms_gate.ino sms_gate/config_record.h sms_gate/config_store.h sms_gate/config_store.cpp sms_gate/web_ui.h sms_gate/web_ui.cpp"
+
+[tasks."fmt:check"]
+description = "Check Arduino C++ formatting without modifying"
+run = "clang-format --dry-run --Werror sms_gate/sms_gate.ino sms_gate/config_record.h sms_gate/config_store.h sms_gate/config_store.cpp sms_gate/web_ui.h sms_gate/web_ui.cpp"
+
+[tasks."lint"]
+description = "Run Cppcheck on Arduino C++ source"
+run = "cppcheck --language=c++ --std=c++20 --enable=warning,style,performance,portability --error-exitcode=1 --suppress=missingIncludeSystem sms_gate/sms_gate.ino sms_gate/config_store.cpp sms_gate/web_ui.cpp"
