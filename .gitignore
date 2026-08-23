@@ -1,2 +1,3 @@
 .build/
 .arduino/
+sms_gate/web_assets.h

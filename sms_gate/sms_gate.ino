@@ -19,7 +19,8 @@
 #include <esp_mac.h>
 #include <esp_system.h>
 
-#include "web_ui.h"
+#include "config_store.h"
+#include "web_api.h"
 
 namespace {
 
@@ -222,14 +223,48 @@ bool requireAuthentication() {
 }
 // #endregion FUNC_requireAuthentication
 
-// #region FUNC_buildWifiNetworkOptions
-// PURPOSE: Lists scanned WPA2/WPA3-Personal SSIDs while preserving manual SSID
-// entry for hidden networks.
-String buildWifiNetworkOptions() {
+// #region FUNC_buildStatus
+// PURPOSE: Snapshots controller state for the JSON API consumed by the
+// browser UI.
+WebStatus buildStatus() {
+  WebStatus status;
+  status.setupRequired = config.ssid.length() == 0;
+  switch (connectionState) {
+    case ConnectionState::kOnline:
+      status.mode = F("sta");
+      break;
+    case ConnectionState::kConnecting:
+      status.mode = F("connecting");
+      break;
+    case ConnectionState::kFallbackAp:
+      status.mode = F("fallback_ap");
+      break;
+    default:
+      status.mode = F("initial");
+      break;
+  }
+  status.stationConnected = WiFi.status() == WL_CONNECTED;
+  status.ssid = config.ssid;
+  status.stationIp = status.stationConnected ? WiFi.localIP().toString() : String();
+  status.macAddress = stationMacAddress;
+  status.rssiDbm = status.stationConnected ? WiFi.RSSI() : 0;
+  status.mdnsHostname = mdnsHostname;
+  status.lastError = lastConnectionError;
+  return status;
+}
+// #endregion FUNC_buildStatus
+
+// #region FUNC_buildScanNetworksJson
+// PURPOSE: Lists scanned WPA2/WPA3-Personal SSIDs as JSON while manual SSID
+// entry in the browser UI keeps hidden networks reachable.
+String buildScanNetworksJson() {
   Serial.println("event=wifi_scan_begin");
-  String options;
+  String json;
+  json.reserve(512);
+  json += F("{\"networks\":[");
   const int networkCount = WiFi.scanNetworks(false, true);
   Serial.printf("event=wifi_scan_complete networks=%d\n", networkCount);
+  bool firstEntry = true;
   for (int index = 0; index < networkCount; ++index) {
     const wifi_auth_mode_t security = WiFi.encryptionType(index);
     if (security != WIFI_AUTH_WPA2_PSK && security != WIFI_AUTH_WPA3_PSK &&
@@ -237,56 +272,63 @@ String buildWifiNetworkOptions() {
       continue;
     }
     const String ssid = WiFi.SSID(index);
-    options += F("<option value='");
-    options += escapeHtml(ssid);
-    options += F("'>");
-    options += escapeHtml(ssid);
-    options += F(" (");
-    options += String(WiFi.RSSI(index));
-    options += F(" dBm)</option>");
+    if (ssid.length() == 0) {
+      continue;
+    }
+    if (!firstEntry) {
+      json += ',';
+    }
+    firstEntry = false;
+    json += F("{\"ssid\":");
+    appendJsonString(json, ssid);
+    json += F(",\"rssi_dbm\":");
+    json += String(WiFi.RSSI(index));
+    json += F(",\"security\":\"");
+    json += security == WIFI_AUTH_WPA3_PSK
+                ? F("wpa3")
+                : (security == WIFI_AUTH_WPA2_WPA3_PSK ? F("wpa2_wpa3") : F("wpa2"));
+    json += F("\"}");
   }
   WiFi.scanDelete();
-  return options;
+  json += F("]}");
+  return json;
 }
-// #endregion FUNC_buildWifiNetworkOptions
+// #endregion FUNC_buildScanNetworksJson
 
-// #region FUNC_sendSetupPage
-// PURPOSE: Sends the isolated UI module's initial configuration document.
-void sendSetupPage(const String& error = "", bool includeScanResults = false) {
-  const String networkOptions = includeScanResults ? buildWifiNetworkOptions() : "";
-  server.send(200, "text/html; charset=utf-8",
-              renderSetupPage(networkOptions, error, stationMacAddress));
+// #region FUNC_handleStatusRequest
+// PURPOSE: Reports controller state as JSON; open only while no verified
+// configuration exists and Digest-protected afterwards.
+void handleStatusRequest() {
+  if (config.ssid.length() > 0 && !requireAuthentication()) {
+    return;
+  }
+  sendJson(server, 200, renderStatusJson(buildStatus()));
 }
-// #endregion FUNC_sendSetupPage
+// #endregion FUNC_handleStatusRequest
 
-// #region FUNC_sendConfigPage
-// PURPOSE: Supplies controller state to the isolated UI renderer.
-void sendConfigPage(const String& message = "", const String& error = "",
-                    bool includeScanResults = false) {
-  WebStatus status;
-  status.mode =
-      connectionState == ConnectionState::kOnline
-          ? F("STA")
-          : (connectionState == ConnectionState::kConnecting ? F("Connecting") : F("Fallback AP"));
-  status.stationIp = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : F("Not connected");
-  status.macAddress = stationMacAddress;
-  status.rssi = WiFi.status() == WL_CONNECTED ? String(WiFi.RSSI()) + " dBm" : "Not available";
-  status.mdnsHostname = mdnsHostname;
-  status.lastError = lastConnectionError;
-  const String networkOptions = includeScanResults ? buildWifiNetworkOptions() : "";
-  server.send(200, "text/html; charset=utf-8",
-              renderConfigPage(config, status, networkOptions, message, error));
+// #region FUNC_handleScanRequest
+// PURPOSE: Returns scanned WPA2/WPA3-Personal networks as the JSON payload the
+// browser UI renders for selection.
+void handleScanRequest() {
+  if (config.ssid.length() > 0 && !requireAuthentication()) {
+    return;
+  }
+  sendJson(server, 200, buildScanNetworksJson());
 }
-// #endregion FUNC_sendConfigPage
+// #endregion FUNC_handleScanRequest
+
+// #region FUNC_sendJsonError
+// PURPOSE: Emits the uniform error envelope the browser UI displays inline.
+void sendJsonError(int code, const String& error) {
+  sendJson(server, code, renderErrorJson(error));
+}
+// #endregion FUNC_sendJsonError
 
 // #region FUNC_readCandidateConfig
 // PURPOSE: Validates form data before it can interrupt the current station
 // connection for the required temporary connection test.
 bool readCandidateConfig(RuntimeConfig& candidate, String& error) {
-  candidate.ssid = server.arg("scanned_ssid");
-  if (candidate.ssid.length() == 0) {
-    candidate.ssid = server.arg("ssid");
-  }
+  candidate.ssid = server.arg("ssid");
   candidate.wifiPassword = server.arg("wifi_password");
   if (candidate.ssid.length() == 0 || candidate.ssid.length() > kMaxSsidLength) {
     error = F("SSID must contain 1–32 characters.");
@@ -337,32 +379,31 @@ bool testStationCandidate(const RuntimeConfig& candidate) {
 void handleSetupSubmission() {
   Serial.println("event=http_setup_submit");
   if (config.ssid.length() > 0) {
-    server.send(403, "text/plain", "Initial setup is already complete.");
+    sendJsonError(403, F("Initial setup is already complete."));
     return;
   }
   RuntimeConfig candidate;
   String error;
   if (!readCandidateConfig(candidate, error)) {
-    sendSetupPage(error);
+    sendJsonError(400, error);
     return;
   }
   candidate.adminPassword = server.arg("admin_password");
   const String confirmation = server.arg("admin_password_confirm");
   if (!isValidPassword(candidate.adminPassword) ||
       !constantTimeEquals(candidate.adminPassword, confirmation)) {
-    sendSetupPage(
-        F("Administrator passwords must match and contain 8–63 "
-          "printable ASCII characters."));
+    sendJsonError(
+        400, F("Administrator passwords must match and contain 8–63 printable ASCII characters."));
     return;
   }
   if (!testStationCandidate(candidate)) {
     lastConnectionError = F("Could not connect with those Wi-Fi credentials. Nothing was saved.");
-    sendSetupPage(lastConnectionError);
+    sendJsonError(400, lastConnectionError);
     return;
   }
   if (!configStore.save(candidate)) {
     lastConnectionError = F("Configuration could not be saved.");
-    sendSetupPage(lastConnectionError);
+    sendJsonError(500, lastConnectionError);
     return;
   }
 
@@ -371,7 +412,7 @@ void handleSetupSubmission() {
   String message = F("Configuration saved. The access point will close shortly. Open http://");
   message += mdnsHostname;
   message += F(".local on the configured network.");
-  sendConfigPage(message);
+  sendJson(server, 200, renderMessageJson(message));
 }
 // #endregion FUNC_handleSetupSubmission
 
@@ -386,19 +427,19 @@ void handleNetworkSubmission() {
   RuntimeConfig candidate = config;
   String error;
   if (!readCandidateConfig(candidate, error)) {
-    sendConfigPage("", error);
+    sendJsonError(400, error);
     return;
   }
   if (!testStationCandidate(candidate)) {
     lastConnectionError =
         F("Could not connect with those Wi-Fi credentials. "
           "The previous profile was kept.");
-    sendConfigPage("", lastConnectionError);
+    sendJsonError(400, lastConnectionError);
     return;
   }
   if (!configStore.save(candidate)) {
     lastConnectionError = F("Configuration could not be saved.");
-    sendConfigPage("", lastConnectionError);
+    sendJsonError(500, lastConnectionError);
     return;
   }
 
@@ -407,7 +448,7 @@ void handleNetworkSubmission() {
   String message = F("Configuration saved. The interface is now available at http://");
   message += mdnsHostname;
   message += F(".local.");
-  sendConfigPage(message);
+  sendJson(server, 200, renderMessageJson(message));
 }
 // #endregion FUNC_handleNetworkSubmission
 
@@ -423,12 +464,11 @@ void handlePasswordSubmission() {
   const String newPassword = server.arg("new_password");
   const String confirmation = server.arg("new_password_confirm");
   if (!constantTimeEquals(currentPassword, config.adminPassword)) {
-    sendConfigPage("", F("The current administrator password is incorrect."));
+    sendJsonError(400, F("The current administrator password is incorrect."));
     return;
   }
   if (!isValidPassword(newPassword) || !constantTimeEquals(newPassword, confirmation)) {
-    sendConfigPage("", F("New passwords must match and contain 8–63 printable "
-                         "ASCII characters."));
+    sendJsonError(400, F("New passwords must match and contain 8–63 printable ASCII characters."));
     return;
   }
 
@@ -436,15 +476,16 @@ void handlePasswordSubmission() {
   candidate.adminPassword = newPassword;
   if (!configStore.save(candidate)) {
     lastConnectionError = F("Configuration could not be saved.");
-    sendConfigPage("", lastConnectionError);
+    sendJsonError(500, lastConnectionError);
     return;
   }
   config = candidate;
   if (accessPointActive) {
     accessPointRestartAt = millis() + kApShutdownDelayMs;
   }
-  server.requestAuthentication(DIGEST_AUTH, kAuthRealm,
-                               String(F("Password changed. Authenticate with the new password.")));
+  sendJson(server, 200,
+           renderMessageJson(F("Password changed. The browser will ask for the new password on "
+                               "the next request.")));
 }
 // #endregion FUNC_handlePasswordSubmission
 
@@ -453,7 +494,7 @@ void handlePasswordSubmission() {
 // while returning a normal 404 when the device is only serving its STA address.
 void handleNotFound() {
   if (accessPointActive) {
-    server.sendHeader("Location", config.ssid.length() == 0 ? "/setup" : "/");
+    server.sendHeader("Location", "/");
     server.send(302, "text/plain", "Redirecting to configuration.");
     return;
   }
@@ -466,25 +507,14 @@ void handleNotFound() {
 // routes before accepting HTTP requests from either network mode.
 void configureWebServer() {
   Serial.println("event=http_routes_register_begin");
-  server.on("/", HTTP_GET, []() {
-    if (config.ssid.length() == 0) {
-      sendSetupPage("", server.hasArg("scan"));
-      return;
-    }
-    if (requireAuthentication()) {
-      sendConfigPage("", "", server.hasArg("scan"));
-    }
-  });
-  server.on("/setup", HTTP_GET, []() {
-    if (config.ssid.length() == 0) {
-      sendSetupPage("", server.hasArg("scan"));
-    } else {
-      server.send(403, "text/plain", "Initial setup is complete.");
-    }
-  });
-  server.on("/setup", HTTP_POST, handleSetupSubmission);
-  server.on("/network", HTTP_POST, handleNetworkSubmission);
-  server.on("/password", HTTP_POST, handlePasswordSubmission);
+  server.on("/", HTTP_GET, []() { sendAsset(server, "/"); });
+  server.on("/app.js", HTTP_GET, []() { sendAsset(server, "/app.js"); });
+  server.on("/style.css", HTTP_GET, []() { sendAsset(server, "/style.css"); });
+  server.on("/api/status", HTTP_GET, handleStatusRequest);
+  server.on("/api/scan", HTTP_GET, handleScanRequest);
+  server.on("/api/setup", HTTP_POST, handleSetupSubmission);
+  server.on("/api/network", HTTP_POST, handleNetworkSubmission);
+  server.on("/api/password", HTTP_POST, handlePasswordSubmission);
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.printf("event=http_server_started port=%u\n", kHttpPort);

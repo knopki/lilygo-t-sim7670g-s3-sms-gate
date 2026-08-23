@@ -18,7 +18,7 @@ SMS processing, GNSS time, email delivery, and the ZTE MF79RU adapter remain uni
 
 ### First-time setup
 
-With no valid configuration, the device starts an open access point named `SMS-Gate-<MAC>`. Connect to it and open `http://192.168.4.1` if the captive portal does not open automatically.
+The web interface is a small JavaScript application served by the device itself; a JavaScript-capable browser is required. With no valid configuration, the device starts an open access point named `SMS-Gate-<MAC>`. Connect to it and open `http://192.168.4.1` if the captive portal does not open automatically.
 
 The initial setup page accepts:
 
@@ -33,7 +33,7 @@ After success, the open AP closes and the web interface is available on the conf
 
 At boot, a saved profile is tried for 30 seconds. If it cannot connect, the device starts `SMS-Gate-<MAC>` as a WPA2 access point and retries the saved station profile every 60 seconds. Its WPA2 password is the administrator password. The fallback AP closes after station connectivity returns.
 
-The normal web interface uses HTTP Digest authentication with username `admin`. HTTP is intentionally not encrypted; deploy a reverse proxy or other network controls if access extends beyond a trusted local network.
+The normal web interface uses HTTP Digest authentication with username `admin`; the browser shows its native login prompt. HTTP is intentionally not encrypted; deploy a reverse proxy or other network controls if access extends beyond a trusted local network.
 
 The protected page shows the mode, configured SSID, station IP, MAC, RSSI, mDNS name, and the last connection error. It never displays or writes passwords to Serial. It allows changing the Wi-Fi profile and administrator password. Changing the administrator password requires the current password and confirmation of the new password.
 
@@ -68,10 +68,15 @@ arduino-cli board list
 From the repository root:
 
 ```bash
+python3 tools/gen_assets.py   # or: mise run assets / mise run compile
 arduino-cli compile sms_gate
 arduino-cli upload sms_gate
 arduino-cli monitor -p /dev/ttyACM0 -c baudrate=115200
 ```
+
+`sms_gate/web_assets.h` is generated from `www/` and is not committed; the
+compile step requires it. Re-run the generator after editing anything under
+`www/`.
 
 Board and port settings are versioned in `sms_gate/sketch.yaml`. The sketch-local `sms_gate/partitions.csv` is part of the firmware contract: it adds the dedicated `appcfg` partition and must be built and flashed with the sketch.
 
@@ -79,10 +84,12 @@ If the bootloader is not detected, hold `BOOT`, press and release `RST`, release
 
 ### Arduino IDE
 
-1. Open `sms_gate/sms_gate.ino`.
-2. Select **ESP32S3 Dev Module** and `/dev/ttyACM0`.
-3. Under `Tools`, set: `USB CDC On Boot: Enabled`, `Flash Mode: QIO 80MHz`, `Flash Size: 16MB (128Mb)`, `PSRAM: QSPI PSRAM`, and `Partition Scheme: 16M Flash (3MB APP/9.9MB FATFS)`.
-4. Upload the sketch and open Serial Monitor at `115200` baud.
+1. Generate the UI header once (and after every `www/` change):
+   `python3 tools/gen_assets.py`.
+2. Open `sms_gate/sms_gate.ino`.
+3. Select **ESP32S3 Dev Module** and `/dev/ttyACM0`.
+4. Under `Tools`, set: `USB CDC On Boot: Enabled`, `Flash Mode: QIO 80MHz`, `Flash Size: 16MB (128Mb)`, `PSRAM: QSPI PSRAM`, and `Partition Scheme: 16M Flash (3MB APP/9.9MB FATFS)`.
+5. Upload the sketch and open Serial Monitor at `115200` baud.
 
 The sketch-local `partitions.csv` overrides the selected partition CSV during the Arduino-ESP32 build. It keeps both 3 MB OTA application slots, creates `appcfg` at `0x610000` with size `0x6000`, and reduces FFat by 24 KiB.
 
@@ -139,9 +146,13 @@ sms_gate/
 ├── sms_gate.ino      # Wi-Fi lifecycle and HTTP route controller
 ├── config_record.h   # Portable checksummed configuration record
 ├── config_store.*    # Isolated appcfg NVS persistence and validation
-├── web_ui.*          # HTML rendering separated from control flow
+├── web_api.*         # JSON API and gzipped UI asset serving
+├── web_assets.h      # Generated from www/ (not committed)
 ├── partitions.csv    # Dedicated appcfg NVS partition and FFat layout
 └── sketch.yaml       # Arduino CLI FQBN, board options, and port
+www/                  # Client-rendered UI sources (index.html, app.js, style.css)
+tools/
+└── gen_assets.py     # Gzips www/ into sms_gate/web_assets.h
 tests/
 └── config_record_test.cpp  # Host test for record integrity and limits
 ```

@@ -45,6 +45,7 @@ decision do not require an ADR.
 - Compile the firmware after changing files under `sms_gate/`:
 
   ```bash
+  python3 tools/gen_assets.py  # or: mise run assets
   arduino-cli compile sms_gate
   ```
 
@@ -124,9 +125,12 @@ sms_gate/
 ├── sms_gate.ino      # Wi-Fi lifecycle, HTTP routes, boot trace, Serial events
 ├── config_record.h   # Portable checksummed configuration record
 ├── config_store.*    # appcfg NVS persistence and input validation
-├── web_ui.*          # HTML rendering, without Wi-Fi/control-flow logic
+├── web_api.*         # JSON API and gzipped UI asset serving
+├── web_assets.h      # generated gzip assets from www/ (not committed)
 ├── partitions.csv    # appcfg NVS partition and FFat layout
 └── sketch.yaml       # Arduino CLI board, USB CDC, flash, and port settings
+www/                  # client-rendered UI sources (index.html, app.js, style.css)
+tools/gen_assets.py   # generates sms_gate/web_assets.h from www/
 tests/
 └── config_record_test.cpp  # Host test for record integrity and field limits
 README.md             # Build, provisioning, and USB recovery procedure

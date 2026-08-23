@@ -1,0 +1,36 @@
+// #region MODULE_CONTRACT
+// PURPOSE: Serves the gzipped browser UI from PROGMEM and serializes the JSON
+// API responses consumed by that UI, keeping presentation out of firmware
+// control flow.
+// SCOPE:
+// - Asset lookup and serving, JSON escaping, and status/result JSON.
+// - NOT: Wi-Fi lifecycle, HTTP route registration, authentication, scans,
+//   and persistence.
+// INVARIANTS: Every dynamic string is JSON-escaped before serialization and
+// credentials are never serialized.
+// #endregion MODULE_CONTRACT
+
+#pragma once
+
+#include <Arduino.h>
+#include <WebServer.h>
+
+struct WebStatus {
+  bool setupRequired;
+  String mode;
+  String ssid;
+  bool stationConnected;
+  String stationIp;
+  String macAddress;
+  int rssiDbm;
+  String mdnsHostname;
+  String lastError;
+};
+
+String escapeJson(const String& value);
+void appendJsonString(String& out, const String& value);
+String renderStatusJson(const WebStatus& status);
+String renderMessageJson(const String& message);
+String renderErrorJson(const String& error);
+void sendJson(WebServer& server, int code, const String& json);
+void sendAsset(WebServer& server, const String& path);
