@@ -1,8 +1,10 @@
 // #region MODULE_CONTRACT
 // PURPOSE: Provides validated access to the isolated appcfg NVS partition for
 // the Wi-Fi and web administrator configuration.
-// SCOPE: Password validation, constant-time comparison, and one-record
-// load/save. NOT: Network connection attempts and HTTP request handling.
+// SCOPE:
+// - Password validation, constant-time comparison, and one-record
+// load/save.
+// - NOT: Network connection attempts and HTTP request handling.
 // #endregion MODULE_CONTRACT
 
 #pragma once
