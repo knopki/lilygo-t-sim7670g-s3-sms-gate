@@ -65,6 +65,7 @@ select {
 
 button {
   padding: .55rem .9rem;
+  margin-right: .5rem;
 }
 
 button:disabled {

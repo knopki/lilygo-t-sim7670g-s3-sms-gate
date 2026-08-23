@@ -39,6 +39,22 @@ The protected page shows the mode, configured SSID, station IP, MAC, RSSI, mDNS 
 
 Only WPA2/WPA3-Personal SSID/password networks are supported. Open, WEP, and Enterprise Wi-Fi networks are deliberately unsupported.
 
+## Email delivery (SMTP)
+
+The protected page configures the SMTP profile used to forward SMS as email:
+host, port, security (STARTTLS 587 or implicit TLS 465), username, password,
+and from and recipient addresses. The password is never returned to the
+browser; leaving the field empty keeps the stored one. **Send test email**
+performs a real delivery with the values currently in the form and reports
+the outcome.
+
+TLS trust needs no operator setup: every connection validates the server
+certificate chain, expiry, and hostname against the Mozilla root bundle
+embedded in the firmware (ADR-0002), the same root set browsers use. If a
+delivery fails with `tls_failed`, the provider presented a certificate that
+publicly trusted roots do not validate — most often a wrong host name in the
+settings.
+
 ## Hardware
 
 - LilyGO T-SIM7670G-S3: ESP32-S3, SIM7670G LTE modem, and GNSS antenna connection.
@@ -144,8 +160,11 @@ If `esptool` cannot connect, repeat step 4 and check that the ESP-USB port—not
 ```text
 sms_gate/
 ├── sms_gate.ino      # Wi-Fi lifecycle and HTTP route controller
-├── config_record.h   # Portable checksummed configuration record
+├── config_record.h   # Portable checksummed network configuration record
 ├── config_store.*    # Isolated appcfg NVS persistence and validation
+├── smtp_record.h     # Portable checksummed SMTP delivery record
+├── smtp_client.*     # Host-testable SMTP dialog (STARTTLS, AUTH LOGIN, DATA)
+├── smtp_transport.h  # NetworkClientSecure binding with embedded root bundle
 ├── web_api.*         # JSON API and gzipped UI asset serving
 ├── web_assets.h      # Generated from www/ (not committed)
 ├── partitions.csv    # Dedicated appcfg NVS partition and FFat layout
@@ -154,7 +173,8 @@ www/                  # Client-rendered UI sources (index.html, app.js, style.cs
 tools/
 └── gen_assets.py     # Gzips www/ into sms_gate/web_assets.h
 tests/
-└── config_record_test.cpp  # Host test for record integrity and limits
+├── config_record_test.cpp  # Host test for record integrity and limits
+└── smtp_client_test.cpp    # Host test for SMTP record and dialog sequencing
 ```
 
 ## Tests
@@ -167,12 +187,21 @@ c++ -std=c++17 -Wall -Wextra -Werror tests/config_record_test.cpp \
 /tmp/config_record_test
 ```
 
+The SMTP dialog test scripts a fake server and asserts the exact command
+sequence, including the STARTTLS upgrade ordering and base64 credentials:
+
+```bash
+c++ -std=c++17 -Wall -Wextra -Werror tests/smtp_client_test.cpp \
+  sms_gate/smtp_client.cpp -o /tmp/smtp_client_test
+/tmp/smtp_client_test
+```
+
 ## Next steps
 
 1. Enable power and AT-command communication with the SIM7670G.
 2. Receive and process SMS messages from the board's SIM card.
-3. Add GNSS time acquisition and system time synchronization.
-4. Implement email delivery without committing secrets to the repository.
+3. Forward received SMS through the configured SMTP profile (ADR-0002).
+4. Add GNSS time acquisition and system time synchronization.
 5. Select and implement an adapter for SMS messages from the ZTE MF79RU.
 
 ## Board documentation

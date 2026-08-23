@@ -16,10 +16,12 @@
 
   const STATUS_PATH = '/api/status';
   const STATUS_INTERVAL_MS = 5000;
+  const SMTP_TEST_POLL_MS = 1500;
 
   let networks = null;
   let busy = false;
   let statusTimer = null;
+  let smtpTestTimer = null;
 
   const esc = (value) =>
     String(value).replace(/[&<>"']/g, (ch) => ({
@@ -159,6 +161,43 @@
         </fieldset>
         <button type="submit">Test and save</button>
       </form>
+      <h2>Email delivery (SMTP)</h2>
+      <p id="smtp-config-state" class="hint"></p>
+      <form id="smtp-form">
+        <fieldset>
+          <legend>Server</legend>
+          <label>Host
+            <input required maxlength="127" name="host" autocomplete="off">
+          </label>
+          <label>Port
+            <input type="number" min="1" max="65535" name="port" value="587">
+          </label>
+          <label>Security
+            <select name="security">
+              <option value="starttls">STARTTLS (port 587)</option>
+              <option value="implicit">Implicit TLS (port 465)</option>
+            </select>
+          </label>
+          <label>Username
+            <input required maxlength="127" name="username" autocomplete="off">
+          </label>
+          <label>SMTP password
+            <input maxlength="95" name="password" type="password" autocomplete="new-password">
+          </label>
+        </fieldset>
+        <fieldset>
+          <legend>Message</legend>
+          <label>From address
+            <input required maxlength="127" name="from" type="email" autocomplete="off">
+          </label>
+          <label>Recipient address
+            <input required maxlength="127" name="recipient" type="email" autocomplete="off">
+          </label>
+        </fieldset>
+        <button type="submit">Save settings</button>
+        <button type="button" id="smtp-test-button">Send test email</button>
+      </form>
+      <p id="smtp-test-status" class="hint"></p>
       <h2>Change administrator password</h2>
       <form id="password-form">
         <label>Current password
@@ -186,12 +225,17 @@
     document.getElementById('status').innerHTML = statusHtml(status);
     renderNetworkPicker();
     document.getElementById('network-form').addEventListener('submit', submitNetworkChange);
+    document.getElementById('smtp-form').addEventListener('submit', submitSmtpSave);
+    document.getElementById('smtp-test-button').addEventListener('click', startSmtpTest);
+    document.getElementById('smtp-form').elements.security.addEventListener('change', onSmtpSecurityChange);
     document.getElementById('password-form').addEventListener('submit', submitPasswordChange);
+    loadSmtpSettings();
     startStatusTimer();
   }
 
   function renderAuthRequired() {
     stopStatusTimer();
+    stopSmtpTestTimer();
     appRoot.innerHTML = `
       <p>Authentication is required. Reload the page and sign in as <strong>admin</strong>.</p>
       <button type="button" id="reload-button">Reload</button>`;
@@ -329,6 +373,158 @@
     } finally {
       setBusy(false);
     }
+  }
+
+  function smtpFormFields(form) {
+    return {
+      host: form.elements.host.value.trim(),
+      port: form.elements.port.value.trim(),
+      security: form.elements.security.value,
+      username: form.elements.username.value.trim(),
+      password: form.elements.password.value,
+      from: form.elements.from.value.trim(),
+      recipient: form.elements.recipient.value.trim(),
+    };
+  }
+
+  function onSmtpSecurityChange(event) {
+    const defaults = { starttls: '587', implicit: '465' };
+    const others = { starttls: '465', implicit: '587' };
+    const mode = event.target.value;
+    const portInput = document.getElementById('smtp-form').elements.port;
+    if (!portInput.value || portInput.value === others[mode]) {
+      portInput.value = defaults[mode];
+    }
+  }
+
+  async function loadSmtpSettings() {
+    try {
+      const { response, payload } = await api('/api/smtp');
+      if (response.status === 401) {
+        renderAuthRequired();
+        return;
+      }
+      const form = document.getElementById('smtp-form');
+      if (response.ok && payload && form) {
+        form.elements.host.value = payload.host || '';
+        if (payload.port) {
+          form.elements.port.value = String(payload.port);
+        }
+        if (payload.security) {
+          form.elements.security.value = payload.security;
+        }
+        form.elements.username.value = payload.username || '';
+        form.elements.from.value = payload.from || '';
+        form.elements.recipient.value = payload.recipient || '';
+        form.elements.password.value = '';
+        form.elements.password.placeholder = payload.password_set
+          ? 'Unchanged (a password is saved)'
+          : '';
+      }
+      const state = document.getElementById('smtp-config-state');
+      if (state && payload) {
+        state.textContent = payload.present
+          ? 'SMTP delivery is configured.'
+          : 'SMTP delivery is not configured yet.';
+      }
+    } catch (error) {
+      // Prefill is optional; the form stays usable with empty defaults.
+    }
+  }
+
+  async function submitSmtpSave(event) {
+    event.preventDefault();
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const { response, payload } = await postForm('/api/smtp', smtpFormFields(event.target));
+      if (response.status === 401) {
+        renderAuthRequired();
+        return;
+      }
+      if (response.ok) {
+        setBanner('ok', (payload && payload.message) || 'SMTP settings saved.');
+        await loadSmtpSettings();
+      } else {
+        setBanner('error', (payload && payload.error) || `Request failed (${response.status}).`);
+      }
+    } catch (error) {
+      setBanner('error', 'The device could not be reached.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function stopSmtpTestTimer() {
+    if (smtpTestTimer !== null) {
+      window.clearInterval(smtpTestTimer);
+      smtpTestTimer = null;
+    }
+  }
+
+  async function startSmtpTest() {
+    if (busy) {
+      return;
+    }
+    const form = document.getElementById('smtp-form');
+    const statusEl = document.getElementById('smtp-test-status');
+    setBusy(true);
+    if (statusEl) {
+      statusEl.textContent = 'Sending the test email…';
+    }
+    setBanner('ok', 'Sending the test email, this can take up to a minute…');
+    try {
+      const { response, payload } = await postForm('/api/smtp/test', smtpFormFields(form));
+      if (response.status === 401) {
+        renderAuthRequired();
+        return;
+      }
+      if (!response.ok) {
+        setBanner('error', (payload && payload.error) || 'The test could not be started.');
+        if (statusEl) {
+          statusEl.textContent = '';
+        }
+        setBusy(false);
+        return;
+      }
+      pollSmtpTest(statusEl);
+    } catch (error) {
+      setBanner('error', 'The device could not be reached.');
+      if (statusEl) {
+        statusEl.textContent = '';
+      }
+      setBusy(false);
+    }
+  }
+
+  function pollSmtpTest(statusEl) {
+    stopSmtpTestTimer();
+    smtpTestTimer = window.setInterval(async () => {
+      try {
+        const { response, payload } = await api('/api/smtp/test');
+        if (response.status === 401) {
+          stopSmtpTestTimer();
+          renderAuthRequired();
+          setBusy(false);
+          return;
+        }
+        if (!response.ok || !payload || payload.running || !payload.done) {
+          return;
+        }
+        stopSmtpTestTimer();
+        setBusy(false);
+        const delivered = payload.result === 'success';
+        if (statusEl) {
+          statusEl.textContent = payload.message || '';
+        }
+        setBanner(delivered ? 'ok' : 'error',
+          payload.message || (delivered ? 'Test message delivered.' : 'Test delivery failed.'));
+      } catch (error) {
+        // The device may be busy inside the TLS dialog; keep polling.
+      }
+    }, SMTP_TEST_POLL_MS);
   }
 
   function startStatusTimer() {

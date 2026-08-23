@@ -13,6 +13,9 @@
   respective modules.
 - Use only bundled Arduino-ESP32 libraries unless a new dependency is required
   by an approved design decision.
+- Any change to a persisted record schema (e.g. `config_record.h`,
+  `smtp_record.h`) requires a version bump and a load-time migration of
+  previously stored data.
 - Do not add compatibility layers without a concrete need.
 - Do not commit Wi-Fi passwords, administrator passwords, email credentials,
   modem credentials, or generated build artifacts.
@@ -55,6 +58,14 @@ decision do not require an ADR.
   c++ -std=c++17 -Wall -Wextra -Werror tests/config_record_test.cpp \
     -o /tmp/config_record_test
   /tmp/config_record_test
+  ```
+
+- Run the host SMTP dialog and record test:
+
+  ```bash
+  c++ -std=c++17 -Wall -Wextra -Werror tests/smtp_client_test.cpp \
+    sms_gate/smtp_client.cpp -o /tmp/smtp_client_test
+  /tmp/smtp_client_test
   ```
 
 - Run the available static checks before completion:
@@ -123,8 +134,11 @@ clear it without removing future SMS, GNSS, or email settings.
 ```text
 sms_gate/
 ├── sms_gate.ino      # Wi-Fi lifecycle, HTTP routes, boot trace, Serial events
-├── config_record.h   # Portable checksummed configuration record
+├── config_record.h   # Portable checksummed network configuration record
 ├── config_store.*    # appcfg NVS persistence and input validation
+├── smtp_record.h     # Portable checksummed SMTP delivery record
+├── smtp_client.*     # Host-testable SMTP dialog (STARTTLS, AUTH LOGIN, DATA)
+├── smtp_transport.h  # NetworkClientSecure binding with embedded root bundle
 ├── web_api.*         # JSON API and gzipped UI asset serving
 ├── web_assets.h      # generated gzip assets from www/ (not committed)
 ├── partitions.csv    # appcfg NVS partition and FFat layout
@@ -132,7 +146,8 @@ sms_gate/
 www/                  # client-rendered UI sources (index.html, app.js, style.css)
 tools/gen_assets.py   # generates sms_gate/web_assets.h from www/
 tests/
-└── config_record_test.cpp  # Host test for record integrity and field limits
+├── config_record_test.cpp  # Host test for record integrity and field limits
+└── smtp_client_test.cpp    # Host test for SMTP record and dialog sequencing
 README.md             # Build, provisioning, and USB recovery procedure
 ```
 

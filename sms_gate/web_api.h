@@ -27,9 +27,29 @@ struct WebStatus {
   String lastError;
 };
 
+struct WebSmtpConfig {
+  bool present;
+  String host;
+  uint16_t port;
+  String security;  // "starttls" or "implicit"
+  String username;
+  bool passwordSet;
+  String fromAddress;
+  String recipientAddress;
+};
+
+struct WebSmtpTest {
+  bool running;
+  bool done;
+  String result;  // empty until finished
+  String message;
+};
+
 String escapeJson(const String& value);
 void appendJsonString(String& out, const String& value);
 String renderStatusJson(const WebStatus& status);
+String renderSmtpConfigJson(const WebSmtpConfig& config);
+String renderSmtpTestJson(const WebSmtpTest& test);
 String renderMessageJson(const String& message);
 String renderErrorJson(const String& error);
 void sendJson(WebServer& server, int code, const String& json);

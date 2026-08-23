@@ -1,12 +1,15 @@
 // #region MODULE_CONTRACT
 // PURPOSE: Lets the SMS gateway join a WPA2/WPA3-Personal Wi-Fi network while
-// providing a recoverable local web interface for network configuration.
+// providing a recoverable local web interface for network and SMTP delivery
+// configuration.
 // SCOPE:
-// - Wi-Fi provisioning, captive portal, Digest-authenticated
-// configuration, and isolated persistent configuration.
-// - NOT: SMS, GNSS, email, and OTA logic.
+// - Wi-Fi provisioning, captive portal, Digest-authenticated configuration,
+// isolated persistent configuration, HTTP routes, and the asynchronous
+// SMTP test-delivery lifecycle.
+// - NOT: The SMTP dialog itself (smtp_client), TLS transport (smtp_transport),
+// SMS, GNSS, and OTA logic.
 // INVARIANTS: Credentials are never written to Serial or
-// returned in HTTP responses.
+// returned in HTTP responses; the SMTP password is never serialized.
 // DEPENDENCIES: Uses Arduino-ESP32 WiFi, WebServer, DNSServer, ESPmDNS,
 // and Preferences.
 // #endregion MODULE_CONTRACT
@@ -20,6 +23,8 @@
 #include <esp_system.h>
 
 #include "config_store.h"
+#include "smtp_client.h"
+#include "smtp_transport.h"
 #include "web_api.h"
 
 namespace {
@@ -39,7 +44,10 @@ enum class ConnectionState { kInitialSetup, kConnecting, kOnline, kFallbackAp };
 WebServer server(kHttpPort);
 DNSServer dnsServer;
 ConfigStore configStore;
+SmtpConfigStore smtpConfigStore;
 RuntimeConfig config;
+RuntimeSmtpConfig storedSmtpConfig;
+bool smtpConfigLoaded = false;
 ConnectionState connectionState = ConnectionState::kInitialSetup;
 String accessPointSsid;
 String mdnsHostname;
@@ -55,6 +63,18 @@ unsigned long lastSerialHeartbeatAt = 0;
 String bootTrace;
 bool bootTraceCollecting = true;
 bool bootTraceReplayed = false;
+
+// One asynchronous SMTP test delivery at a time; started by an HTTP route,
+// executed by a dedicated task so the dialog never blocks loop() or the web
+// server, and every failure is traceable to one stage plus reply code.
+RuntimeSmtpConfig smtpTestCandidate;
+String smtpTestEhloName;
+volatile bool smtpTestRunning = false;
+volatile bool smtpTestDone = false;
+SmtpSendResult smtpTestResult = SmtpSendResult::kConnectFailed;
+String smtpTestMessage;
+String smtpTestFailedStage;
+int smtpTestReplyCode = 0;
 
 // #region FUNC_recordBootStage
 // PURPOSE: Preserves startup events until native USB CDC becomes ready, so the
@@ -489,6 +509,315 @@ void handlePasswordSubmission() {
 }
 // #endregion FUNC_handlePasswordSubmission
 
+// #region FUNC_smtpSecurityName
+// PURPOSE: Maps the security mode onto the stable JSON/HTML token.
+const char* smtpSecurityName(SmtpSecurityMode mode) {
+  return mode == SmtpSecurityMode::kImplicitTls ? "implicit" : "starttls";
+}
+// #endregion FUNC_smtpSecurityName
+
+// #region FUNC_smtpResultName
+// PURPOSE: Maps a send outcome onto the stable JSON token consumed by the UI.
+const char* smtpResultName(SmtpSendResult result) {
+  switch (result) {
+    case SmtpSendResult::kSuccess:
+      return "success";
+    case SmtpSendResult::kConnectFailed:
+      return "connect_failed";
+    case SmtpSendResult::kTlsUnavailable:
+      return "tls_unavailable";
+    case SmtpSendResult::kTlsFailed:
+      return "tls_failed";
+    case SmtpSendResult::kAuthRejected:
+      return "auth_rejected";
+    case SmtpSendResult::kMessageRejected:
+      return "message_rejected";
+    default:
+      return "dialog_failed";
+  }
+}
+// #endregion FUNC_smtpResultName
+
+// #region FUNC_smtpResultMessage
+// PURPOSE: Translates one outcome into the operator-facing explanation shown
+// next to the test button.
+String smtpResultMessage(SmtpSendResult result) {
+  switch (result) {
+    case SmtpSendResult::kSuccess:
+      return F("The test message was delivered to the SMTP server.");
+    case SmtpSendResult::kConnectFailed:
+      return F("Could not reach the SMTP server. Check the host, port, and network.");
+    case SmtpSendResult::kTlsUnavailable:
+      return F("The server does not offer the required STARTTLS upgrade.");
+    case SmtpSendResult::kTlsFailed:
+      return F("The TLS handshake failed. The server certificate could not be verified.");
+    case SmtpSendResult::kAuthRejected:
+      return F("The server rejected the username or password.");
+    case SmtpSendResult::kMessageRejected:
+      return F("The server rejected the sender or recipient address.");
+    default:
+      return F("The SMTP dialog ended unexpectedly.");
+  }
+}
+// #endregion FUNC_smtpResultMessage
+
+// #region FUNC_logSmtpStage
+// PURPOSE: Traces one protocol step with reply code and free heap so a
+// failing dialog is diagnosable from the Serial log alone.
+void logSmtpStage(const char* stage, int code) {
+  Serial.printf("event=smtp_stage name=%s code=%d heap=%u max_alloc=%u\n", stage, code,
+                static_cast<unsigned>(ESP.getFreeHeap()),
+                static_cast<unsigned>(ESP.getMaxAllocHeap()));
+}
+// #endregion FUNC_logSmtpStage
+
+// #region FUNC_smtpTestTask
+// PURPOSE: Runs one test delivery on its own task; copies the request before
+// starting the network dialog and publishes the outcome last.
+void smtpTestTask(void*) {
+  const RuntimeSmtpConfig candidate = smtpTestCandidate;
+  const String ehloName = smtpTestEhloName;
+  const unsigned long startedAt = millis();
+  Serial.printf("event=smtp_test_begin host=%s port=%u mode=%s heap=%u\n", candidate.host.c_str(),
+                candidate.port, smtpSecurityName(candidate.securityMode),
+                static_cast<unsigned>(ESP.getFreeHeap()));
+
+  SecureSmtpChannel channel;
+  SmtpClient client(channel);
+  client.setStageListener(logSmtpStage);
+  const SmtpConfigRecord record = buildSmtpConfigRecord(candidate);
+  smtpTestResult = client.sendMail(record, ehloName.c_str(), "SMS Gate test message",
+                                   "This is a test message from the SMS Gate device. "
+                                   "If you can read it, SMTP delivery is working.");
+  String message = smtpResultMessage(smtpTestResult);
+  if (smtpTestResult != SmtpSendResult::kSuccess) {
+    message += F(" [stage=");
+    message += client.failedStage();
+    if (client.lastReplyCode() != 0) {
+      message += F(" code=");
+      message += String(client.lastReplyCode());
+    }
+    message += ']';
+  }
+  smtpTestMessage = message;
+  smtpTestFailedStage = client.failedStage();
+  smtpTestReplyCode = client.lastReplyCode();
+  Serial.printf(
+      "event=smtp_test_complete result=%s stage=%s code=%d detail=%c errno=%d "
+      "elapsed_ms=%lu heap=%u\n",
+      smtpResultName(smtpTestResult), client.failedStage(), client.lastReplyCode(),
+      channel.readDetail(), channel.lastErrno(), millis() - startedAt,
+      static_cast<unsigned>(ESP.getFreeHeap()));
+  smtpTestRunning = false;
+  smtpTestDone = true;  // Published last: readers treat done as data-ready.
+  vTaskDelete(nullptr);
+}
+// #endregion FUNC_smtpTestTask
+
+// #region FUNC_parseSmtpPort
+// PURPOSE: Accepts only a complete decimal port and falls back to the mode's
+// standard port when the field is empty.
+bool parseSmtpPort(const String& raw, SmtpSecurityMode mode, uint16_t& port) {
+  String value = raw;
+  value.trim();
+  if (value.length() == 0) {
+    port = mode == SmtpSecurityMode::kImplicitTls ? 465 : 587;
+    return true;
+  }
+  if (value.length() > 5) {
+    return false;
+  }
+  char* end = nullptr;
+  const long parsed = strtol(value.c_str(), &end, 10);
+  if (end == nullptr || *end != '\0' || parsed < 1 || parsed > 65535) {
+    return false;
+  }
+  port = static_cast<uint16_t>(parsed);
+  return true;
+}
+// #endregion FUNC_parseSmtpPort
+
+// #region FUNC_readSmtpForm
+// PURPOSE: Validates the SMTP form into a runtime profile; an empty password
+// keeps the stored one, and every other field must pass the record rules.
+bool readSmtpForm(RuntimeSmtpConfig& candidate, String& error) {
+  const String security = server.arg("security");
+  if (security == F("implicit")) {
+    candidate.securityMode = SmtpSecurityMode::kImplicitTls;
+  } else if (security == F("starttls")) {
+    candidate.securityMode = SmtpSecurityMode::kStartTls;
+  } else {
+    error = F("Select STARTTLS (587) or implicit TLS (465).");
+    return false;
+  }
+
+  candidate.host = server.arg("host");
+  candidate.host.trim();
+  if (candidate.host.length() == 0 || candidate.host.length() > kMaxSmtpHostLength ||
+      !isPrintableAscii(candidate.host)) {
+    error = F("Server host must contain 1–127 printable ASCII characters.");
+    return false;
+  }
+  if (!parseSmtpPort(server.arg("port"), candidate.securityMode, candidate.port)) {
+    error = F("Port must be a number between 1 and 65535.");
+    return false;
+  }
+
+  candidate.username = server.arg("username");
+  candidate.username.trim();
+  if (candidate.username.length() == 0 || candidate.username.length() > kMaxSmtpUserLength ||
+      !isPrintableAscii(candidate.username)) {
+    error = F("Username must contain 1–127 printable ASCII characters.");
+    return false;
+  }
+
+  candidate.password = server.arg("password");
+  if (candidate.password.length() == 0) {
+    if (!smtpConfigLoaded || storedSmtpConfig.password.length() == 0) {
+      error = F("Enter the SMTP password.");
+      return false;
+    }
+    candidate.password = storedSmtpConfig.password;
+  } else if (candidate.password.length() > kMaxSmtpPasswordLength ||
+             !isPrintableAscii(candidate.password)) {
+    error = F("SMTP password must contain 1–95 printable ASCII characters.");
+    return false;
+  }
+
+  candidate.fromAddress = server.arg("from");
+  candidate.fromAddress.trim();
+  if (candidate.fromAddress.length() == 0 ||
+      candidate.fromAddress.length() > kMaxSmtpAddressLength ||
+      !isPrintableAscii(candidate.fromAddress) || candidate.fromAddress.indexOf('@') < 0) {
+    error = F("From address must be an email address of up to 127 ASCII characters.");
+    return false;
+  }
+  candidate.recipientAddress = server.arg("recipient");
+  candidate.recipientAddress.trim();
+  if (candidate.recipientAddress.length() == 0 ||
+      candidate.recipientAddress.length() > kMaxSmtpAddressLength ||
+      !isPrintableAscii(candidate.recipientAddress) ||
+      candidate.recipientAddress.indexOf('@') < 0) {
+    error = F("Recipient address must be an email address of up to 127 ASCII characters.");
+    return false;
+  }
+  return true;
+}
+// #endregion FUNC_readSmtpForm
+
+// #region FUNC_buildWebSmtpConfig
+// PURPOSE: Snapshots the stored SMTP profile for the JSON API without ever
+// serializing the password.
+WebSmtpConfig buildWebSmtpConfig() {
+  WebSmtpConfig web;
+  web.present = smtpConfigLoaded && storedSmtpConfig.host.length() > 0;
+  web.host = web.present ? storedSmtpConfig.host : String();
+  web.port = web.present
+                 ? storedSmtpConfig.port
+                 : (storedSmtpConfig.securityMode == SmtpSecurityMode::kImplicitTls ? 465 : 587);
+  web.security =
+      web.present ? String(smtpSecurityName(storedSmtpConfig.securityMode)) : String(F("starttls"));
+  web.username = web.present ? storedSmtpConfig.username : String();
+  web.passwordSet = web.present && storedSmtpConfig.password.length() > 0;
+  web.fromAddress = web.present ? storedSmtpConfig.fromAddress : String();
+  web.recipientAddress = web.present ? storedSmtpConfig.recipientAddress : String();
+  return web;
+}
+// #endregion FUNC_buildWebSmtpConfig
+
+// #region FUNC_handleSmtpConfigRequest
+// PURPOSE: Returns the stored SMTP profile (without the password) for form
+// prefill in the browser UI.
+void handleSmtpConfigRequest() {
+  if (!requireAuthentication()) {
+    return;
+  }
+  sendJson(server, 200, renderSmtpConfigJson(buildWebSmtpConfig()));
+}
+// #endregion FUNC_handleSmtpConfigRequest
+
+// #region FUNC_handleSmtpSaveSubmission
+// PURPOSE: Validates and persists the SMTP profile; the password field may be
+// empty to keep the stored one.
+void handleSmtpSaveSubmission() {
+  Serial.println("event=http_smtp_submit");
+  if (!requireAuthentication()) {
+    return;
+  }
+  RuntimeSmtpConfig candidate;
+  String error;
+  if (!readSmtpForm(candidate, error)) {
+    sendJsonError(400, error);
+    return;
+  }
+  if (!smtpConfigStore.save(candidate)) {
+    sendJsonError(500, F("The SMTP configuration could not be saved."));
+    return;
+  }
+  storedSmtpConfig = candidate;
+  smtpConfigLoaded = true;
+  smtpTestDone = false;
+  smtpTestMessage = "";
+  Serial.println("event=smtp_saved");
+  sendJson(server, 200,
+           renderMessageJson(F("SMTP settings saved. Use the test button to verify delivery.")));
+}
+// #endregion FUNC_handleSmtpSaveSubmission
+
+// #region FUNC_handleSmtpTestStart
+// PURPOSE: Starts one test delivery with the submitted form values on a
+// dedicated task so loop() and the HTTP server stay responsive during TLS.
+void handleSmtpTestStart() {
+  Serial.println("event=http_smtp_test_submit");
+  if (!requireAuthentication()) {
+    return;
+  }
+  if (smtpTestRunning) {
+    sendJsonError(409, F("A test delivery is already in progress."));
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    sendJsonError(400, F("The device is not connected to a Wi-Fi network."));
+    return;
+  }
+  RuntimeSmtpConfig candidate;
+  String error;
+  if (!readSmtpForm(candidate, error)) {
+    sendJsonError(400, error);
+    return;
+  }
+  smtpTestCandidate = candidate;
+  smtpTestEhloName = mdnsHostname + F(".local");
+  smtpTestDone = false;
+  smtpTestMessage = "";
+  smtpTestRunning = true;
+  if (xTaskCreatePinnedToCore(smtpTestTask, "smtp_test", 16384, nullptr, 1, nullptr, 0) != pdPASS) {
+    smtpTestRunning = false;
+    Serial.println("event=smtp_test_failed reason=task_create");
+    sendJsonError(503, F("The test could not be started. Try again."));
+    return;
+  }
+  sendJson(server, 200, renderMessageJson(F("Test delivery started.")));
+}
+// #endregion FUNC_handleSmtpTestStart
+
+// #region FUNC_handleSmtpTestStatus
+// PURPOSE: Reports asynchronous test progress to the polling browser UI.
+void handleSmtpTestStatus() {
+  if (!requireAuthentication()) {
+    return;
+  }
+  WebSmtpTest test;
+  test.running = smtpTestRunning;
+  test.done = smtpTestDone;
+  if (smtpTestDone) {
+    test.result = smtpResultName(smtpTestResult);
+    test.message = smtpTestMessage;
+  }
+  sendJson(server, 200, renderSmtpTestJson(test));
+}
+// #endregion FUNC_handleSmtpTestStatus
+
 // #region FUNC_handleNotFound
 // PURPOSE: Redirects captive-portal DNS requests to the appropriate local page
 // while returning a normal 404 when the device is only serving its STA address.
@@ -515,6 +844,10 @@ void configureWebServer() {
   server.on("/api/setup", HTTP_POST, handleSetupSubmission);
   server.on("/api/network", HTTP_POST, handleNetworkSubmission);
   server.on("/api/password", HTTP_POST, handlePasswordSubmission);
+  server.on("/api/smtp", HTTP_GET, handleSmtpConfigRequest);
+  server.on("/api/smtp", HTTP_POST, handleSmtpSaveSubmission);
+  server.on("/api/smtp/test", HTTP_POST, handleSmtpTestStart);
+  server.on("/api/smtp/test", HTTP_GET, handleSmtpTestStatus);
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.printf("event=http_server_started port=%u\n", kHttpPort);
@@ -549,6 +882,9 @@ void setupFirmware() {
     recordBootStage(String(F("event=boot_initial_ap_complete active=")) +
                     (accessPointActive ? F("true") : F("false")));
   }
+  smtpConfigLoaded = smtpConfigStore.load(storedSmtpConfig);
+  recordBootStage(String(F("event=boot_smtp_config_loaded present=")) +
+                  (smtpConfigLoaded ? F("true") : F("false")));
 
   recordBootStage(F("event=boot_http_routes_begin"));
   configureWebServer();

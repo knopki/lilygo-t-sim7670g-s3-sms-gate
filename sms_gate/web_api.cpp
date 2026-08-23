@@ -92,6 +92,44 @@ String renderStatusJson(const WebStatus& status) {
   return json;
 }
 
+String renderSmtpConfigJson(const WebSmtpConfig& config) {
+  String json;
+  json.reserve(256);
+  json += F("{\"present\":");
+  json += config.present ? F("true") : F("false");
+  json += F(",\"host\":");
+  appendJsonString(json, config.host);
+  json += F(",\"port\":");
+  json += String(config.port);
+  json += F(",\"security\":");
+  appendJsonString(json, config.security);
+  json += F(",\"username\":");
+  appendJsonString(json, config.username);
+  json += F(",\"password_set\":");
+  json += config.passwordSet ? F("true") : F("false");
+  json += F(",\"from\":");
+  appendJsonString(json, config.fromAddress);
+  json += F(",\"recipient\":");
+  appendJsonString(json, config.recipientAddress);
+  json += '}';
+  return json;
+}
+
+String renderSmtpTestJson(const WebSmtpTest& test) {
+  String json;
+  json.reserve(test.message.length() + 64);
+  json += F("{\"running\":");
+  json += test.running ? F("true") : F("false");
+  json += F(",\"done\":");
+  json += test.done ? F("true") : F("false");
+  json += F(",\"result\":");
+  appendJsonNullableString(json, test.result.length() > 0, test.result);
+  json += F(",\"message\":");
+  appendJsonNullableString(json, test.message.length() > 0, test.message);
+  json += '}';
+  return json;
+}
+
 String renderMessageJson(const String& message) {
   String json;
   json.reserve(message.length() + 32);

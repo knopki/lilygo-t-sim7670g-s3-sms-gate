@@ -17,12 +17,12 @@ run = "arduino-cli compile sms_gate"
 
 [tasks."fmt"]
 description = "Format Arduino C++ source and headers"
-run = "clang-format -i sms_gate/sms_gate.ino sms_gate/config_record.h sms_gate/config_store.h sms_gate/config_store.cpp sms_gate/web_api.h sms_gate/web_api.cpp"
+run = "clang-format -i sms_gate/sms_gate.ino sms_gate/config_record.h sms_gate/config_store.h sms_gate/config_store.cpp sms_gate/smtp_record.h sms_gate/smtp_client.h sms_gate/smtp_client.cpp sms_gate/smtp_transport.h sms_gate/web_api.h sms_gate/web_api.cpp"
 
 [tasks."fmt:check"]
 description = "Check Arduino C++ formatting without modifying"
-run = "clang-format --dry-run --Werror sms_gate/sms_gate.ino sms_gate/config_record.h sms_gate/config_store.h sms_gate/config_store.cpp sms_gate/web_api.h sms_gate/web_api.cpp"
+run = "clang-format --dry-run --Werror sms_gate/sms_gate.ino sms_gate/config_record.h sms_gate/config_store.h sms_gate/config_store.cpp sms_gate/smtp_record.h sms_gate/smtp_client.h sms_gate/smtp_client.cpp sms_gate/smtp_transport.h sms_gate/web_api.h sms_gate/web_api.cpp"
 
 [tasks."lint"]
 description = "Run Cppcheck on Arduino C++ source"
-run = "cppcheck --language=c++ --std=c++20 --check-level=exhaustive --enable=warning,style,performance,portability --error-exitcode=1 --suppress=missingIncludeSystem --suppress=unknownMacro:sms_gate/web_assets.h sms_gate/sms_gate.ino sms_gate/config_store.cpp sms_gate/web_api.cpp"
+run = "cppcheck --language=c++ --std=c++20 --check-level=exhaustive --enable=warning,style,performance,portability --error-exitcode=1 --suppress=missingIncludeSystem --suppress=unknownMacro:sms_gate/web_assets.h sms_gate/sms_gate.ino sms_gate/config_store.cpp sms_gate/smtp_client.cpp sms_gate/smtp_transport.h sms_gate/web_api.cpp"
