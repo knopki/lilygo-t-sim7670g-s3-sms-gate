@@ -212,6 +212,10 @@
           <label>Modem web password
             <input maxlength="63" name="password" type="password" autocomplete="new-password">
           </label>
+          <label>Phone number or alias
+            <input maxlength="31" name="label" placeholder="For example, +79990000000 (ZTE)" autocomplete="off">
+          </label>
+          <p class="hint">Shown in forwarded emails as the "Received on" line, so you can tell which SIM the message arrived on. Optional.</p>
         </fieldset>
         <button type="submit">Save settings</button>
         <button type="button" id="zte-test-button">Test connection</button>
@@ -567,6 +571,7 @@
       if (response.ok && payload && form) {
         form.elements.host.value = payload.host || '';
         form.elements.enabled.checked = !!payload.enabled;
+        form.elements.label.value = payload.label || '';
         form.elements.password.value = '';
         form.elements.password.placeholder = payload.password_set
           ? 'Unchanged (a password is saved)'
@@ -618,6 +623,7 @@
       enabled: form.elements.enabled.checked ? '1' : '0',
       host: form.elements.host.value.trim(),
       password: form.elements.password.value,
+      label: form.elements.label.value.trim(),
     };
   }
 

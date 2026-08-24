@@ -19,7 +19,11 @@
 - Do not add compatibility layers without a concrete need.
 - Do not commit Wi-Fi passwords, administrator passwords, email credentials,
   modem credentials, or generated build artifacts.
-- If a commit is required, format its message according to Conventional Commits.
+- Never run `git commit` (or any other state-changing git action) unless the
+  user explicitly asks for it in the current request; leaving verified,
+  uncommitted changes in the worktree is the expected end state.
+- If a commit is requested, format its message according to Conventional
+  Commits.
 
 <!-- #endregion SECTION_Dev_Rules -->
 

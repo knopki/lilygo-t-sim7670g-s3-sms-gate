@@ -5,8 +5,9 @@
 // SCOPE:
 // - One HTTP/1.1 request per command with Connection: close, the mandatory
 // Referer header, the stok session cookie, a lenient fixed-shape JSON
-// scanner, UCS-2-hex SMS decoding, one stale-session relogin per command,
-// bounded inbox paging with order auto-detection, and delete verification.
+// scanner, UCS-2-hex SMS decoding, modem timestamp formatting, one
+// stale-session relogin per command, bounded inbox paging with order
+// auto-detection, and delete verification.
 // - NOT: Sockets, TLS, NVS persistence, SMTP delivery, and HTTP route
 // handling.
 // INVARIANTS: Credentials are never copied into error paths or stage names;
@@ -79,6 +80,8 @@ struct ZteSms {
   char textUtf8[kMaxZteSmsTextBytes + 1];
 };
 // #endregion CLASS_ZteSms
+
+bool formatZteDate(const char* raw, char* out, size_t outSize);
 
 // #region CLASS_ZteInboxStatus
 // PURPOSE: Reports the device-storage occupancy the test route shows the

@@ -545,6 +545,40 @@ bool parseContentLength(const char* value, size_t& out) {
 
 }  // namespace
 
+// #region FUNC_formatZteDate
+// PURPOSE: Gives email rendering and future callers one readable timestamp
+// instead of raw modem fields; an unexpected firmware shape passes through
+// verbatim rather than being dropped.
+bool formatZteDate(const char* raw, char* out, size_t outSize) {
+  if (raw == nullptr || out == nullptr || outSize == 0) {
+    return false;
+  }
+  int yy = 0;
+  int mm = 0;
+  int dd = 0;
+  int hh = 0;
+  int mi = 0;
+  int ss = 0;
+  int tzQuarters = 0;
+  int consumed = -1;
+  const int matched =
+      sscanf(raw, "%d,%d,%d,%d,%d,%d,%d%n", &yy, &mm, &dd, &hh, &mi, &ss, &tzQuarters, &consumed);
+  const bool shape = matched == 7 && consumed >= 0 &&
+                     static_cast<size_t>(consumed) == strlen(raw) && yy >= 0 && yy <= 99 &&
+                     mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 && hh >= 0 && hh <= 23 && mi >= 0 &&
+                     mi <= 59 && ss >= 0 && ss <= 59 && tzQuarters >= -96 && tzQuarters <= 96;
+  if (!shape) {
+    snprintf(out, outSize, "%s", raw);
+    return false;
+  }
+  const unsigned tzAbs = static_cast<unsigned>(tzQuarters < 0 ? -tzQuarters : tzQuarters);
+  snprintf(out, outSize, "20%02d-%02d-%02d %02d:%02d:%02d UTC%+03d:%02u", yy, mm, dd, hh, mi, ss,
+           tzQuarters < 0 ? -static_cast<int>(tzAbs / 4) : static_cast<int>(tzAbs / 4),
+           (tzAbs % 4) * 15U);
+  return true;
+}
+// #endregion FUNC_formatZteDate
+
 // #region FUNC_ZteModem_ZteModem
 // PURPOSE: Binds one dialog instance to one channel and response scratch
 // buffer for its lifetime.

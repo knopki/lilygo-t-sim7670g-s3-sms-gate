@@ -37,6 +37,7 @@ struct RuntimeZteConfig {
   bool enabled = false;
   String host;
   String password;
+  String label;  // Phone number or alias shown in forwarded emails.
 };
 
 bool isPrintableAscii(const String& value);
@@ -60,4 +61,8 @@ class ZteConfigStore {
  public:
   bool load(RuntimeZteConfig& config) const;
   bool save(const RuntimeZteConfig& config) const;
+
+ private:
+  // Rewrites a stored pre-label v1 record as v2; see config_store.cpp.
+  bool migrateV1Record(size_t readLength) const;
 };

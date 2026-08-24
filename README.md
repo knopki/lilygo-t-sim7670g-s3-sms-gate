@@ -29,7 +29,9 @@ crash between email acceptance and the verified delete can resend one
 message; nothing is lost.
 
 The protected page configures the source: enable flag, modem host (for
-example `192.168.0.1`), and the modem's own web password. **Test
+example `192.168.0.1`), the modem's own web password, and an optional
+phone number or alias shown as the `Received on:` line in every forwarded
+email so you can tell which source a message came from. **Test
 connection** performs a non-destructive login plus capacity read and
 reports the firmware version and inbox occupancy; use it before enabling
 polling. Polling runs only while all three are true: station connectivity,

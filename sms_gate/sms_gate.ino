@@ -837,10 +837,16 @@ void buildSmsEmail(const ZteSms& sms, String& subject, String& body) {
   }
   body = F("Sender: ");
   body += sender;
+  if (storedZteConfig.label.length() > 0) {
+    body += F("\nReceived on: ");
+    body += storedZteConfig.label;
+  }
   body += F("\nModem message ID: ");
   body += sms.id;
-  body += F("\nModem date (may be incorrect): ");
-  body += sms.dateRaw;
+  body += F("\nModem date: ");
+  char zteDate[64];
+  formatZteDate(sms.dateRaw, zteDate, sizeof(zteDate));
+  body += zteDate;
   body += F("\n\n");
   if (!sms.concatComplete) {
     body +=
@@ -1065,6 +1071,12 @@ bool readZteForm(RuntimeZteConfig& candidate, String& error) {
     error = F("The modem web password must contain 1–63 printable ASCII characters.");
     return false;
   }
+  candidate.label = server.arg("label");
+  candidate.label.trim();
+  if (candidate.label.length() > kMaxZteLabelLength || !isPrintableAscii(candidate.label)) {
+    error = F("The phone number or alias must contain up to 31 printable ASCII characters.");
+    return false;
+  }
   return true;
 }
 // #endregion FUNC_readZteForm
@@ -1078,6 +1090,7 @@ WebZteConfig buildWebZteConfig() {
   web.enabled = web.present && storedZteConfig.enabled;
   web.host = web.present ? storedZteConfig.host : String();
   web.passwordSet = web.present && storedZteConfig.password.length() > 0;
+  web.label = web.present ? storedZteConfig.label : String();
   web.lastStatus = readZteLastStatus();
   return web;
 }

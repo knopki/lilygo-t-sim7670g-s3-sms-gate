@@ -126,6 +126,8 @@ String renderZteConfigJson(const WebZteConfig& config) {
   appendJsonString(json, config.host);
   json += F(",\"password_set\":");
   json += config.passwordSet ? F("true") : F("false");
+  json += F(",\"label\":");
+  appendJsonString(json, config.label);
   json += F(",\"last_status\":");
   appendJsonNullableString(json, config.lastStatus.length() > 0, config.lastStatus);
   json += '}';

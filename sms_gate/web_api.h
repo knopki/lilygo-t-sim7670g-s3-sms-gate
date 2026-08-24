@@ -43,6 +43,7 @@ struct WebZteConfig {
   bool enabled;
   String host;
   bool passwordSet;
+  String label;       // Phone number or alias shown in forwarded emails.
   String lastStatus;  // empty until the first poll or test completed
 };
 

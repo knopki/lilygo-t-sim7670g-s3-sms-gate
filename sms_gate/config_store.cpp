@@ -187,6 +187,7 @@ ZteConfigRecord buildZteConfigRecord(const RuntimeZteConfig& config) {
   record.enabled = config.enabled ? 1 : 0;
   config.host.toCharArray(record.host, sizeof(record.host));
   config.password.toCharArray(record.password, sizeof(record.password));
+  config.label.toCharArray(record.label, sizeof(record.label));
   record.checksum = calculateZteConfigChecksum(record);
   return record;
 }
@@ -195,7 +196,49 @@ ZteConfigRecord buildZteConfigRecord(const RuntimeZteConfig& config) {
 // #region FUNC_ZteConfigStore_load
 // PURPOSE: Restores the ZTE profile only as a whole validated record so a
 // corrupt or partial blob can never reach the modem dialog. Schema changes
-// must migrate stored data (see AGENTS.md); nothing here upgrades records.
+// stored v1 records are migrated to v2 in place (label added, empty).
+// #region FUNC_migrateV1Record
+// PURPOSE: Recognizes a stored pre-label v1 ZTE record and rewrites it as a
+// valid v2 record with an empty label, so enabling the source later never
+// needs re-entry; returns false when the blob is not a valid v1 record.
+bool ZteConfigStore::migrateV1Record(size_t readLength) const {
+  if (readLength != sizeof(ZteConfigRecordV1)) {
+    return false;
+  }
+  Preferences preferences;
+  if (!preferences.begin(kZteNamespace, true, kConfigPartition)) {
+    return false;
+  }
+  ZteConfigRecordV1 legacy{};
+  const size_t legacyLength = preferences.getBytes(kConfigKey, &legacy, sizeof(legacy));
+  preferences.end();
+  if (legacyLength != sizeof(legacy) || !isZteConfigRecordV1Valid(legacy)) {
+    return false;
+  }
+
+  RuntimeZteConfig migrated;
+  migrated.enabled = legacy.enabled == 1;
+  migrated.host = legacy.host;
+  migrated.password = legacy.password;
+  const ZteConfigRecord record = buildZteConfigRecord(migrated);
+  if (!isZteConfigRecordValid(record) ||
+      !preferences.begin(kZteNamespace, false, kConfigPartition)) {
+    Serial.println("event=zte_load_migrated persisted=false");
+    return false;
+  }
+  const size_t writtenLength = preferences.putBytes(kConfigKey, &record, sizeof(record));
+  preferences.end();
+  const bool persisted = writtenLength == sizeof(record);
+  Serial.printf("event=zte_load_migrated from_version=1 persisted=%s\n",
+                persisted ? "true" : "false");
+  return persisted;
+}
+// #endregion FUNC_migrateV1Record
+
+// #region FUNC_ZteConfigStore_load
+// PURPOSE: Restores the ZTE profile only as a whole validated record so a
+// corrupt or partial blob can never reach the modem dialog; stored v1
+// records are migrated to v2 in place (label added, empty).
 bool ZteConfigStore::load(RuntimeZteConfig& config) const {
   Serial.printf("event=zte_load_begin partition=%s\n", kConfigPartition);
   Preferences preferences;
@@ -207,7 +250,15 @@ bool ZteConfigStore::load(RuntimeZteConfig& config) const {
   ZteConfigRecord record{};
   const size_t readLength = preferences.getBytes(kConfigKey, &record, sizeof(record));
   preferences.end();
-  if (readLength != sizeof(record) || !isZteConfigRecordValid(record)) {
+
+  if (readLength != sizeof(record)) {
+    if (migrateV1Record(readLength)) {
+      return load(config);  // Re-read as the freshly written v2 record.
+    }
+    Serial.printf("event=zte_load_empty_or_invalid bytes=%u\n", static_cast<unsigned>(readLength));
+    return false;
+  }
+  if (!isZteConfigRecordValid(record)) {
     Serial.printf("event=zte_load_empty_or_invalid bytes=%u\n", static_cast<unsigned>(readLength));
     return false;
   }
@@ -215,6 +266,7 @@ bool ZteConfigStore::load(RuntimeZteConfig& config) const {
   config.enabled = record.enabled == 1;
   config.host = record.host;
   config.password = record.password;
+  config.label = record.label;
   Serial.printf("event=zte_load_complete enabled=%s\n", config.enabled ? "true" : "false");
   return true;
 }

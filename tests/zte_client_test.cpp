@@ -3,6 +3,7 @@
 // contract, session handling, AD token, paging/scan semantics, decoding,
 // and record validation.
 #include <assert.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -200,18 +201,49 @@ void testCodecVectors() {
 }
 // #endregion FUNC_testCodecVectors
 
+// #region FUNC_makeV1Record
+// PURPOSE: Builds one known-good pre-label v1 record as the baseline for
+// the migration-path assertions.
+ZteConfigRecordV1 makeV1Record() {
+  ZteConfigRecordV1 record{};
+  record.magic = kZteConfigMagic;
+  record.version = 1;
+  record.enabled = 1;
+  strcpy(record.host, "192.168.0.1");
+  strcpy(record.password, "modem-pass");
+  const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
+  uint32_t hash = 2166136261UL;
+  for (size_t index = 0; index < offsetof(ZteConfigRecordV1, checksum); ++index) {
+    hash ^= bytes[index];
+    hash *= 16777619UL;
+  }
+  record.checksum = hash;
+  return record;
+}
+// #endregion FUNC_makeV1Record
+
 // #region FUNC_testRecordValidation
 // PURPOSE: Gates load/save on the shared predicate: corrupt, foreign, and
-// non-printable records never reach the modem dialog.
+// non-printable records never reach the modem dialog; the label is optional
+// but must be printable when present.
 void testRecordValidation() {
-  assert(isZteConfigRecordValid(makeRecord()));
-
   ZteConfigRecord record = makeRecord();
+  assert(isZteConfigRecordValid(record));
+
+  strcpy(record.label, "+79990000000 (ZTE)");
+  record.checksum = calculateZteConfigChecksum(record);
+  assert(isZteConfigRecordValid(record));
+
+  strcpy(record.label, "bad\x01label");
+  record.checksum = calculateZteConfigChecksum(record);
+  assert(!isZteConfigRecordValid(record));
+
+  record = makeRecord();
   record.checksum ^= 1;
   assert(!isZteConfigRecordValid(record));
 
   record = makeRecord();
-  record.version = 2;
+  record.version = static_cast<uint16_t>(kZteConfigVersion + 1);  // Foreign future version.
   assert(!isZteConfigRecordValid(record));
 
   record = makeRecord();
@@ -245,6 +277,36 @@ void testRecordValidation() {
   puts("testRecordValidation ok");
 }
 // #endregion FUNC_testRecordValidation
+
+// #region FUNC_testV1MigrationValidation
+// PURPOSE: Proves the load-time v1 recognition accepts an original record
+// and rejects corrupted or foreign blobs before any field is carried over.
+void testV1MigrationValidation() {
+  assert(isZteConfigRecordV1Valid(makeV1Record()));
+
+  ZteConfigRecordV1 record = makeV1Record();
+  record.checksum ^= 1;
+  assert(!isZteConfigRecordV1Valid(record));
+
+  record = makeV1Record();
+  record.version = 2;
+  assert(!isZteConfigRecordV1Valid(record));
+
+  record = makeV1Record();
+  record.password[0] = '\0';
+  {
+    const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
+    uint32_t hash = 2166136261UL;
+    for (size_t index = 0; index < offsetof(ZteConfigRecordV1, checksum); ++index) {
+      hash ^= bytes[index];
+      hash *= 16777619UL;
+    }
+    record.checksum = hash;
+  }
+  assert(!isZteConfigRecordV1Valid(record));
+  puts("testV1MigrationValidation ok");
+}
+// #endregion FUNC_testV1MigrationValidation
 
 // #region FUNC_testLoginSuccess
 // PURPOSE: Proves the LOGIN request contract (base64 password, Referer,
@@ -642,11 +704,36 @@ void testBodyWithoutContentLength() {
 }
 // #endregion FUNC_testBodyWithoutContentLength
 
+// #region FUNC_testFormatZteDate
+// PURPOSE: Covers the timestamp rendering, quarter-hour offsets, and the
+// verbatim fallback for unexpected firmware formats.
+void testFormatZteDate() {
+  char out[64];
+  assert(formatZteDate("26,08,24,13,48,05,+12", out, sizeof(out)));
+  assert(strcmp(out, "2026-08-24 13:48:05 UTC+03:00") == 0);
+  assert(formatZteDate("25,01,02,03,04,05,-8", out, sizeof(out)));
+  assert(strcmp(out, "2025-01-02 03:04:05 UTC-02:00") == 0);
+  assert(formatZteDate("25,12,31,23,59,59,+5", out, sizeof(out)));
+  assert(strcmp(out, "2025-12-31 23:59:59 UTC+01:15") == 0);
+  // Out-of-range fields fall back to the raw text.
+  assert(!formatZteDate("26,13,24,13,48,05,+12", out, sizeof(out)));
+  assert(strcmp(out, "26,13,24,13,48,05,+12") == 0);
+  // Trailing garbage falls back to the raw text.
+  assert(!formatZteDate("26,08,24,13,48,05,+12x", out, sizeof(out)));
+  assert(strcmp(out, "26,08,24,13,48,05,+12x") == 0);
+  // Empty input copies verbatim.
+  assert(!formatZteDate("", out, sizeof(out)));
+  assert(strcmp(out, "") == 0);
+  puts("testFormatZteDate ok");
+}
+// #endregion FUNC_testFormatZteDate
+
 }  // namespace
 
 int main() {
   testCodecVectors();
   testRecordValidation();
+  testV1MigrationValidation();
   testLoginSuccess();
   testLoginRejected();
   testFindOldestAscending();
@@ -663,6 +750,7 @@ int main() {
   testInboxStatus();
   testHttpFailures();
   testBodyWithoutContentLength();
+  testFormatZteDate();
   puts("all zte tests passed");
   return 0;
 }
