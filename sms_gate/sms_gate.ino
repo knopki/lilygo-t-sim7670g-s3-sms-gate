@@ -8,13 +8,14 @@
 // isolated persistent configuration, HTTP routes, the asynchronous SMTP
 // test-delivery lifecycle, the ZTE poll/forward/delete lifecycle, and the
 // asynchronous ZTE send lifecycle (recipient and body fields shared by
-// future SMS sources).
+// future SMS sources), including cleanup of terminal outgoing records.
 // - NOT: The SMTP dialog itself (smtp_client), TLS transport
 // (smtp_transport), the ZTE goform dialog (zte_client), its transport
 // (zte_transport), SMS from the onboard modem, GNSS, and OTA logic.
 // INVARIANTS: Credentials are never written to Serial or
 // returned in HTTP responses; the SMTP and modem passwords are never
-// serialized; a ZTE SMS is deleted on the modem only after SMTP acceptance.
+// serialized; incoming ZTE SMS are deleted only after SMTP acceptance;
+// outgoing records are cleaned only after a terminal modem send status.
 // DEPENDENCIES: Uses Arduino-ESP32 WiFi, WebServer, DNSServer, ESPmDNS,
 // and Preferences.
 // #endregion MODULE_CONTRACT
@@ -53,6 +54,11 @@ constexpr size_t kZteStatusLength = 160;
 // bounded, mirrors its own web UI polling.
 constexpr int kZteSendStatusAttempts = 20;
 constexpr unsigned long kZteSendStatusDelayMs = 1000;
+// B02 can return a stale tag-filtered list immediately after DELETE_SMS.
+// Retry only that verified-cleanup signature after the modem has applied
+// its storage update; the bound also covers a full 100-slot device store.
+constexpr unsigned long kZteOutgoingCleanupRetryDelayMs = 500;
+constexpr unsigned int kZteOutgoingCleanupMaxAttempts = kZteMaxPages * kZtePageSize;
 // NTP sources for the wall clock SEND_SMS validates (sms_time); the modem
 // runs its own SNTP and rejects far-off timestamps.
 constexpr const char* kNtpServers[] = {"pool.ntp.org", "time.nist.gov"};
@@ -1294,7 +1300,8 @@ String zteReplySnippet(const char* body) {
 // #region FUNC_zteSendTask
 // PURPOSE: Runs one send on its own task: LOGIN, SEND_SMS, then bounded
 // one-per-second status samples until the modem completes or fails the
-// command, publishing the outcome last.
+// command; a terminal result triggers verified cleanup of final outgoing
+// records before the task publishes the outcome.
 void zteSendTask(void*) {
   const String to = zteSendTo;
   const String text = zteSendText;
@@ -1333,7 +1340,37 @@ void zteSendTask(void*) {
       }
     }
   }
-  free(scratch);
+  const String sendStage = modem.failedStage();
+  const String replyDetail =
+      result == ZteResult::kSendRejected ? zteReplySnippet(modem.lastBody()) : String();
+  const bool cleanupRequired = confirmed || statusFailed;
+  uint16_t cleanedOutgoing = 0;
+  ZteResult cleanupResult = ZteResult::kSuccess;
+  String cleanupStage;
+  if (cleanupRequired) {
+    for (unsigned int attempt = 0; attempt < kZteOutgoingCleanupMaxAttempts; ++attempt) {
+      uint16_t deletedThisAttempt = 0;
+      cleanupResult = modem.cleanupOutgoing(deletedThisAttempt);
+      cleanedOutgoing += deletedThisAttempt;
+      cleanupStage = modem.failedStage();
+      if (cleanupResult == ZteResult::kSuccess || cleanupStage != "delete_unverified" ||
+          attempt + 1 == kZteOutgoingCleanupMaxAttempts) {
+        break;
+      }
+      Serial.printf("event=zte_outgoing_cleanup_retry attempt=%u deleted=%u delay_ms=%lu\n",
+                    attempt + 1, static_cast<unsigned>(deletedThisAttempt),
+                    kZteOutgoingCleanupRetryDelayMs);
+      vTaskDelay(pdMS_TO_TICKS(kZteOutgoingCleanupRetryDelayMs));
+    }
+    if (cleanupResult == ZteResult::kSuccess) {
+      Serial.printf("event=zte_outgoing_cleanup_complete result=success deleted=%u\n",
+                    static_cast<unsigned>(cleanedOutgoing));
+    } else {
+      Serial.printf("event=zte_outgoing_cleanup_complete result=%s deleted=%u stage=%s\n",
+                    zteResultName(cleanupResult), static_cast<unsigned>(cleanedOutgoing),
+                    cleanupStage.c_str());
+    }
+  }
 
   String message;
   if (scratch == nullptr) {
@@ -1352,11 +1389,22 @@ void zteSendTask(void*) {
     message += F("it may still be delivered. [stage=send_status]");
   } else if (result == ZteResult::kSendRejected) {
     message = F("The modem rejected the message. Modem reply: ");
-    message += zteReplySnippet(modem.lastBody());
+    message += replyDetail;
   } else {
     message = F("Send failed [stage=");
-    message += modem.failedStage();
+    message += sendStage;
     message += ']';
+  }
+  if (cleanupRequired) {
+    if (cleanupResult == ZteResult::kSuccess) {
+      message += F(" Outgoing modem records cleared: ");
+      message += String(cleanedOutgoing);
+      message += '.';
+    } else {
+      message += F(" Outgoing modem records could not be cleared [stage=");
+      message += cleanupStage;
+      message += ']';
+    }
   }
   zteSendMessage = message;
   zteSendSuccess = confirmed;
@@ -1366,12 +1414,11 @@ void zteSendTask(void*) {
     // operator's own message).
     Serial.printf("event=zte_send_form form=%s\n", modem.lastSendForm());
   }
-  const String replyDetail =
-      result == ZteResult::kSendRejected ? zteReplySnippet(modem.lastBody()) : String();
+  free(scratch);
   Serial.printf(
       "event=zte_send_complete result=%s confirmed=%s stage=%s elapsed_ms=%lu detail=%s\n",
-      zteResultName(result), confirmed ? "true" : "false", modem.failedStage(),
-      millis() - startedAt, replyDetail.c_str());
+      zteResultName(result), confirmed ? "true" : "false", sendStage.c_str(), millis() - startedAt,
+      replyDetail.c_str());
   zteSendRunning = false;
   zteSendDone = true;  // Published last: readers treat done as data-ready.
   vTaskDelete(nullptr);

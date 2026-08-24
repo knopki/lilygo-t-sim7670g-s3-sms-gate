@@ -81,8 +81,15 @@ Notes:
   labels.
 - A send is excluded from the poll cycle and the connection test, so the
   modem never serves two dialogs at once.
+- After a terminal modem result (delivered or failed), the gateway deletes
+  and verifies every final outgoing record in ZTE device storage: tags `2`
+  (sent) and `3` (failed). Incoming SMS (`0`/`1`) and drafts (`4`) are not
+  touched. The B02 firmware can return a stale list immediately after a
+  DELETE, so the gateway retries that verification after a short delay. A
+  cleanup failure is reported in the UI and Serial log.
 - If the modem accepts the message but its status stays in progress past
-  the bound, the UI says so honestly: the message may still be delivered.
+  the bound, the UI says so honestly: the message may still be delivered;
+  its record is intentionally not removed while the outcome is unknown.
 - Delivery also requires a valid SMS center (SMSC) configured in the
   modem; if the modem accepts sends that never complete, check the SMSC
   in its web UI (Settings → SMS).

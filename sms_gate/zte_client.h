@@ -6,13 +6,14 @@
 // - One HTTP/1.1 request per command with Connection: close, the mandatory
 // Referer header, the stok session cookie, a lenient fixed-shape JSON
 // scanner, UCS-2-hex SMS decoding and encoding, modem timestamp formatting,
-// one stale-session relogin per command, bounded inbox paging with order
-// auto-detection, delete verification, and one send-status query sample.
+// one stale-session relogin per command, bounded device-storage paging with
+// order auto-detection, delete verification, outgoing-record cleanup, and
+// one send-status query sample.
 // - NOT: Sockets, TLS, NVS persistence, SMTP delivery, send-status polling
 // pacing, and HTTP route handling.
 // INVARIANTS: Credentials are never copied into error paths or stage names;
-// the channel is stopped before every return; the modem inbox remains the
-// only delivery state (one oldest incoming SMS per findOldestIncoming);
+// the channel is stopped before every return; incoming SMS stay on the modem
+// until SMTP acceptance; cleanup deletes only final outgoing tags 2 and 3;
 // outgoing message bodies never exceed the modem web UI's own send limit.
 // DEPENDENCIES: Pure C++ (zte_record.h field limits, codec.h base64/MD5);
 // the device channel lives in zte_transport.h.
@@ -127,9 +128,14 @@ class ZteModem {
   // is false when the inbox holds no incoming messages.
   ZteResult findOldestIncoming(ZteSms& out, bool& found);
 
-  // Deletes exactly one message after a fresh RD token and verifies the ID
-  // disappeared; the message is retained for retry on any failure.
+  // Deletes exactly one incoming message after a fresh RD token and verifies
+  // the ID disappeared; the message is retained for retry on any failure.
   ZteResult deleteSms(const ZteSms& sms);
+
+  // Deletes every final outgoing device record (tag 2 sent or tag 3 failed),
+  // verifying each ID disappeared; incoming (0/1) and draft (4) messages
+  // remain untouched. Returns the number of verified deletions.
+  ZteResult cleanupOutgoing(uint16_t& deleted);
 
   // Reads sms_capacity_info for the device storage.
   ZteResult readInboxStatus(ZteInboxStatus& out);
@@ -166,9 +172,11 @@ class ZteModem {
   ZteResult requestVersions();
   ZteResult fetchRd(char* rd, size_t rdSize);
   ZteResult fetchAd(char* ad, size_t adSize);
-  ZteResult fetchSmsPage(unsigned int page);
+  ZteResult fetchSmsPage(unsigned int page, const char* tags);
   ZteResult scanOldest(ZteSms& out, bool& found);
-  ZteResult verifyAbsent(const char* targetId);
+  ZteResult findOutgoing(const char* tag, char* id, size_t idSize, bool& found);
+  ZteResult deleteMessage(const char* id, const char* verifyTags);
+  ZteResult verifyAbsent(const char* targetId, const char* tags);
 
   void fail(const char* stage);
   bool hasSession() const { return cookie_[0] != '\0'; }

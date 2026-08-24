@@ -624,6 +624,66 @@ void testDeleteUnverified() {
 }
 // #endregion FUNC_testDeleteUnverified
 
+// #region FUNC_testCleanupOutgoing
+// PURPOSE: Reclaims both completed (tag 2) and failed (tag 3) outgoing
+// records, re-scanning from page zero after each verified deletion so the
+// modem's paging shift cannot skip either record; incoming SMS stays intact.
+void testCleanupOutgoing() {
+  FakeZteChannel channel;
+  channel.enqueue(loginResponse());
+  channel.enqueue(versionsResponse());
+  // B02 ignores page, so each tag-specific page zero becomes the work
+  // queue: deleting 701 exposes the next matching record on the next scan.
+  channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("701", "2"),
+                               smsEntry("703", "4")}));
+  channel.enqueue(httpResponse("{\"RD\":\"AB12CD34\"}"));
+  channel.enqueue(httpResponse("{\"result\":\"success\"}"));
+  channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("703", "4")}));
+  channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("703", "4")}));
+  channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("702", "3"),
+                               smsEntry("703", "4")}));
+  channel.enqueue(httpResponse("{\"RD\":\"AB12CD34\"}"));
+  channel.enqueue(httpResponse("{\"result\":\"success\"}"));
+  channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("703", "4")}));
+  channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("703", "4")}));
+  std::vector<char> scratch(4096);
+  ZteModem modem(channel, scratch.data(), scratch.size());
+  assert(modem.login("192.168.0.1", "admin") == ZteResult::kSuccess);
+  uint16_t deleted = 99;
+  assert(modem.cleanupOutgoing(deleted) == ZteResult::kSuccess);
+  assert(deleted == 2);
+  assert(countOccurrences(channel.written, "tags=2") >= 3);
+  assert(countOccurrences(channel.written, "tags=3") >= 3);
+  assert(countOccurrences(channel.written, "goformId=DELETE_SMS&msg_id=701%3B") == 1);
+  assert(countOccurrences(channel.written, "goformId=DELETE_SMS&msg_id=702%3B") == 1);
+  assert(countOccurrences(channel.written, "goformId=DELETE_SMS&msg_id=700%3B") == 0);
+  assert(countOccurrences(channel.written, "goformId=DELETE_SMS&msg_id=703%3B") == 0);
+  puts("testCleanupOutgoing ok");
+}
+// #endregion FUNC_testCleanupOutgoing
+
+// #region FUNC_testCleanupOutgoingDeleteRejected
+// PURPOSE: Keeps an outgoing record visible when the modem refuses its
+// delete, reports the precise delete stage, and never claims a deletion.
+void testCleanupOutgoingDeleteRejected() {
+  FakeZteChannel channel;
+  channel.enqueue(loginResponse());
+  channel.enqueue(versionsResponse());
+  channel.enqueue(smsResponse({}));  // tags=2 is empty.
+  channel.enqueue(smsResponse({smsEntry("703", "3")}));
+  channel.enqueue(httpResponse("{\"RD\":\"AB12CD34\"}"));
+  channel.enqueue(httpResponse("{\"result\":\"failure\"}"));
+  std::vector<char> scratch(4096);
+  ZteModem modem(channel, scratch.data(), scratch.size());
+  assert(modem.login("192.168.0.1", "admin") == ZteResult::kSuccess);
+  uint16_t deleted = 99;
+  assert(modem.cleanupOutgoing(deleted) == ZteResult::kProtocolError);
+  assert(deleted == 0);
+  assert(strcmp(modem.failedStage(), "delete") == 0);
+  puts("testCleanupOutgoingDeleteRejected ok");
+}
+// #endregion FUNC_testCleanupOutgoingDeleteRejected
+
 // #region FUNC_testInboxStatus
 // PURPOSE: Reads the device-storage occupancy for the operator test route.
 void testInboxStatus() {
@@ -934,6 +994,8 @@ int main() {
   testDeleteFlow();
   testDeleteRejected();
   testDeleteUnverified();
+  testCleanupOutgoing();
+  testCleanupOutgoingDeleteRejected();
   testInboxStatus();
   testSendSmsFlow();
   testSendSmsAsciiUsesGsm7();

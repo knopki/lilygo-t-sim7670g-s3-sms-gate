@@ -1079,14 +1079,20 @@ ZteResult ZteModem::fetchAd(char* ad, size_t adSize) {
 // #endregion FUNC_ZteModem_fetchAd
 
 // #region FUNC_ZteModem_fetchSmsPage
-// PURPOSE: Requests one inbox page into the scratch buffer, relogging in
-// once when the modem answers the stale empty shape.
-ZteResult ZteModem::fetchSmsPage(unsigned int page) {
+// PURPOSE: Requests one device-storage list into the scratch buffer with a
+// caller-selected modem tag filter, relogging once when the modem answers
+// the stale empty shape. B02 ignores page, so callers that delete records
+// intentionally re-read page zero after each deletion.
+ZteResult ZteModem::fetchSmsPage(unsigned int page, const char* tags) {
+  if (tags == nullptr || tags[0] == '\0') {
+    fail("sms_list");
+    return ZteResult::kProtocolError;
+  }
   char query[192];
   snprintf(query, sizeof(query),
-           "isTest=false&cmd=sms_data_total&page=%u&data_per_page=%u&mem_store=1&tags=10&"
+           "isTest=false&cmd=sms_data_total&page=%u&data_per_page=%u&mem_store=1&tags=%s&"
            "order_by=order+by+id+asc",
-           page, static_cast<unsigned>(kZtePageSize));
+           page, static_cast<unsigned>(kZtePageSize), tags);
   for (int attempt = 0; attempt < 2; ++attempt) {
     ZteResult result = requestGet(query);
     if (result == ZteResult::kSuccess) {
@@ -1118,7 +1124,7 @@ ZteResult ZteModem::scanOldest(ZteSms& out, bool& found) {
   bool ascendingDetected = false;
   bool ascending = true;
   for (unsigned int page = 0; page < kZteMaxPages; ++page) {
-    ZteResult result = fetchSmsPage(page);
+    ZteResult result = fetchSmsPage(page, "10");
     if (result != ZteResult::kSuccess) {
       return result;
     }
@@ -1184,71 +1190,104 @@ ZteResult ZteModem::findOldestIncoming(ZteSms& out, bool& found) {
 }
 // #endregion FUNC_ZteModem_findOldestIncoming
 
+// #region FUNC_ZteModem_findOutgoing
+// PURPOSE: Finds one terminal outgoing record (tag 2 sent or tag 3 failed)
+// across bounded device-storage pages. The caller deletes it and scans again
+// from page zero, so page shifts caused by deletion cannot skip a record.
+ZteResult ZteModem::findOutgoing(const char* tag, char* id, size_t idSize, bool& found) {
+  found = false;
+  if (tag == nullptr || (strcmp(tag, "2") != 0 && strcmp(tag, "3") != 0) || id == nullptr ||
+      idSize == 0) {
+    fail("outgoing_input");
+    return ZteResult::kProtocolError;
+  }
+  // The B02 ignores page; the tag filter makes its page zero a bounded
+  // work queue, and deletion shifts the next matching record into it.
+  ZteResult result = fetchSmsPage(0, tag);
+  if (result != ZteResult::kSuccess) {
+    return result;
+  }
+  JsonView body{scratch_, scratch_ + bodyLength_};
+  JsonView messages;
+  if (!jsonMemberArray(body, "messages", messages)) {
+    fail("sms_list");
+    return ZteResult::kProtocolError;
+  }
+  JsonArrayIterator iterator(messages);
+  JsonView element;
+  while (iterator.next(element)) {
+    char entryId[24];
+    char entryTag[8];
+    if (!parseEntryHeader(element, entryId, sizeof(entryId), entryTag, sizeof(entryTag)) ||
+        strlen(entryId) + 1 > idSize) {
+      fail("sms_entry");
+      return ZteResult::kProtocolError;
+    }
+    if (strcmp(entryTag, tag) == 0) {
+      snprintf(id, idSize, "%s", entryId);
+      found = true;
+      return ZteResult::kSuccess;
+    }
+  }
+  return ZteResult::kSuccess;
+}
+// #endregion FUNC_ZteModem_findOutgoing
+
 // #region FUNC_ZteModem_verifyAbsent
-// PURPOSE: Confirms a deleted ID no longer appears, stopping as soon as the
-// scan passes the ID's position in the effective ordering.
-ZteResult ZteModem::verifyAbsent(const char* targetId) {
+// PURPOSE: Confirms a deleted ID disappeared from the same filter that
+// selected it. B02 ignores page, but a selected record must remain in this
+// filter's first page if DELETE_SMS did not remove it.
+ZteResult ZteModem::verifyAbsent(const char* targetId, const char* tags) {
   uint32_t target = 0;
-  if (!parseUint32String(targetId, target)) {
+  if (targetId == nullptr || !parseUint32String(targetId, target) || tags == nullptr ||
+      tags[0] == '\0') {
     fail("delete_verify");
     return ZteResult::kProtocolError;
   }
-  bool ascendingDetected = false;
-  bool ascending = true;
-  for (unsigned int page = 0; page < kZteMaxPages; ++page) {
-    ZteResult result = fetchSmsPage(page);
-    if (result != ZteResult::kSuccess) {
-      return result;
-    }
-    JsonView body{scratch_, scratch_ + bodyLength_};
-    JsonView messages;
-    if (!jsonMemberArray(body, "messages", messages)) {
-      fail("sms_list");
+  ZteResult result = fetchSmsPage(0, tags);
+  if (result != ZteResult::kSuccess) {
+    return result;
+  }
+  JsonView body{scratch_, scratch_ + bodyLength_};
+  JsonView messages;
+  if (!jsonMemberArray(body, "messages", messages)) {
+    fail("sms_list");
+    return ZteResult::kProtocolError;
+  }
+  JsonArrayIterator iterator(messages);
+  JsonView element;
+  while (iterator.next(element)) {
+    char id[24];
+    char tag[8];
+    if (!parseEntryHeader(element, id, sizeof(id), tag, sizeof(tag))) {
+      fail("sms_entry");
       return ZteResult::kProtocolError;
     }
-    size_t count = 0;
-    uint32_t previousId = 0;
-    JsonArrayIterator iterator(messages);
-    JsonView element;
-    while (iterator.next(element)) {
-      ++count;
-      char id[24];
-      char tag[8];
-      if (!parseEntryHeader(element, id, sizeof(id), tag, sizeof(tag))) {
-        fail("sms_entry");
-        return ZteResult::kProtocolError;
-      }
-      uint32_t idValue = 0;
-      if (!parseUint32String(id, idValue)) {
-        fail("sms_entry");
-        return ZteResult::kProtocolError;
-      }
-      if (count >= 2 && !ascendingDetected) {
-        ascendingDetected = true;
-        ascending = previousId < idValue;
-      }
-      previousId = idValue;
-      if (idValue == target) {
-        fail("delete_unverified");
-        return ZteResult::kProtocolError;
-      }
-      if (ascendingDetected &&
-          ((ascending && idValue > target) || (!ascending && idValue < target))) {
-        return ZteResult::kSuccess;  // Passed the target's position.
-      }
+    uint32_t idValue = 0;
+    if (!parseUint32String(id, idValue)) {
+      fail("sms_entry");
+      return ZteResult::kProtocolError;
     }
-    if (count < kZtePageSize) {
-      return ZteResult::kSuccess;  // Final page reached.
+    if (idValue == target) {
+      fail("delete_unverified");
+      return ZteResult::kProtocolError;
     }
   }
-  return ZteResult::kSuccess;  // Page cap reached; absence is the safe read.
+  return ZteResult::kSuccess;
 }
 // #endregion FUNC_ZteModem_verifyAbsent
 
-// #region FUNC_ZteModem_deleteSms
-// PURPOSE: Deletes exactly one message with a fresh AD token and verifies
-// the ID disappeared so a silently failed delete cannot re-forward forever.
-ZteResult ZteModem::deleteSms(const ZteSms& sms) {
+// #region FUNC_ZteModem_deleteMessage
+// PURPOSE: Deletes one validated message ID with a fresh AD token and
+// verifies it disappeared so a silently failed delete cannot be assumed
+// complete by either the incoming forwarder or outgoing cleanup.
+ZteResult ZteModem::deleteMessage(const char* id, const char* verifyTags) {
+  uint32_t numericId = 0;
+  if (id == nullptr || !parseUint32String(id, numericId) || verifyTags == nullptr ||
+      verifyTags[0] == '\0') {
+    fail("delete_input");
+    return ZteResult::kProtocolError;
+  }
   if (!hasSession()) {
     ZteResult result = openSession();
     if (result != ZteResult::kSuccess) {
@@ -1262,7 +1301,7 @@ ZteResult ZteModem::deleteSms(const ZteSms& sms) {
   }
   char formBody[192];
   snprintf(formBody, sizeof(formBody),
-           "isTest=false&goformId=DELETE_SMS&msg_id=%s%%3B&notCallback=true&AD=%s", sms.id, ad);
+           "isTest=false&goformId=DELETE_SMS&msg_id=%s%%3B&notCallback=true&AD=%s", id, ad);
   result = requestPost(formBody);
   if (result != ZteResult::kSuccess) {
     return result;
@@ -1273,9 +1312,54 @@ ZteResult ZteModem::deleteSms(const ZteSms& sms) {
     fail("delete");
     return ZteResult::kProtocolError;
   }
-  return verifyAbsent(sms.id);
+  return verifyAbsent(id, verifyTags);
 }
+// #endregion FUNC_ZteModem_deleteMessage
+
+// #region FUNC_ZteModem_deleteSms
+// PURPOSE: Keeps the incoming-forwarding contract focused on one captured
+// SMS while sharing the proven delete-and-verify operation with cleanup.
+ZteResult ZteModem::deleteSms(const ZteSms& sms) { return deleteMessage(sms.id, "10"); }
 // #endregion FUNC_ZteModem_deleteSms
+
+// #region FUNC_ZteModem_cleanupOutgoing
+// PURPOSE: Reclaims all final outgoing records after a terminal send result.
+// B02 ignores page, so each tag-specific page-zero response is a bounded
+// work queue: after a verified deletion the next matching ID shifts into it.
+ZteResult ZteModem::cleanupOutgoing(uint16_t& deleted) {
+  deleted = 0;
+  if (!hasSession()) {
+    ZteResult result = openSession();
+    if (result != ZteResult::kSuccess) {
+      return result;
+    }
+  }
+  static constexpr const char* kOutgoingTags[] = {"2", "3"};
+  for (const char* tag : kOutgoingTags) {
+    for (;;) {
+      if (deleted >= kZteMaxPages * kZtePageSize) {
+        fail("outgoing_cleanup_limit");
+        return ZteResult::kProtocolError;
+      }
+      char id[kZteSmsIdLength + 1];
+      bool found = false;
+      ZteResult result = findOutgoing(tag, id, sizeof(id), found);
+      if (result != ZteResult::kSuccess || !found) {
+        if (result != ZteResult::kSuccess) {
+          return result;
+        }
+        break;
+      }
+      result = deleteMessage(id, tag);
+      if (result != ZteResult::kSuccess) {
+        return result;
+      }
+      ++deleted;
+    }
+  }
+  return ZteResult::kSuccess;
+}
+// #endregion FUNC_ZteModem_cleanupOutgoing
 
 // #region FUNC_ZteModem_readInboxStatus
 // PURPOSE: Reads the device-storage occupancy for the operator test route.
