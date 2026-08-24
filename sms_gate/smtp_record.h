@@ -12,6 +12,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "codec.h"
+
 constexpr size_t kMaxSmtpHostLength = 127;
 constexpr size_t kMaxSmtpUserLength = 127;
 constexpr size_t kMaxSmtpPasswordLength = 95;
@@ -59,36 +61,6 @@ inline uint32_t calculateSmtpConfigChecksum(const SmtpConfigRecord& record) {
 }
 // #endregion FUNC_calculateSmtpConfigChecksum
 
-// #region FUNC_isPrintableRange
-// PURPOSE: Shares the printable ASCII rule with the network configuration so
-// binary garbage cannot survive validation.
-inline bool isPrintableRange(const char* value, size_t maxLength) {
-  for (size_t index = 0; index < maxLength; ++index) {
-    const char character = value[index];
-    if (character == '\0') {
-      return true;
-    }
-    if (character < 32 || character > 126) {
-      return false;
-    }
-  }
-  return false;  // Not null-terminated within the field limit.
-}
-// #endregion FUNC_isPrintableRange
-
-// #region FUNC_containsCharacter
-// PURPOSE: Cheap sanity check for address-shaped fields without pulling in a
-// full parser.
-inline bool containsCharacter(const char* value, char expected) {
-  for (size_t index = 0; index < kMaxSmtpAddressLength && value[index] != '\0'; ++index) {
-    if (value[index] == expected) {
-      return true;
-    }
-  }
-  return false;
-}
-// #endregion FUNC_containsCharacter
-
 // #region FUNC_isSmtpConfigRecordValid
 // PURPOSE: Gates loading and saving on one shared predicate so NVS content and
 // web input obey the same rules.
@@ -102,21 +74,24 @@ inline bool isSmtpConfigRecordValid(const SmtpConfigRecord& record) {
        record.securityMode != static_cast<uint8_t>(SmtpSecurityMode::kImplicitTls))) {
     return false;
   }
-  if (!isPrintableRange(record.host, kMaxSmtpHostLength) || record.host[0] == '\0') {
+  if (!codec::isPrintableRange(record.host, kMaxSmtpHostLength) || record.host[0] == '\0') {
     return false;
   }
-  if (!isPrintableRange(record.username, kMaxSmtpUserLength) || record.username[0] == '\0') {
+  if (!codec::isPrintableRange(record.username, kMaxSmtpUserLength) || record.username[0] == '\0') {
     return false;
   }
-  if (!isPrintableRange(record.password, kMaxSmtpPasswordLength) || record.password[0] == '\0') {
+  if (!codec::isPrintableRange(record.password, kMaxSmtpPasswordLength) ||
+      record.password[0] == '\0') {
     return false;
   }
-  if (!isPrintableRange(record.fromAddress, kMaxSmtpAddressLength) ||
-      !containsCharacter(record.fromAddress, '@') || record.fromAddress[0] == '\0') {
+  if (!codec::isPrintableRange(record.fromAddress, kMaxSmtpAddressLength) ||
+      !codec::containsCharacter(record.fromAddress, kMaxSmtpAddressLength, '@') ||
+      record.fromAddress[0] == '\0') {
     return false;
   }
-  if (!isPrintableRange(record.recipientAddress, kMaxSmtpAddressLength) ||
-      !containsCharacter(record.recipientAddress, '@') || record.recipientAddress[0] == '\0') {
+  if (!codec::isPrintableRange(record.recipientAddress, kMaxSmtpAddressLength) ||
+      !codec::containsCharacter(record.recipientAddress, kMaxSmtpAddressLength, '@') ||
+      record.recipientAddress[0] == '\0') {
     return false;
   }
   return true;

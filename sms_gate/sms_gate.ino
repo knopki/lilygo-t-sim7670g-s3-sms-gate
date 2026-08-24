@@ -1,15 +1,18 @@
 // #region MODULE_CONTRACT
 // PURPOSE: Lets the SMS gateway join a WPA2/WPA3-Personal Wi-Fi network while
-// providing a recoverable local web interface for network and SMTP delivery
-// configuration.
+// providing a recoverable local web interface for network, SMTP delivery,
+// and ZTE SMS source configuration, and forwards ZTE modem SMS by email
+// (ADR-0003).
 // SCOPE:
 // - Wi-Fi provisioning, captive portal, Digest-authenticated configuration,
-// isolated persistent configuration, HTTP routes, and the asynchronous
-// SMTP test-delivery lifecycle.
-// - NOT: The SMTP dialog itself (smtp_client), TLS transport (smtp_transport),
-// SMS, GNSS, and OTA logic.
+// isolated persistent configuration, HTTP routes, the asynchronous SMTP
+// test-delivery lifecycle, and the ZTE poll/forward/delete lifecycle.
+// - NOT: The SMTP dialog itself (smtp_client), TLS transport
+// (smtp_transport), the ZTE goform dialog (zte_client), its transport
+// (zte_transport), SMS from the onboard modem, GNSS, and OTA logic.
 // INVARIANTS: Credentials are never written to Serial or
-// returned in HTTP responses; the SMTP password is never serialized.
+// returned in HTTP responses; the SMTP and modem passwords are never
+// serialized; a ZTE SMS is deleted on the modem only after SMTP acceptance.
 // DEPENDENCIES: Uses Arduino-ESP32 WiFi, WebServer, DNSServer, ESPmDNS,
 // and Preferences.
 // #endregion MODULE_CONTRACT
@@ -21,11 +24,14 @@
 #include <WiFi.h>
 #include <esp_mac.h>
 #include <esp_system.h>
+#include <new>
 
 #include "config_store.h"
 #include "smtp_client.h"
 #include "smtp_transport.h"
 #include "web_api.h"
+#include "zte_client.h"
+#include "zte_transport.h"
 
 namespace {
 
@@ -38,6 +44,9 @@ constexpr unsigned long kReconnectIntervalMs = 60UL * 1000UL;
 constexpr unsigned long kApShutdownDelayMs = 3UL * 1000UL;
 constexpr unsigned long kSerialHeartbeatIntervalMs = 5UL * 1000UL;
 constexpr size_t kBootTraceCapacity = 1024;
+constexpr unsigned long kZtePollIntervalMs = 15UL * 1000UL;
+constexpr size_t kZteScratchSize = 20UL * 1024UL;
+constexpr size_t kZteStatusLength = 160;
 
 enum class ConnectionState { kInitialSetup, kConnecting, kOnline, kFallbackAp };
 
@@ -45,9 +54,12 @@ WebServer server(kHttpPort);
 DNSServer dnsServer;
 ConfigStore configStore;
 SmtpConfigStore smtpConfigStore;
+ZteConfigStore zteConfigStore;
 RuntimeConfig config;
 RuntimeSmtpConfig storedSmtpConfig;
 bool smtpConfigLoaded = false;
+RuntimeZteConfig storedZteConfig;
+bool zteConfigLoaded = false;
 ConnectionState connectionState = ConnectionState::kInitialSetup;
 String accessPointSsid;
 String mdnsHostname;
@@ -75,6 +87,21 @@ SmtpSendResult smtpTestResult = SmtpSendResult::kConnectFailed;
 String smtpTestMessage;
 String smtpTestFailedStage;
 int smtpTestReplyCode = 0;
+
+// One ZTE poll lifecycle: a long-lived task that forwards one oldest SMS per
+// cycle and deletes it only after SMTP acceptance; the modem inbox is the
+// only delivery state (ADR-0003). One asynchronous ZTE connection test at a
+// time shares the same modem, so the two exclude each other's cycles.
+RuntimeZteConfig zteTestCandidate;
+volatile bool zteTestRunning = false;
+volatile bool zteTestDone = false;
+bool zteTestSuccess = false;
+String zteTestMessage;
+volatile bool ztePollCycleActive = false;
+volatile bool ztePollStopRequested = false;
+TaskHandle_t ztePollTaskHandle = nullptr;
+portMUX_TYPE zteStatusMux = portMUX_INITIALIZER_UNLOCKED;
+char zteLastStatus[kZteStatusLength] = "";
 
 // #region FUNC_recordBootStage
 // PURPOSE: Preserves startup events until native USB CDC becomes ready, so the
@@ -725,6 +752,433 @@ WebSmtpConfig buildWebSmtpConfig() {
 }
 // #endregion FUNC_buildWebSmtpConfig
 
+// #region FUNC_zteResultName
+// PURPOSE: Maps a modem-dialog outcome onto the stable JSON token consumed
+// by the UI.
+const char* zteResultName(ZteResult result) {
+  switch (result) {
+    case ZteResult::kSuccess:
+      return "success";
+    case ZteResult::kConnectFailed:
+      return "connect_failed";
+    case ZteResult::kHttpFailed:
+      return "http_failed";
+    case ZteResult::kLoginRejected:
+      return "login_rejected";
+    case ZteResult::kStaleSession:
+      return "stale_session";
+    default:
+      return "protocol_error";
+  }
+}
+// #endregion FUNC_zteResultName
+
+// #region FUNC_publishZteStatus
+// PURPOSE: Publishes one operator-facing poll status line for the web UI;
+// the poll task is the only writer.
+void publishZteStatus(const char* status) {
+  portENTER_CRITICAL(&zteStatusMux);
+  strncpy(zteLastStatus, status, kZteStatusLength - 1);
+  zteLastStatus[kZteStatusLength - 1] = '\0';
+  portEXIT_CRITICAL(&zteStatusMux);
+}
+// #endregion FUNC_publishZteStatus
+
+// #region FUNC_readZteLastStatus
+// PURPOSE: Snapshots the published poll status without holding the spinlock
+// across String operations.
+String readZteLastStatus() {
+  portENTER_CRITICAL(&zteStatusMux);
+  const String snapshot(zteLastStatus);
+  portEXIT_CRITICAL(&zteStatusMux);
+  return snapshot;
+}
+// #endregion FUNC_readZteLastStatus
+
+// #region FUNC_sanitizeSenderForSubject
+// PURPOSE: Reduces a sender field to printable ASCII so it can travel in an
+// SMTP subject; control characters become spaces and others '?'.
+String sanitizeSenderForSubject(const char* sender) {
+  String clean;
+  clean.reserve(strlen(sender));
+  for (const char* p = sender; *p != '\0'; ++p) {
+    const unsigned char ch = static_cast<unsigned char>(*p);
+    if (ch < 32 || ch > 126) {
+      clean += ch < 32 ? ' ' : '?';
+    } else {
+      clean += *p;
+    }
+  }
+  clean.trim();
+  if (clean.length() == 0) {
+    return F("unknown sender");
+  }
+  return clean.substring(0, 40);
+}
+// #endregion FUNC_sanitizeSenderForSubject
+
+// #region FUNC_buildSmsEmail
+// PURPOSE: Renders one SMS as the email subject and UTF-8 body, mirroring
+// the reference forwarder's message layout.
+void buildSmsEmail(const ZteSms& sms, String& subject, String& body) {
+  const String sender = sanitizeSenderForSubject(sms.number);
+  if (!sms.concatComplete) {
+    const char* received = sms.concatReceived[0] != '\0' ? sms.concatReceived : "?";
+    const char* total = sms.concatTotal[0] != '\0' ? sms.concatTotal : "?";
+    subject = F("[INCOMPLETE ");
+    subject += received;
+    subject += '/';
+    subject += total;
+    subject += F("] SMS from ");
+    subject += sender;
+  } else {
+    subject = F("SMS from ");
+    subject += sender;
+  }
+  body = F("Sender: ");
+  body += sender;
+  body += F("\nModem message ID: ");
+  body += sms.id;
+  body += F("\nModem date (may be incorrect): ");
+  body += sms.dateRaw;
+  body += F("\n\n");
+  if (!sms.concatComplete) {
+    body +=
+        F("WARNING: modem received only part of this concatenated SMS; "
+          "this email contains the available fragment.\n\n");
+  }
+  body += sms.textUtf8;
+}
+// #endregion FUNC_buildSmsEmail
+
+// #region FUNC_forwardZteSms
+// PURPOSE: Delivers one SMS through the stored SMTP profile; returns true
+// only when the server accepted the message.
+bool forwardZteSms(const ZteSms& sms) {
+  const unsigned long startedAt = millis();
+  Serial.printf("event=zte_forward_begin id=%s number=%s heap=%u\n", sms.id, sms.number,
+                static_cast<unsigned>(ESP.getFreeHeap()));
+  SecureSmtpChannel channel;
+  SmtpClient client(channel);
+  client.setStageListener(logSmtpStage);
+  String subject;
+  String body;
+  buildSmsEmail(sms, subject, body);
+  const SmtpConfigRecord record = buildSmtpConfigRecord(storedSmtpConfig);
+  const SmtpSendResult result =
+      client.sendMail(record, mdnsHostname.c_str(), subject.c_str(), body.c_str());
+  Serial.printf(
+      "event=zte_forward_result id=%s result=%s stage=%s code=%d elapsed_ms=%lu "
+      "heap=%u\n",
+      sms.id, smtpResultName(result), client.failedStage(), client.lastReplyCode(),
+      millis() - startedAt, static_cast<unsigned>(ESP.getFreeHeap()));
+  return result == SmtpSendResult::kSuccess;
+}
+// #endregion FUNC_forwardZteSms
+
+// #region FUNC_runZtePollCycle
+// PURPOSE: Performs one login-scan-forward-delete cycle against the modem;
+// every outcome lands in a Serial event and the published status so a
+// failing cycle is diagnosable from either interface.
+void runZtePollCycle(ZteModem& modem) {
+  Serial.printf("event=zte_poll_begin host=%s heap=%u\n", storedZteConfig.host.c_str(),
+                static_cast<unsigned>(ESP.getFreeHeap()));
+  ZteResult result = modem.login(storedZteConfig.host.c_str(), storedZteConfig.password.c_str());
+  if (result != ZteResult::kSuccess) {
+    publishZteStatus((String(F("Poll failed: ")) + modem.failedStage()).c_str());
+    Serial.printf("event=zte_poll_complete result=login_failed stage=%s\n", modem.failedStage());
+    return;
+  }
+
+  ZteSms* sms = new (std::nothrow) ZteSms();
+  if (sms == nullptr) {
+    publishZteStatus("Poll skipped: out of memory.");
+    Serial.println("event=zte_poll_complete result=out_of_memory");
+    return;
+  }
+  bool found = false;
+  result = modem.findOldestIncoming(*sms, found);
+  if (result != ZteResult::kSuccess) {
+    publishZteStatus((String(F("Inbox scan failed: ")) + modem.failedStage()).c_str());
+    Serial.printf("event=zte_poll_complete result=scan_failed stage=%s\n", modem.failedStage());
+    delete sms;
+    return;
+  }
+  if (!found) {
+    publishZteStatus(
+        (String(F("Connected to ")) + modem.waVersion() + F("; no incoming SMS.")).c_str());
+    Serial.println("event=zte_poll_complete result=inbox_empty");
+    delete sms;
+    return;
+  }
+
+  Serial.printf("event=zte_sms_found id=%s complete=%s\n", sms->id,
+                sms->concatComplete ? "true" : "false");
+  if (!forwardZteSms(*sms)) {
+    publishZteStatus("Email delivery failed; SMS kept on the modem.");
+    Serial.printf("event=zte_poll_complete result=forward_failed id=%s\n", sms->id);
+    delete sms;
+    return;
+  }
+  result = modem.deleteSms(*sms);
+  if (result == ZteResult::kSuccess) {
+    Serial.printf("event=zte_delete_complete id=%s\n", sms->id);
+    publishZteStatus((String(F("Forwarded SMS id=")) + sms->id + F(".")).c_str());
+    Serial.printf("event=zte_poll_complete result=forwarded id=%s\n", sms->id);
+  } else {
+    Serial.printf("event=zte_delete_failed id=%s stage=%s result=%s\n", sms->id,
+                  modem.failedStage(), zteResultName(result));
+    publishZteStatus("SMS forwarded but deletion failed; it may be sent again.");
+    Serial.printf("event=zte_poll_complete result=delete_unverified id=%s\n", sms->id);
+  }
+  delete sms;
+}
+// #endregion FUNC_runZtePollCycle
+
+// #region FUNC_ztePollTask
+// PURPOSE: Runs the poll lifecycle on its own task: waits for station
+// connectivity, performs one cycle per interval in stoppable slices, and
+// releases its heap before exiting.
+void ztePollTask(void*) {
+  char* scratch = static_cast<char*>(malloc(kZteScratchSize));
+  NetworkZteChannel channel;
+  ZteModem modem(channel, scratch, scratch == nullptr ? 0 : kZteScratchSize);
+  bool waitingForStation = false;
+  while (!ztePollStopRequested) {
+    if (scratch == nullptr || WiFi.status() != WL_CONNECTED) {
+      if (!waitingForStation) {
+        waitingForStation = true;
+        Serial.printf("event=zte_poll_wait reason=%s\n",
+                      scratch == nullptr ? "out_of_memory" : "sta_down");
+      }
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      continue;
+    }
+    waitingForStation = false;
+    if (zteTestRunning) {
+      vTaskDelay(pdMS_TO_TICKS(500));
+      continue;
+    }
+    ztePollCycleActive = true;
+    runZtePollCycle(modem);
+    ztePollCycleActive = false;
+    for (unsigned long waited = 0; waited < kZtePollIntervalMs && !ztePollStopRequested;
+         waited += 250) {
+      vTaskDelay(pdMS_TO_TICKS(250));
+    }
+  }
+  free(scratch);
+  Serial.println("event=zte_poll_stopped");
+  ztePollTaskHandle = nullptr;
+  vTaskDelete(nullptr);
+}
+// #endregion FUNC_ztePollTask
+
+// #region FUNC_syncZtePollTask
+// PURPOSE: Aligns the running poll task with the saved configuration; the
+// task exists only when the source is enabled with credentials and an SMTP
+// profile is configured.
+void syncZtePollTask() {
+  const bool shouldRun = zteConfigLoaded && storedZteConfig.enabled &&
+                         storedZteConfig.host.length() > 0 && smtpConfigLoaded &&
+                         storedSmtpConfig.host.length() > 0 &&
+                         storedSmtpConfig.password.length() > 0;
+  if (ztePollTaskHandle != nullptr) {
+    ztePollStopRequested = true;
+    const unsigned long deadline = millis() + 5000;
+    while (ztePollTaskHandle != nullptr && millis() < deadline) {
+      delay(10);
+    }
+    ztePollStopRequested = false;
+    if (ztePollTaskHandle != nullptr) {
+      Serial.println("event=zte_poll_stop_timeout");  // One leaked task; retry on next save.
+      return;
+    }
+  }
+  if (!shouldRun) {
+    Serial.println("event=zte_poll_task state=stopped");
+    return;
+  }
+  if (xTaskCreatePinnedToCore(ztePollTask, "zte_poll", 16384, nullptr, 1, &ztePollTaskHandle, 0) !=
+      pdPASS) {
+    ztePollTaskHandle = nullptr;
+    Serial.println("event=zte_poll_task state=start_failed reason=task_create");
+    return;
+  }
+  Serial.println("event=zte_poll_task state=started");
+}
+// #endregion FUNC_syncZtePollTask
+
+// #region FUNC_zteTestTask
+// PURPOSE: Runs the non-destructive connection test on its own task: LOGIN
+// plus a capacity read, publishing the outcome last.
+void zteTestTask(void*) {
+  const RuntimeZteConfig candidate = zteTestCandidate;
+  char* scratch = static_cast<char*>(malloc(kZteScratchSize));
+  NetworkZteChannel channel;
+  ZteModem modem(channel, scratch, scratch == nullptr ? 0 : kZteScratchSize);
+  ZteResult result = modem.login(candidate.host.c_str(), candidate.password.c_str());
+  String message;
+  if (result == ZteResult::kSuccess) {
+    ZteInboxStatus status{};
+    result = modem.readInboxStatus(status);
+    if (result == ZteResult::kSuccess) {
+      message = String(F("Connected to ")) + modem.waVersion() + F(". Device inbox: ") +
+                String(status.used) + '/' + String(status.total) + F(" messages.");
+    }
+  }
+  free(scratch);
+  if (result != ZteResult::kSuccess) {
+    message = String(F("Connection failed [stage=")) + modem.failedStage() + F("]");
+  }
+  zteTestMessage = message;
+  zteTestSuccess = result == ZteResult::kSuccess;
+  Serial.printf("event=zte_test_complete result=%s stage=%s\n", zteResultName(result),
+                modem.failedStage());
+  zteTestRunning = false;
+  zteTestDone = true;  // Published last: readers treat done as data-ready.
+  vTaskDelete(nullptr);
+}
+// #endregion FUNC_zteTestTask
+
+// #region FUNC_readZteForm
+// PURPOSE: Validates the ZTE form into a runtime profile; an empty password
+// keeps the stored one, matching the SMTP form contract.
+bool readZteForm(RuntimeZteConfig& candidate, String& error) {
+  candidate.enabled = server.arg("enabled") == F("1");
+  candidate.host = server.arg("host");
+  candidate.host.trim();
+  if (candidate.host.length() == 0 || candidate.host.length() > kMaxZteHostLength ||
+      !isPrintableAscii(candidate.host)) {
+    error = F("Host must contain 1–63 printable ASCII characters.");
+    return false;
+  }
+  candidate.password = server.arg("password");
+  if (candidate.password.length() == 0) {
+    if (!zteConfigLoaded || storedZteConfig.password.length() == 0) {
+      error = F("Enter the modem web password.");
+      return false;
+    }
+    candidate.password = storedZteConfig.password;
+  } else if (candidate.password.length() > kMaxZtePasswordLength ||
+             !isPrintableAscii(candidate.password)) {
+    error = F("The modem web password must contain 1–63 printable ASCII characters.");
+    return false;
+  }
+  return true;
+}
+// #endregion FUNC_readZteForm
+
+// #region FUNC_buildWebZteConfig
+// PURPOSE: Snapshots the stored ZTE profile for the JSON API without ever
+// serializing the password.
+WebZteConfig buildWebZteConfig() {
+  WebZteConfig web;
+  web.present = zteConfigLoaded && storedZteConfig.host.length() > 0;
+  web.enabled = web.present && storedZteConfig.enabled;
+  web.host = web.present ? storedZteConfig.host : String();
+  web.passwordSet = web.present && storedZteConfig.password.length() > 0;
+  web.lastStatus = readZteLastStatus();
+  return web;
+}
+// #endregion FUNC_buildWebZteConfig
+
+// #region FUNC_handleZteConfigRequest
+// PURPOSE: Returns the stored ZTE profile (without the password) for form
+// prefill in the browser UI.
+void handleZteConfigRequest() {
+  if (!requireAuthentication()) {
+    return;
+  }
+  sendJson(server, 200, renderZteConfigJson(buildWebZteConfig()));
+}
+// #endregion FUNC_handleZteConfigRequest
+
+// #region FUNC_handleZteSaveSubmission
+// PURPOSE: Validates and persists the ZTE profile, then realigns the poll
+// task with the new configuration.
+void handleZteSaveSubmission() {
+  Serial.println("event=http_zte_submit");
+  if (!requireAuthentication()) {
+    return;
+  }
+  RuntimeZteConfig candidate;
+  String error;
+  if (!readZteForm(candidate, error)) {
+    sendJsonError(400, error);
+    return;
+  }
+  if (!zteConfigStore.save(candidate)) {
+    sendJsonError(500, F("The ZTE configuration could not be saved."));
+    return;
+  }
+  storedZteConfig = candidate;
+  zteConfigLoaded = true;
+  zteTestDone = false;
+  zteTestMessage = "";
+  syncZtePollTask();
+  Serial.println("event=zte_saved");
+  sendJson(server, 200, renderMessageJson(F("ZTE settings saved.")));
+}
+// #endregion FUNC_handleZteSaveSubmission
+
+// #region FUNC_handleZteTestStart
+// PURPOSE: Starts one non-destructive connection test on a dedicated task
+// so loop() and the HTTP server stay responsive during the dialog.
+void handleZteTestStart() {
+  Serial.println("event=http_zte_test_submit");
+  if (!requireAuthentication()) {
+    return;
+  }
+  if (zteTestRunning) {
+    sendJsonError(409, F("A connection test is already in progress."));
+    return;
+  }
+  if (ztePollCycleActive) {
+    sendJsonError(409, F("A poll cycle is in progress; try again in a few seconds."));
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    sendJsonError(400, F("The device is not connected to a Wi-Fi network."));
+    return;
+  }
+  RuntimeZteConfig candidate;
+  String error;
+  if (!readZteForm(candidate, error)) {
+    sendJsonError(400, error);
+    return;
+  }
+  zteTestCandidate = candidate;
+  zteTestDone = false;
+  zteTestMessage = "";
+  zteTestRunning = true;
+  if (xTaskCreatePinnedToCore(zteTestTask, "zte_test", 16384, nullptr, 1, nullptr, 0) != pdPASS) {
+    zteTestRunning = false;
+    Serial.println("event=zte_test_failed reason=task_create");
+    sendJsonError(503, F("The test could not be started. Try again."));
+    return;
+  }
+  sendJson(server, 200, renderMessageJson(F("Connection test started.")));
+}
+// #endregion FUNC_handleZteTestStart
+
+// #region FUNC_handleZteTestStatus
+// PURPOSE: Reports asynchronous test progress to the polling browser UI.
+void handleZteTestStatus() {
+  if (!requireAuthentication()) {
+    return;
+  }
+  WebAsyncOp op;
+  op.running = zteTestRunning;
+  op.done = zteTestDone;
+  if (zteTestDone) {
+    op.result = zteTestSuccess ? "success" : "failed";
+    op.message = zteTestMessage;
+  }
+  sendJson(server, 200, renderAsyncOpJson(op));
+}
+// #endregion FUNC_handleZteTestStatus
+
 // #region FUNC_handleSmtpConfigRequest
 // PURPOSE: Returns the stored SMTP profile (without the password) for form
 // prefill in the browser UI.
@@ -758,6 +1212,7 @@ void handleSmtpSaveSubmission() {
   smtpConfigLoaded = true;
   smtpTestDone = false;
   smtpTestMessage = "";
+  syncZtePollTask();
   Serial.println("event=smtp_saved");
   sendJson(server, 200,
            renderMessageJson(F("SMTP settings saved. Use the test button to verify delivery.")));
@@ -807,14 +1262,14 @@ void handleSmtpTestStatus() {
   if (!requireAuthentication()) {
     return;
   }
-  WebSmtpTest test;
-  test.running = smtpTestRunning;
-  test.done = smtpTestDone;
+  WebAsyncOp op;
+  op.running = smtpTestRunning;
+  op.done = smtpTestDone;
   if (smtpTestDone) {
-    test.result = smtpResultName(smtpTestResult);
-    test.message = smtpTestMessage;
+    op.result = smtpResultName(smtpTestResult);
+    op.message = smtpTestMessage;
   }
-  sendJson(server, 200, renderSmtpTestJson(test));
+  sendJson(server, 200, renderAsyncOpJson(op));
 }
 // #endregion FUNC_handleSmtpTestStatus
 
@@ -848,6 +1303,10 @@ void configureWebServer() {
   server.on("/api/smtp", HTTP_POST, handleSmtpSaveSubmission);
   server.on("/api/smtp/test", HTTP_POST, handleSmtpTestStart);
   server.on("/api/smtp/test", HTTP_GET, handleSmtpTestStatus);
+  server.on("/api/zte", HTTP_GET, handleZteConfigRequest);
+  server.on("/api/zte", HTTP_POST, handleZteSaveSubmission);
+  server.on("/api/zte/test", HTTP_POST, handleZteTestStart);
+  server.on("/api/zte/test", HTTP_GET, handleZteTestStatus);
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.printf("event=http_server_started port=%u\n", kHttpPort);
@@ -885,9 +1344,15 @@ void setupFirmware() {
   smtpConfigLoaded = smtpConfigStore.load(storedSmtpConfig);
   recordBootStage(String(F("event=boot_smtp_config_loaded present=")) +
                   (smtpConfigLoaded ? F("true") : F("false")));
+  zteConfigLoaded = zteConfigStore.load(storedZteConfig);
+  recordBootStage(String(F("event=boot_zte_config_loaded present=")) +
+                  (zteConfigLoaded ? String(storedZteConfig.enabled ? F("true enabled=true")
+                                                                    : F("true enabled=false"))
+                                   : F("false")));
 
   recordBootStage(F("event=boot_http_routes_begin"));
   configureWebServer();
+  syncZtePollTask();
   recordBootStage(F("event=boot_http_routes_complete"));
   bootTraceCollecting = false;
 }

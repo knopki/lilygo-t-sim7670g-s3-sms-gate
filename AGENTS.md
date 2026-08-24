@@ -68,6 +68,14 @@ decision do not require an ADR.
   /tmp/smtp_client_test
   ```
 
+- Run the host ZTE goform dialog and record test:
+
+  ```bash
+  c++ -std=c++17 -Wall -Wextra -Werror tests/zte_client_test.cpp \
+    sms_gate/zte_client.cpp -o /tmp/zte_client_test
+  /tmp/zte_client_test
+  ```
+
 - Run the available static checks before completion:
 
   ```bash
@@ -133,12 +141,17 @@ clear it without removing future SMS, GNSS, or email settings.
 
 ```text
 sms_gate/
-├── sms_gate.ino      # Wi-Fi lifecycle, HTTP routes, boot trace, Serial events
+├── sms_gate.ino      # Wi-Fi lifecycle, HTTP routes, boot trace, Serial events,
+│                     # ZTE poll/forward/delete lifecycle
 ├── config_record.h   # Portable checksummed network configuration record
 ├── config_store.*    # appcfg NVS persistence and input validation
 ├── smtp_record.h     # Portable checksummed SMTP delivery record
 ├── smtp_client.*     # Host-testable SMTP dialog (STARTTLS, AUTH LOGIN, DATA)
 ├── smtp_transport.h  # NetworkClientSecure binding with embedded root bundle
+├── zte_record.h      # Portable checksummed ZTE SMS-source record
+├── zte_client.*      # Host-testable ZTE goform dialog (LOGIN, paging, DELETE_SMS)
+├── zte_transport.h   # NetworkClient binding for the ZTE LAN channel
+├── codec.h           # Shared base64/MD5/field validation helpers
 ├── web_api.*         # JSON API and gzipped UI asset serving
 ├── web_assets.h      # generated gzip assets from www/ (not committed)
 ├── partitions.csv    # appcfg NVS partition and FFat layout
@@ -147,7 +160,8 @@ www/                  # client-rendered UI sources (index.html, app.js, style.cs
 tools/gen_assets.py   # generates sms_gate/web_assets.h from www/
 tests/
 ├── config_record_test.cpp  # Host test for record integrity and field limits
-└── smtp_client_test.cpp    # Host test for SMTP record and dialog sequencing
+├── smtp_client_test.cpp    # Host test for SMTP record and dialog sequencing
+└── zte_client_test.cpp     # Host test for the ZTE goform dialog and record
 README.md             # Build, provisioning, and USB recovery procedure
 ```
 

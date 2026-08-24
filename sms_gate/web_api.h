@@ -38,7 +38,16 @@ struct WebSmtpConfig {
   String recipientAddress;
 };
 
-struct WebSmtpTest {
+struct WebZteConfig {
+  bool present;
+  bool enabled;
+  String host;
+  bool passwordSet;
+  String lastStatus;  // empty until the first poll or test completed
+};
+
+// Shape shared by every one-shot asynchronous test route (SMTP, ZTE).
+struct WebAsyncOp {
   bool running;
   bool done;
   String result;  // empty until finished
@@ -49,7 +58,8 @@ String escapeJson(const String& value);
 void appendJsonString(String& out, const String& value);
 String renderStatusJson(const WebStatus& status);
 String renderSmtpConfigJson(const WebSmtpConfig& config);
-String renderSmtpTestJson(const WebSmtpTest& test);
+String renderZteConfigJson(const WebZteConfig& config);
+String renderAsyncOpJson(const WebAsyncOp& op);
 String renderMessageJson(const String& message);
 String renderErrorJson(const String& error);
 void sendJson(WebServer& server, int code, const String& json);

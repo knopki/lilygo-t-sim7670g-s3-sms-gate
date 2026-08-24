@@ -12,7 +12,45 @@ The firmware now implements the device's Wi-Fi and local web-configuration found
 - Digest-authenticated configuration over HTTP;
 - a dedicated persistent `appcfg` partition that supports USB recovery without erasing future SMS/GNSS/email settings.
 
-SMS processing, GNSS time, email delivery, and the ZTE MF79RU adapter remain unimplemented.
+SMS forwarding from the ZTE MF79RU source and email delivery are
+implemented; SMS from the board's own SIM7670G modem and GNSS time remain
+unimplemented.
+
+## SMS source: ZTE MF79RU (ADR-0003)
+
+The device polls a ZTE MF79RU HiLink modem reachable on the LAN and forwards
+its incoming SMS as email through the configured SMTP profile. This is the
+same protocol the proven Python forwarder uses: LOGIN with the modem's web
+password, the mandatory `Referer` header and `stok` session cookie,
+UCS-2-hex message decoding, and single-message deletion with an `AD` token.
+The modem inbox is the only delivery state: one oldest incoming SMS per
+15-second poll cycle is emailed, deleted, and the deletion is verified. A
+crash between email acceptance and the verified delete can resend one
+message; nothing is lost.
+
+The protected page configures the source: enable flag, modem host (for
+example `192.168.0.1`), and the modem's own web password. **Test
+connection** performs a non-destructive login plus capacity read and
+reports the firmware version and inbox occupancy; use it before enabling
+polling. Polling runs only while all three are true: station connectivity,
+an enabled and configured ZTE profile, and a working SMTP profile. The
+last poll outcome is shown next to the form; the Serial log carries the
+detailed events (`zte_poll_begin`, `zte_sms_found`, `zte_forward_result`,
+`zte_delete_complete`, …).
+
+Notes:
+
+- The modem must be reachable from the device's network (bridged or routed
+  into the LAN). The goform API is plain HTTP with base64-encoded login —
+  exactly as exposed by the modem's own web UI — so do not expose the modem
+  beyond the trusted LAN.
+- Enabling polling deletes SMS from the modem after successful email
+  delivery; keep a copy if the inbox matters to you.
+- Incomplete concatenated SMS are forwarded immediately with an
+  `[INCOMPLETE received/total]` subject prefix instead of being dropped.
+- The poller pages through the inbox in bounded chunks, so a full
+  100-message inbox cannot exhaust memory; forwarding order is oldest
+  first, one SMS per cycle.
 
 ## Wi-Fi and web configuration
 
@@ -60,7 +98,7 @@ settings.
 - LilyGO T-SIM7670G-S3: ESP32-S3, SIM7670G LTE modem, and GNSS antenna connection.
 - A SIM card with SMS service for the SIM7670G.
 - LTE and active GNSS antennas.
-- ZTE MF79RU as a separate SMS source.
+- ZTE MF79RU as a separate SMS source, reachable from the device's network.
 
 Use the board's **ESP-USB** USB-C connector to flash the ESP32-S3. The `Modem-USB` connector is for modem servicing, not sketch uploads.
 
@@ -159,12 +197,17 @@ If `esptool` cannot connect, repeat step 4 and check that the ESP-USB port—not
 
 ```text
 sms_gate/
-├── sms_gate.ino      # Wi-Fi lifecycle and HTTP route controller
+├── sms_gate.ino      # Wi-Fi lifecycle, HTTP routes, boot trace, Serial events,
+│                     # ZTE poll/forward/delete lifecycle
 ├── config_record.h   # Portable checksummed network configuration record
-├── config_store.*    # Isolated appcfg NVS persistence and validation
+├── config_store.*    # appcfg NVS persistence for network/SMTP/ZTE profiles
 ├── smtp_record.h     # Portable checksummed SMTP delivery record
 ├── smtp_client.*     # Host-testable SMTP dialog (STARTTLS, AUTH LOGIN, DATA)
 ├── smtp_transport.h  # NetworkClientSecure binding with embedded root bundle
+├── zte_record.h      # Portable checksummed ZTE SMS-source record
+├── zte_client.*      # Host-testable ZTE goform dialog (LOGIN, paging, DELETE_SMS)
+├── zte_transport.h   # NetworkClient binding for the ZTE LAN channel
+├── codec.h           # Shared base64/MD5/field validation helpers
 ├── web_api.*         # JSON API and gzipped UI asset serving
 ├── web_assets.h      # Generated from www/ (not committed)
 ├── partitions.csv    # Dedicated appcfg NVS partition and FFat layout
@@ -174,7 +217,8 @@ tools/
 └── gen_assets.py     # Gzips www/ into sms_gate/web_assets.h
 tests/
 ├── config_record_test.cpp  # Host test for record integrity and limits
-└── smtp_client_test.cpp    # Host test for SMTP record and dialog sequencing
+├── smtp_client_test.cpp    # Host test for SMTP record and dialog sequencing
+└── zte_client_test.cpp     # Host test for the ZTE goform dialog and record
 ```
 
 ## Tests
@@ -196,13 +240,23 @@ c++ -std=c++17 -Wall -Wextra -Werror tests/smtp_client_test.cpp \
 /tmp/smtp_client_test
 ```
 
+The ZTE dialog test scripts a fake modem through the `ZteChannel` interface
+and asserts the request contract (LOGIN base64 password, Referer, stok
+cookie, AD token), stale-session relogin, paging/order detection, UCS-2
+decoding, delete verification, and the record validation:
+
+```bash
+c++ -std=c++17 -Wall -Wextra -Werror tests/zte_client_test.cpp \
+  sms_gate/zte_client.cpp -o /tmp/zte_client_test
+/tmp/zte_client_test
+```
+
 ## Next steps
 
 1. Enable power and AT-command communication with the SIM7670G.
-2. Receive and process SMS messages from the board's SIM card.
-3. Forward received SMS through the configured SMTP profile (ADR-0002).
-4. Add GNSS time acquisition and system time synchronization.
-5. Select and implement an adapter for SMS messages from the ZTE MF79RU.
+2. Receive and process SMS messages from the board's SIM card as a second
+   SMS source alongside the ZTE adapter.
+3. Add GNSS time acquisition and system time synchronization.
 
 ## Board documentation
 

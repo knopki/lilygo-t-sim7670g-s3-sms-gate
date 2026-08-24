@@ -15,6 +15,7 @@ constexpr char kConfigPartition[] = "appcfg";
 constexpr char kConfigNamespace[] = "network";
 constexpr char kConfigKey[] = "record";
 constexpr char kSmtpNamespace[] = "smtp";
+constexpr char kZteNamespace[] = "zte";
 constexpr uint16_t kDefaultSmtpPort = 587;
 }  // namespace
 
@@ -174,3 +175,72 @@ bool SmtpConfigStore::save(const RuntimeSmtpConfig& config) const {
   return saved;
 }
 // #endregion FUNC_SmtpConfigStore_save
+
+// #region FUNC_buildZteConfigRecord
+// PURPOSE: Converts the runtime ZTE profile into its checksummed binary
+// record so persistence and the web form always exercise the same field
+// limits.
+ZteConfigRecord buildZteConfigRecord(const RuntimeZteConfig& config) {
+  ZteConfigRecord record{};
+  record.magic = kZteConfigMagic;
+  record.version = kZteConfigVersion;
+  record.enabled = config.enabled ? 1 : 0;
+  config.host.toCharArray(record.host, sizeof(record.host));
+  config.password.toCharArray(record.password, sizeof(record.password));
+  record.checksum = calculateZteConfigChecksum(record);
+  return record;
+}
+// #endregion FUNC_buildZteConfigRecord
+
+// #region FUNC_ZteConfigStore_load
+// PURPOSE: Restores the ZTE profile only as a whole validated record so a
+// corrupt or partial blob can never reach the modem dialog. Schema changes
+// must migrate stored data (see AGENTS.md); nothing here upgrades records.
+bool ZteConfigStore::load(RuntimeZteConfig& config) const {
+  Serial.printf("event=zte_load_begin partition=%s\n", kConfigPartition);
+  Preferences preferences;
+  if (!preferences.begin(kZteNamespace, true, kConfigPartition)) {
+    Serial.println("event=zte_load_failed reason=partition_unavailable");
+    return false;
+  }
+
+  ZteConfigRecord record{};
+  const size_t readLength = preferences.getBytes(kConfigKey, &record, sizeof(record));
+  preferences.end();
+  if (readLength != sizeof(record) || !isZteConfigRecordValid(record)) {
+    Serial.printf("event=zte_load_empty_or_invalid bytes=%u\n", static_cast<unsigned>(readLength));
+    return false;
+  }
+
+  config.enabled = record.enabled == 1;
+  config.host = record.host;
+  config.password = record.password;
+  Serial.printf("event=zte_load_complete enabled=%s\n", config.enabled ? "true" : "false");
+  return true;
+}
+// #endregion FUNC_ZteConfigStore_load
+
+// #region FUNC_ZteConfigStore_save
+// PURPOSE: Persists the ZTE profile only after the full record passes the
+// shared validation predicate, so web input and NVS content agree.
+bool ZteConfigStore::save(const RuntimeZteConfig& config) const {
+  Serial.println("event=zte_save_begin");
+  const ZteConfigRecord record = buildZteConfigRecord(config);
+  if (!isZteConfigRecordValid(record)) {
+    Serial.println("event=zte_save_failed reason=invalid_fields");
+    return false;
+  }
+
+  Preferences preferences;
+  if (!preferences.begin(kZteNamespace, false, kConfigPartition)) {
+    Serial.println("event=zte_save_failed reason=partition_unavailable");
+    return false;
+  }
+  const size_t writtenLength = preferences.putBytes(kConfigKey, &record, sizeof(record));
+  preferences.end();
+  const bool saved = writtenLength == sizeof(record);
+  Serial.printf("event=zte_save_complete saved=%s bytes=%u\n", saved ? "true" : "false",
+                static_cast<unsigned>(writtenLength));
+  return saved;
+}
+// #endregion FUNC_ZteConfigStore_save

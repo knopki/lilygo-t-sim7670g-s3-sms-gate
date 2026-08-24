@@ -16,12 +16,12 @@
 
   const STATUS_PATH = '/api/status';
   const STATUS_INTERVAL_MS = 5000;
-  const SMTP_TEST_POLL_MS = 1500;
+  const ASYNC_TEST_POLL_MS = 1500;
 
   let networks = null;
   let busy = false;
   let statusTimer = null;
-  let smtpTestTimer = null;
+  let asyncTestTimer = null;
 
   const esc = (value) =>
     String(value).replace(/[&<>"']/g, (ch) => ({
@@ -198,6 +198,25 @@
         <button type="button" id="smtp-test-button">Send test email</button>
       </form>
       <p id="smtp-test-status" class="hint"></p>
+      <h2>SMS source: ZTE modem</h2>
+      <p id="zte-config-state" class="hint"></p>
+      <form id="zte-form">
+        <fieldset>
+          <legend>ZTE MF79RU (HiLink)</legend>
+          <label class="checkbox">Enable polling
+            <input type="checkbox" name="enabled">
+          </label>
+          <label>Host
+            <input required maxlength="63" name="host" placeholder="192.168.0.1" autocomplete="off">
+          </label>
+          <label>Modem web password
+            <input maxlength="63" name="password" type="password" autocomplete="new-password">
+          </label>
+        </fieldset>
+        <button type="submit">Save settings</button>
+        <button type="button" id="zte-test-button">Test connection</button>
+      </form>
+      <p id="zte-test-status" class="hint"></p>
       <h2>Change administrator password</h2>
       <form id="password-form">
         <label>Current password
@@ -228,14 +247,17 @@
     document.getElementById('smtp-form').addEventListener('submit', submitSmtpSave);
     document.getElementById('smtp-test-button').addEventListener('click', startSmtpTest);
     document.getElementById('smtp-form').elements.security.addEventListener('change', onSmtpSecurityChange);
+    document.getElementById('zte-form').addEventListener('submit', submitZteSave);
+    document.getElementById('zte-test-button').addEventListener('click', startZteTest);
     document.getElementById('password-form').addEventListener('submit', submitPasswordChange);
     loadSmtpSettings();
+    loadZteSettings();
     startStatusTimer();
   }
 
   function renderAuthRequired() {
     stopStatusTimer();
-    stopSmtpTestTimer();
+    stopAsyncTestTimer();
     appRoot.innerHTML = `
       <p>Authentication is required. Reload the page and sign in as <strong>admin</strong>.</p>
       <button type="button" id="reload-button">Reload</button>`;
@@ -457,29 +479,29 @@
     }
   }
 
-  function stopSmtpTestTimer() {
-    if (smtpTestTimer !== null) {
-      window.clearInterval(smtpTestTimer);
-      smtpTestTimer = null;
+  function stopAsyncTestTimer() {
+    if (asyncTestTimer !== null) {
+      window.clearInterval(asyncTestTimer);
+      asyncTestTimer = null;
     }
   }
 
-  async function startSmtpTest() {
+  // Shared flow for the one-shot async test routes (SMTP, ZTE): POSTs the
+  // form, then polls the status endpoint until done and reports the result.
+  async function startAsyncTest(path, fields, statusEl, busyMessage) {
     if (busy) {
-      return;
+      return false;
     }
-    const form = document.getElementById('smtp-form');
-    const statusEl = document.getElementById('smtp-test-status');
     setBusy(true);
     if (statusEl) {
-      statusEl.textContent = 'Sending the test email…';
+      statusEl.textContent = busyMessage;
     }
-    setBanner('ok', 'Sending the test email, this can take up to a minute…');
+    setBanner('ok', busyMessage);
     try {
-      const { response, payload } = await postForm('/api/smtp/test', smtpFormFields(form));
+      const { response, payload } = await postForm(path + '/test', fields);
       if (response.status === 401) {
         renderAuthRequired();
-        return;
+        return true; // The caller must not clear busy: a fresh page took over.
       }
       if (!response.ok) {
         setBanner('error', (payload && payload.error) || 'The test could not be started.');
@@ -487,25 +509,27 @@
           statusEl.textContent = '';
         }
         setBusy(false);
-        return;
+        return false;
       }
-      pollSmtpTest(statusEl);
+      pollAsyncTest(path, statusEl);
+      return true;
     } catch (error) {
       setBanner('error', 'The device could not be reached.');
       if (statusEl) {
         statusEl.textContent = '';
       }
       setBusy(false);
+      return false;
     }
   }
 
-  function pollSmtpTest(statusEl) {
-    stopSmtpTestTimer();
-    smtpTestTimer = window.setInterval(async () => {
+  function pollAsyncTest(path, statusEl) {
+    stopAsyncTestTimer();
+    asyncTestTimer = window.setInterval(async () => {
       try {
-        const { response, payload } = await api('/api/smtp/test');
+        const { response, payload } = await api(path + '/test');
         if (response.status === 401) {
-          stopSmtpTestTimer();
+          stopAsyncTestTimer();
           renderAuthRequired();
           setBusy(false);
           return;
@@ -513,18 +537,97 @@
         if (!response.ok || !payload || payload.running || !payload.done) {
           return;
         }
-        stopSmtpTestTimer();
+        stopAsyncTestTimer();
         setBusy(false);
-        const delivered = payload.result === 'success';
+        const succeeded = payload.result === 'success';
         if (statusEl) {
           statusEl.textContent = payload.message || '';
         }
-        setBanner(delivered ? 'ok' : 'error',
-          payload.message || (delivered ? 'Test message delivered.' : 'Test delivery failed.'));
+        setBanner(succeeded ? 'ok' : 'error', payload.message || '');
       } catch (error) {
-        // The device may be busy inside the TLS dialog; keep polling.
+        // The device may be busy inside a network dialog; keep polling.
       }
-    }, SMTP_TEST_POLL_MS);
+    }, ASYNC_TEST_POLL_MS);
+  }
+
+  async function startSmtpTest() {
+    await startAsyncTest('/api/smtp', smtpFormFields(document.getElementById('smtp-form')),
+                         document.getElementById('smtp-test-status'),
+                         'Sending the test email…');
+  }
+
+  async function loadZteSettings() {
+    try {
+      const { response, payload } = await api('/api/zte');
+      if (response.status === 401) {
+        renderAuthRequired();
+        return;
+      }
+      const form = document.getElementById('zte-form');
+      if (response.ok && payload && form) {
+        form.elements.host.value = payload.host || '';
+        form.elements.enabled.checked = !!payload.enabled;
+        form.elements.password.value = '';
+        form.elements.password.placeholder = payload.password_set
+          ? 'Unchanged (a password is saved)'
+          : '';
+        const state = document.getElementById('zte-config-state');
+        if (state) {
+          if (!payload.present) {
+            state.textContent = 'The ZTE modem is not configured yet.';
+          } else if (payload.enabled) {
+            state.textContent = 'Polling is enabled.' +
+              (payload.last_status ? ' Last poll: ' + payload.last_status : '');
+          } else {
+            state.textContent = 'Configured, polling disabled.';
+          }
+        }
+      }
+    } catch (error) {
+      // Prefill is optional; the form stays usable with empty defaults.
+    }
+  }
+
+  async function submitZteSave(event) {
+    event.preventDefault();
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const { response, payload } = await postForm('/api/zte', zteFormFields(event.target));
+      if (response.status === 401) {
+        renderAuthRequired();
+        return;
+      }
+      if (response.ok) {
+        setBanner('ok', (payload && payload.message) || 'ZTE settings saved.');
+        await loadZteSettings();
+      } else {
+        setBanner('error', (payload && payload.error) || `Request failed (${response.status}).`);
+      }
+    } catch (error) {
+      setBanner('error', 'The device could not be reached.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function zteFormFields(form) {
+    return {
+      enabled: form.elements.enabled.checked ? '1' : '0',
+      host: form.elements.host.value.trim(),
+      password: form.elements.password.value,
+    };
+  }
+
+  async function startZteTest() {
+    const started = await startAsyncTest('/api/zte', zteFormFields(document.getElementById('zte-form')),
+                                        document.getElementById('zte-test-status'),
+                                        'Testing the modem connection…');
+    if (!started) {
+      return;
+    }
   }
 
   function startStatusTimer() {

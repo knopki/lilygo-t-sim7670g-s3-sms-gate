@@ -63,6 +63,12 @@ select {
   margin-top: .2rem;
 }
 
+label.checkbox input {
+  display: inline-block;
+  width: auto;
+  margin-right: .4rem;
+}
+
 button {
   padding: .55rem .9rem;
   margin-right: .5rem;

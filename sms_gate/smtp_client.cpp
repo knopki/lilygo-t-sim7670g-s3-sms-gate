@@ -11,6 +11,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "codec.h"
+
 namespace {
 
 constexpr size_t kLineBufferLength = 256;
@@ -127,20 +129,6 @@ bool hasExtension(const char* extensions, const char* keyword) {
 }
 // #endregion FUNC_hasExtension
 
-// #region FUNC_encodeBase64Chunk
-// PURPOSE: Encodes up to three bytes into four base64 characters.
-void encodeBase64Chunk(const unsigned char* in, size_t remaining, char* out) {
-  constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const unsigned char b0 = in[0];
-  const unsigned char b1 = remaining > 1 ? in[1] : 0;
-  const unsigned char b2 = remaining > 2 ? in[2] : 0;
-  out[0] = kAlphabet[b0 >> 2];
-  out[1] = kAlphabet[((b0 & 0x03) << 4) | (b1 >> 4)];
-  out[2] = remaining > 1 ? kAlphabet[((b1 & 0x0F) << 2) | (b2 >> 6)] : '=';
-  out[3] = remaining > 2 ? kAlphabet[b2 & 0x3F] : '=';
-}
-// #endregion FUNC_encodeBase64Chunk
-
 // #region FUNC_writeBase64Line
 // PURPOSE: Encodes one chunk of at most 57 bytes and writes it as a wrapped
 // base64 line, so bodies never need a second full-size buffer.
@@ -149,7 +137,7 @@ bool writeBase64Line(SmtpChannel& channel, const char* body, size_t remaining) {
   size_t used = 0;
   while (remaining > 0 && used + 5 <= sizeof(encoded)) {
     const size_t chunk = remaining < 3 ? remaining : 3;
-    encodeBase64Chunk(reinterpret_cast<const unsigned char*>(body), chunk, encoded + used);
+    codec::encodeBase64Chunk(reinterpret_cast<const unsigned char*>(body), chunk, encoded + used);
     used += 4;
     body += chunk;
     remaining -= chunk;
@@ -180,18 +168,14 @@ bool writeBase64Body(SmtpChannel& channel, const char* utf8Body) {
 // PURPOSE: Sends one AUTH LOGIN credential as a single base64 line.
 bool writeAuthCredential(SmtpChannel& channel, const char* credential) {
   char encoded[((kMaxSmtpUserLength / 3) + 2) * 4 + 3];
-  size_t used = 0;
-  size_t remaining = strlen(credential);
-  while (remaining > 0) {
-    const size_t chunk = remaining < 3 ? remaining : 3;
-    encodeBase64Chunk(reinterpret_cast<const unsigned char*>(credential), chunk, encoded + used);
-    used += 4;
-    credential += chunk;
-    remaining -= chunk;
+  const size_t used =
+      codec::encodeBase64(credential, strlen(credential), encoded, sizeof(encoded) - 2);
+  if (used == 0) {
+    return false;
   }
-  encoded[used++] = '\r';
-  encoded[used++] = '\n';
-  return channel.write(encoded, used);
+  encoded[used] = '\r';
+  encoded[used + 1] = '\n';
+  return channel.write(encoded, used + 2);
 }
 // #endregion FUNC_writeAuthCredential
 

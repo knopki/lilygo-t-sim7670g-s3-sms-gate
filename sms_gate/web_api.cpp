@@ -115,17 +115,34 @@ String renderSmtpConfigJson(const WebSmtpConfig& config) {
   return json;
 }
 
-String renderSmtpTestJson(const WebSmtpTest& test) {
+String renderZteConfigJson(const WebZteConfig& config) {
   String json;
-  json.reserve(test.message.length() + 64);
+  json.reserve(256);
+  json += F("{\"present\":");
+  json += config.present ? F("true") : F("false");
+  json += F(",\"enabled\":");
+  json += config.enabled ? F("true") : F("false");
+  json += F(",\"host\":");
+  appendJsonString(json, config.host);
+  json += F(",\"password_set\":");
+  json += config.passwordSet ? F("true") : F("false");
+  json += F(",\"last_status\":");
+  appendJsonNullableString(json, config.lastStatus.length() > 0, config.lastStatus);
+  json += '}';
+  return json;
+}
+
+String renderAsyncOpJson(const WebAsyncOp& op) {
+  String json;
+  json.reserve(op.message.length() + 64);
   json += F("{\"running\":");
-  json += test.running ? F("true") : F("false");
+  json += op.running ? F("true") : F("false");
   json += F(",\"done\":");
-  json += test.done ? F("true") : F("false");
+  json += op.done ? F("true") : F("false");
   json += F(",\"result\":");
-  appendJsonNullableString(json, test.result.length() > 0, test.result);
+  appendJsonNullableString(json, op.result.length() > 0, op.result);
   json += F(",\"message\":");
-  appendJsonNullableString(json, test.message.length() > 0, test.message);
+  appendJsonNullableString(json, op.message.length() > 0, op.message);
   json += '}';
   return json;
 }
