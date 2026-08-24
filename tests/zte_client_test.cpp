@@ -704,6 +704,193 @@ void testBodyWithoutContentLength() {
 }
 // #endregion FUNC_testBodyWithoutContentLength
 
+// #region FUNC_testSendSmsFlow
+// PURPOSE: Proves the SEND_SMS request contract (escaped Number and
+// sms_time, UCS-2-hex body with surrogate pair, ID=-1, UNICODE, fresh AD
+// token) and the send-status query shape.
+void testSendSmsFlow() {
+  FakeZteChannel channel;
+  channel.enqueue(loginResponse());
+  channel.enqueue(versionsResponse());
+  channel.enqueue(httpResponse("{\"RD\":\"AB12CD34\"}"));
+  channel.enqueue(httpResponse("{\"result\":\"success\"}"));
+  channel.enqueue(httpResponse("{\"sms_cmd_status_result\":\"3\"}"));
+  std::vector<char> scratch(4096);
+  ZteModem modem(channel, scratch.data(), scratch.size());
+  assert(modem.login("192.168.0.1", "admin") == ZteResult::kSuccess);
+
+  // "Привет " + U+1F600 as raw UTF-8 bytes.
+  const char* text =
+      "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82 \xF0\x9F\x98\x80";
+  assert(modem.sendSms("+79990000000", text) == ZteResult::kSuccess);
+  assert(modem.failedStage()[0] == '\0');
+  assert(countOccurrences(channel.written,
+                          "goformId=SEND_SMS&notCallback=true&Number=%2B79990000000") == 1);
+  // UCS-2 hex: 041F 0440 0438 0432 0435 0442 0020 D83D DE00.
+  assert(countOccurrences(channel.written,
+                          "&MessageBody=041F044004380432043504420020D83DDE00"
+                          "&ID=-1&encode_type=UNICODE&AD=02bb862c133c79826efbe952c8a57c34") == 1);
+  // sms_time shape: six 2-digit fields and six %3B separators, then the
+  // UNPADDED "+0" offset ("%2B0" escaped) exactly like the browser's "+3".
+  const size_t start = channel.written.find("sms_time=") + strlen("sms_time=");
+  const size_t end = channel.written.find("&MessageBody=", start);
+  const std::string smsTime = channel.written.substr(start, end - start);
+  assert(smsTime.length() == 34);  // 6 x 2 digits + 6 x "%3B" + "%2B0".
+  assert(countOccurrences(smsTime, "%3B") == 6);
+  assert(smsTime.substr(smsTime.length() - 4) == "%2B0");
+
+  ZteSendStatus status = ZteSendStatus::kFailed;
+  assert(modem.readSendStatus(status) == ZteResult::kSuccess);
+  assert(status == ZteSendStatus::kDone);
+  assert(countOccurrences(channel.written,
+                          "GET /goform/goform_get_cmd_process?isTest=false&"
+                          "cmd=sms_cmd_status_info&sms_cmd=4") == 1);
+  // The request must END exactly with the form: no bytes may follow the
+  // AD before the next request begins (an unterminated body once leaked
+  // stack bytes onto the wire).
+  const std::string expectedTail =
+      "&ID=-1&encode_type=UNICODE&AD=02bb862c133c79826efbe952c8a57c34";
+  assert(countOccurrences(channel.written,
+                          expectedTail + "GET /goform/goform_get_cmd_process?isTest=false&"
+                                         "cmd=sms_cmd_status_info&sms_cmd=4") == 1);
+  puts("testSendSmsFlow ok");
+}
+// #endregion FUNC_testSendSmsFlow
+
+// #region FUNC_testSendSmsAsciiUsesGsm7
+// PURPOSE: Mirrors the modem web UI's proven request: printable-ASCII text
+// carries encode_type=GSM7_default with the same UTF-16-hex body (captured
+// browser request for "test": 0074006500730074).
+void testSendSmsAsciiUsesGsm7() {
+  FakeZteChannel channel;
+  channel.enqueue(loginResponse());
+  channel.enqueue(versionsResponse());
+  channel.enqueue(httpResponse("{\"RD\":\"AB12CD34\"}"));
+  channel.enqueue(httpResponse("{\"result\":\"success\"}"));
+  std::vector<char> scratch(4096);
+  ZteModem modem(channel, scratch.data(), scratch.size());
+  assert(modem.login("192.168.0.1", "admin") == ZteResult::kSuccess);
+  assert(modem.sendSms("+79685557161", "test") == ZteResult::kSuccess);
+  assert(strstr(modem.lastSendForm(), "encode_type=GSM7_default") != nullptr);
+  assert(strstr(modem.lastSendForm(), "Number=%2B79685557161") != nullptr);
+  assert(countOccurrences(channel.written,
+                          "Number=%2B79685557161&") == 1);
+  assert(countOccurrences(channel.written,
+                          "&MessageBody=0074006500730074&ID=-1&encode_type=GSM7_default&") == 1);
+  // Exact boundary again for the ASCII path.
+  assert(strlen(strstr(modem.lastSendForm(), "AD=")) == 35);  // AD= + 32 hex + '\0'.
+  puts("testSendSmsAsciiUsesGsm7 ok");
+}
+// #endregion FUNC_testSendSmsAsciiUsesGsm7
+
+// #region FUNC_testSendSmsEmptyReply
+// PURPOSE: Names the modem's empty-200-body rejection signature distinctly
+// so a hardware log identifies a malformed form without guessing.
+void testSendSmsEmptyReply() {
+  FakeZteChannel channel;
+  channel.enqueue(loginResponse());
+  channel.enqueue(versionsResponse());
+  channel.enqueue(httpResponse("{\"RD\":\"AB12CD34\"}"));
+  channel.enqueue(httpResponse(""));
+  std::vector<char> scratch(4096);
+  ZteModem modem(channel, scratch.data(), scratch.size());
+  assert(modem.login("192.168.0.1", "admin") == ZteResult::kSuccess);
+  assert(modem.sendSms("+79990000000", "hello") == ZteResult::kSendRejected);
+  assert(strcmp(modem.failedStage(), "send_reply_empty") == 0);
+  assert(modem.lastBodyLength() == 0);
+  puts("testSendSmsEmptyReply ok");
+}
+// #endregion FUNC_testSendSmsEmptyReply
+
+// #region FUNC_testSendSmsRejected
+// PURPOSE: Separates a refused send command from transport and protocol
+// failures so the operator sees the true cause.
+void testSendSmsRejected() {
+  FakeZteChannel channel;
+  channel.enqueue(loginResponse());
+  channel.enqueue(versionsResponse());
+  channel.enqueue(httpResponse("{\"RD\":\"AB12CD34\"}"));
+  channel.enqueue(httpResponse("{\"result\":\"failure\"}"));
+  std::vector<char> scratch(4096);
+  ZteModem modem(channel, scratch.data(), scratch.size());
+  assert(modem.login("192.168.0.1", "admin") == ZteResult::kSuccess);
+  assert(modem.sendSms("+79990000000", "hello") == ZteResult::kSendRejected);
+  assert(strcmp(modem.failedStage(), "send") == 0);
+  assert(strcmp(modem.lastBody(), "{\"result\":\"failure\"}") == 0);
+  puts("testSendSmsRejected ok");
+}
+// #endregion FUNC_testSendSmsRejected
+
+// #region FUNC_testSendStatusSamples
+// PURPOSE: Maps every sms_cmd_status_info answer onto one sampled outcome,
+// treating the field's absence as still in progress.
+void testSendStatusSamples() {
+  FakeZteChannel channel;
+  channel.enqueue(loginResponse());
+  channel.enqueue(versionsResponse());
+  channel.enqueue(httpResponse("{\"sms_cmd_status_result\":\"1\"}"));
+  channel.enqueue(httpResponse("{\"messages\":[]}"));
+  channel.enqueue(httpResponse("{\"sms_cmd_status_result\":\"2\"}"));
+  channel.enqueue(httpResponse("{\"sms_cmd_status_result\":\"3\"}"));
+  std::vector<char> scratch(4096);
+  ZteModem modem(channel, scratch.data(), scratch.size());
+  assert(modem.login("192.168.0.1", "admin") == ZteResult::kSuccess);
+  ZteSendStatus status = ZteSendStatus::kDone;
+  assert(modem.readSendStatus(status) == ZteResult::kSuccess);
+  assert(status == ZteSendStatus::kInProgress);
+  assert(modem.readSendStatus(status) == ZteResult::kSuccess);
+  assert(status == ZteSendStatus::kInProgress);
+  assert(modem.readSendStatus(status) == ZteResult::kSuccess);
+  assert(status == ZteSendStatus::kFailed);
+  assert(strcmp(modem.failedStage(), "send_status") == 0);
+  assert(modem.readSendStatus(status) == ZteResult::kSuccess);
+  assert(status == ZteSendStatus::kDone);
+  puts("testSendStatusSamples ok");
+}
+// #endregion FUNC_testSendStatusSamples
+
+// #region FUNC_testSendSmsInputValidation
+// PURPOSE: Rejects empty, oversize, non-printable, and malformed-UTF-8
+// input before any byte reaches the modem.
+void testSendSmsInputValidation() {
+  FakeZteChannel channel;
+  std::vector<char> scratch(4096);
+  ZteModem modem(channel, scratch.data(), scratch.size());
+  assert(modem.sendSms("", "hello") == ZteResult::kProtocolError);
+  assert(strcmp(modem.failedStage(), "send_input") == 0);
+  assert(modem.sendSms("123", "") == ZteResult::kProtocolError);
+  assert(strcmp(modem.failedStage(), "send_input") == 0);
+  assert(modem.sendSms("12\x7F", "hello") == ZteResult::kProtocolError);
+  assert(modem.sendSms("123", "\xFF") == ZteResult::kProtocolError);
+  assert(modem.sendSms("123", "\xC3\x28") == ZteResult::kProtocolError);
+  std::string tooLong(kMaxZteSmsSendUnits + 1, 'A');
+  assert(modem.sendSms("123", tooLong.c_str()) == ZteResult::kProtocolError);
+  std::string tooLongNumber(kZteNumberLength + 1, '1');
+  assert(modem.sendSms(tooLongNumber.c_str(), "hello") == ZteResult::kProtocolError);
+  assert(countOccurrences(channel.written, "goformId=SEND_SMS") == 0);
+  assert(countOccurrences(channel.written, "goformId=LOGIN") == 0);
+  puts("testSendSmsInputValidation ok");
+}
+// #endregion FUNC_testSendSmsInputValidation
+
+// #region FUNC_testZteSmsUtf16Units
+// PURPOSE: Proves the shared length rule: BMP characters count one unit,
+// astral codepoints two, and malformed UTF-8 is rejected.
+void testZteSmsUtf16Units() {
+  assert(zteSmsUtf16Units("") == 0);
+  assert(zteSmsUtf16Units("abc") == 3);
+  assert(zteSmsUtf16Units("\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82") == 6);
+  assert(zteSmsUtf16Units("\xF0\x9F\x98\x80") == 2);
+  assert(zteSmsUtf16Units("hi \xF0\x9F\x98\x80!") == 6);
+  assert(zteSmsUtf16Units("\xFF") == kZteSmsInvalidUnits);
+  assert(zteSmsUtf16Units("\xC3\x28") == kZteSmsInvalidUnits);   // Bad continuation.
+  assert(zteSmsUtf16Units("\xC0\xAF") == kZteSmsInvalidUnits);   // Overlong '/'.
+  assert(zteSmsUtf16Units("\xED\xA0\x80") == kZteSmsInvalidUnits);  // Encoded surrogate.
+  assert(zteSmsUtf16Units("\xF0\x9F\x98") == kZteSmsInvalidUnits);  // Truncated.
+  puts("testZteSmsUtf16Units ok");
+}
+// #endregion FUNC_testZteSmsUtf16Units
+
 // #region FUNC_testFormatZteDate
 // PURPOSE: Covers the timestamp rendering, quarter-hour offsets, and the
 // verbatim fallback for unexpected firmware formats.
@@ -748,6 +935,13 @@ int main() {
   testDeleteRejected();
   testDeleteUnverified();
   testInboxStatus();
+  testSendSmsFlow();
+  testSendSmsAsciiUsesGsm7();
+  testSendSmsEmptyReply();
+  testSendSmsRejected();
+  testSendStatusSamples();
+  testSendSmsInputValidation();
+  testZteSmsUtf16Units();
   testHttpFailures();
   testBodyWithoutContentLength();
   testFormatZteDate();

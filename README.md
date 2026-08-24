@@ -12,9 +12,9 @@ The firmware now implements the device's Wi-Fi and local web-configuration found
 - Digest-authenticated configuration over HTTP;
 - a dedicated persistent `appcfg` partition that supports USB recovery without erasing future SMS/GNSS/email settings.
 
-SMS forwarding from the ZTE MF79RU source and email delivery are
-implemented; SMS from the board's own SIM7670G modem and GNSS time remain
-unimplemented.
+SMS forwarding from the ZTE MF79RU source, outgoing SMS through the same
+modem, and email delivery are implemented; SMS from the board's own
+SIM7670G modem and GNSS time remain unimplemented.
 
 ## SMS source: ZTE MF79RU (ADR-0003)
 
@@ -53,6 +53,39 @@ Notes:
 - The poller pages through the inbox in bounded chunks, so a full
   100-message inbox cannot exhaust memory; forwarding order is oldest
   first, one SMS per cycle.
+
+### Sending SMS through the ZTE modem
+
+The protected page also has a **Send SMS** form with the two fields every
+SMS source shares: **To** (a phone number, 3\u201320 digits with an optional
+leading `+`) and **Message** (up to 335 characters, counted the way the
+modem counts them, so Cyrillic and emoji are valid; the limit matches the
+modem web UI's own five-part UNICODE send). The device logs in with the
+stored ZTE profile, submits `SEND_SMS` with a fresh `AD` token and the text
+encoded as UCS-2-hex, then samples the modem's send status once per second
+for at most 20 seconds and reports the outcome.
+
+Notes:
+
+- The form needs a saved ZTE profile (host and password); polling does not
+  need to be enabled.
+- The device synchronizes its clock over SNTP once the station has
+  internet access, because the modem validates the send timestamp against
+  its own SNTP clock and rejects far-off times; sends are refused with a
+  clear message until the first fix arrives.
+- The timestamp is sent as UTC with an unpadded "+0" offset, mirroring
+  the exact shape the modem's own web UI sends ("+3").
+- Mirroring the modem's own web UI, plain ASCII text is transmitted with
+  GSM7 encoding and everything else (Cyrillic, emoji) with UNICODE; the
+  device-verified browser request used the same UTF-16-hex body under both
+  labels.
+- A send is excluded from the poll cycle and the connection test, so the
+  modem never serves two dialogs at once.
+- If the modem accepts the message but its status stays in progress past
+  the bound, the UI says so honestly: the message may still be delivered.
+- Delivery also requires a valid SMS center (SMSC) configured in the
+  modem; if the modem accepts sends that never complete, check the SMSC
+  in its web UI (Settings → SMS).
 
 ## Wi-Fi and web configuration
 
@@ -200,14 +233,15 @@ If `esptool` cannot connect, repeat step 4 and check that the ESP-USB port—not
 ```text
 sms_gate/
 ├── sms_gate.ino      # Wi-Fi lifecycle, HTTP routes, boot trace, Serial events,
-│                     # ZTE poll/forward/delete lifecycle
+│                     # ZTE poll/forward/delete lifecycle, ZTE send lifecycle
 ├── config_record.h   # Portable checksummed network configuration record
 ├── config_store.*    # appcfg NVS persistence for network/SMTP/ZTE profiles
 ├── smtp_record.h     # Portable checksummed SMTP delivery record
 ├── smtp_client.*     # Host-testable SMTP dialog (STARTTLS, AUTH LOGIN, DATA)
 ├── smtp_transport.h  # NetworkClientSecure binding with embedded root bundle
 ├── zte_record.h      # Portable checksummed ZTE SMS-source record
-├── zte_client.*      # Host-testable ZTE goform dialog (LOGIN, paging, DELETE_SMS)
+├── zte_client.*      # Host-testable ZTE goform dialog (LOGIN, paging,
+│                     # DELETE_SMS, SEND_SMS, send status)
 ├── zte_transport.h   # NetworkClient binding for the ZTE LAN channel
 ├── codec.h           # Shared base64/MD5/field validation helpers
 ├── web_api.*         # JSON API and gzipped UI asset serving

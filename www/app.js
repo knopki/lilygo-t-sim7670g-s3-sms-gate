@@ -221,6 +221,21 @@
         <button type="button" id="zte-test-button">Test connection</button>
       </form>
       <p id="zte-test-status" class="hint"></p>
+      <h2>Send SMS</h2>
+      <p class="hint">Sends through the configured ZTE modem. Up to 335 characters; the recipient is a phone number.</p>
+      <form id="sms-send-form">
+        <fieldset>
+          <legend>New message</legend>
+          <label>To (phone number)
+            <input required maxlength="20" name="to" inputmode="tel" placeholder="+79990000000" autocomplete="off">
+          </label>
+          <label>Message
+            <textarea required maxlength="335" name="text" rows="4"></textarea>
+          </label>
+        </fieldset>
+        <button type="submit">Send SMS</button>
+      </form>
+      <p id="sms-send-status" class="hint"></p>
       <h2>Change administrator password</h2>
       <form id="password-form">
         <label>Current password
@@ -253,6 +268,7 @@
     document.getElementById('smtp-form').elements.security.addEventListener('change', onSmtpSecurityChange);
     document.getElementById('zte-form').addEventListener('submit', submitZteSave);
     document.getElementById('zte-test-button').addEventListener('click', startZteTest);
+    document.getElementById('sms-send-form').addEventListener('submit', submitSmsSend);
     document.getElementById('password-form').addEventListener('submit', submitPasswordChange);
     loadSmtpSettings();
     loadZteSettings();
@@ -490,9 +506,11 @@
     }
   }
 
-  // Shared flow for the one-shot async test routes (SMTP, ZTE): POSTs the
-  // form, then polls the status endpoint until done and reports the result.
-  async function startAsyncTest(path, fields, statusEl, busyMessage) {
+  // Shared flow for the one-shot async routes (SMTP, ZTE, SMS send): POSTs
+  // the form to startPath, then polls statusPath until done and reports the
+  // result; onDone(succeeded) runs after the terminal sample.
+  async function startAsyncTest(options) {
+    const { startPath, statusPath, fields, statusEl, busyMessage, onDone } = options;
     if (busy) {
       return false;
     }
@@ -502,20 +520,20 @@
     }
     setBanner('ok', busyMessage);
     try {
-      const { response, payload } = await postForm(path + '/test', fields);
+      const { response, payload } = await postForm(startPath, fields);
       if (response.status === 401) {
         renderAuthRequired();
         return true; // The caller must not clear busy: a fresh page took over.
       }
       if (!response.ok) {
-        setBanner('error', (payload && payload.error) || 'The test could not be started.');
+        setBanner('error', (payload && payload.error) || 'The operation could not be started.');
         if (statusEl) {
           statusEl.textContent = '';
         }
         setBusy(false);
         return false;
       }
-      pollAsyncTest(path, statusEl);
+      pollAsyncTest(statusPath, statusEl, onDone);
       return true;
     } catch (error) {
       setBanner('error', 'The device could not be reached.');
@@ -527,11 +545,11 @@
     }
   }
 
-  function pollAsyncTest(path, statusEl) {
+  function pollAsyncTest(path, statusEl, onDone) {
     stopAsyncTestTimer();
     asyncTestTimer = window.setInterval(async () => {
       try {
-        const { response, payload } = await api(path + '/test');
+        const { response, payload } = await api(path);
         if (response.status === 401) {
           stopAsyncTestTimer();
           renderAuthRequired();
@@ -548,6 +566,9 @@
           statusEl.textContent = payload.message || '';
         }
         setBanner(succeeded ? 'ok' : 'error', payload.message || '');
+        if (onDone) {
+          onDone(succeeded);
+        }
       } catch (error) {
         // The device may be busy inside a network dialog; keep polling.
       }
@@ -555,9 +576,13 @@
   }
 
   async function startSmtpTest() {
-    await startAsyncTest('/api/smtp', smtpFormFields(document.getElementById('smtp-form')),
-                         document.getElementById('smtp-test-status'),
-                         'Sending the test email…');
+    await startAsyncTest({
+      startPath: '/api/smtp/test',
+      statusPath: '/api/smtp/test',
+      fields: smtpFormFields(document.getElementById('smtp-form')),
+      statusEl: document.getElementById('smtp-test-status'),
+      busyMessage: 'Sending the test email…',
+    });
   }
 
   async function loadZteSettings() {
@@ -628,12 +653,53 @@
   }
 
   async function startZteTest() {
-    const started = await startAsyncTest('/api/zte', zteFormFields(document.getElementById('zte-form')),
-                                        document.getElementById('zte-test-status'),
-                                        'Testing the modem connection…');
-    if (!started) {
+    await startAsyncTest({
+      startPath: '/api/zte/test',
+      statusPath: '/api/zte/test',
+      fields: zteFormFields(document.getElementById('zte-form')),
+      statusEl: document.getElementById('zte-test-status'),
+      busyMessage: 'Testing the modem connection…',
+    });
+  }
+
+  function smsSendFields(form) {
+    return {
+      to: form.elements.to.value.trim(),
+      text: form.elements.text.value,
+    };
+  }
+
+  async function submitSmsSend(event) {
+    event.preventDefault();
+    if (busy) {
       return;
     }
+    const fields = smsSendFields(event.target);
+    if (!/^\+?\d{3,20}$/.test(fields.to)) {
+      setBanner('error', 'Enter a phone number of 3–20 digits, optionally starting with +.');
+      return;
+    }
+    if (fields.text.length === 0) {
+      setBanner('error', 'Enter the message text.');
+      return;
+    }
+    await startAsyncTest({
+      startPath: '/api/zte/send',
+      statusPath: '/api/zte/send',
+      fields: fields,
+      statusEl: document.getElementById('sms-send-status'),
+      busyMessage: 'Sending the SMS…',
+      onDone: (succeeded) => {
+        if (!succeeded) {
+          return;
+        }
+        const form = document.getElementById('sms-send-form');
+        if (form) {
+          form.elements.to.value = '';
+          form.elements.text.value = '';
+        }
+      },
+    });
   }
 
   function startStatusTimer() {

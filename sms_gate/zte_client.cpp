@@ -3,12 +3,14 @@
 // ZteChannel, reproducing the hardware-proven request sequence of the
 // reference forwarder (see ADR-0003 and RESEARCH notes in the forwarder
 // project): one HTTP/1.1 request per command, mandatory Referer, stok
-// cookie session, AD = md5(md5(cr_version+wa_inner_version) + RD), and a
+// cookie session, AD = md5(md5(cr_version+wa_inner_version) + RD), a
 // lenient JSON scanner because the B02 firmware emits raw control
-// characters inside string values.
+// characters inside string values, and the SEND_SMS shape documented from
+// the modem's own web UI (ZxicSmsFwd's proven client matches it).
 // INVARIANTS: Every exit path stops the channel; credentials never appear
 // in stage names or error paths; every failure is traceable to one stage;
-// paging stays bounded by kZteMaxPages.
+// paging stays bounded by kZteMaxPages; send bodies stay within the modem
+// web UI's own UNICODE limit.
 // #endregion MODULE_CONTRACT
 
 #include "zte_client.h"
@@ -16,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "codec.h"
 
@@ -361,6 +364,137 @@ bool isHexDigit(char ch) {
 }
 // #endregion FUNC_isHexDigit
 
+// #region FUNC_decodeUtf8Codepoint
+// PURPOSE: Decodes one codepoint at p (rejecting overlong forms, surrogates,
+// and truncated sequences) and advances the cursor past it.
+bool decodeUtf8Codepoint(const char*& p, uint32_t& codepoint) {
+  const unsigned char lead = static_cast<unsigned char>(*p++);
+  if (lead < 0x80) {
+    codepoint = lead;
+    return true;
+  }
+  size_t continuationCount;
+  uint32_t minimum;
+  if ((lead & 0xE0) == 0xC0) {
+    continuationCount = 1;
+    minimum = 0x80;
+    codepoint = lead & 0x1F;
+  } else if ((lead & 0xF0) == 0xE0) {
+    continuationCount = 2;
+    minimum = 0x800;
+    codepoint = lead & 0x0F;
+  } else if ((lead & 0xF8) == 0xF0) {
+    continuationCount = 3;
+    minimum = 0x10000;
+    codepoint = lead & 0x07;
+  } else {
+    return false;
+  }
+  for (size_t index = 0; index < continuationCount; ++index) {
+    const unsigned char byte = static_cast<unsigned char>(p[index]);
+    if ((byte & 0xC0) != 0x80) {
+      return false;
+    }
+    codepoint = (codepoint << 6) | (byte & 0x3F);
+  }
+  p += continuationCount;
+  if (codepoint < minimum || codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+    return false;
+  }
+  return true;
+}
+// #endregion FUNC_decodeUtf8Codepoint
+
+// #region FUNC_appendUcs2HexUnit
+// PURPOSE: Writes one UTF-16 code unit as four uppercase hex digits (the
+// modem's MessageBody content encoding), truncating when the buffer is full.
+void appendUcs2HexUnit(uint16_t unit, char* out, size_t outSize, size_t& used) {
+  static const char kHex[] = "0123456789ABCDEF";
+  for (int shift = 12; shift >= 0 && used + 1 < outSize; shift -= 4) {
+    out[used++] = kHex[(unit >> shift) & 0x0F];
+  }
+}
+// #endregion FUNC_appendUcs2HexUnit
+
+// #region FUNC_encodeUcs2Hex
+// PURPOSE: Encodes validated UTF-8 text as the UCS-2-hex MessageBody
+// (surrogate pairs for astral codepoints); returns the hex length.
+size_t encodeUcs2Hex(const char* utf8, char* out, size_t outSize) {
+  size_t used = 0;
+  const char* p = utf8;
+  while (*p != '\0' && used + 1 < outSize) {
+    uint32_t codepoint;
+    if (!decodeUtf8Codepoint(p, codepoint)) {
+      out[used] = '\0';
+      return used;
+    }
+    if (codepoint <= 0xFFFF) {
+      appendUcs2HexUnit(static_cast<uint16_t>(codepoint), out, outSize, used);
+    } else {
+      const uint32_t offset = codepoint - 0x10000;
+      appendUcs2HexUnit(static_cast<uint16_t>(0xD800 + (offset >> 10)), out, outSize, used);
+      appendUcs2HexUnit(static_cast<uint16_t>(0xDC00 + (offset & 0x3FF)), out, outSize, used);
+    }
+  }
+  out[used] = '\0';
+  return used;
+}
+// #endregion FUNC_encodeUcs2Hex
+
+// #region FUNC_isUnreservedFormByte
+// PURPOSE: Recognizes the characters application/x-www-form-urlencoded may
+// carry literally; every other byte (including '+' and ';') is percent-
+// escaped so the modem receives the exact values.
+bool isUnreservedFormByte(unsigned char ch) {
+  return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+         ch == '-' || ch == '_' || ch == '.' || ch == '~';
+}
+// #endregion FUNC_isUnreservedFormByte
+
+// #region FUNC_appendFormEscaped
+// PURPOSE: Appends one form-value percent-escaping every non-unreserved
+// byte, always terminating the buffer (the SEND_SMS form ends with an
+// escaped value, so an unterminated tail would leak stack bytes onto the
+// wire and into the Content-Length); returns false when the destination is
+// full.
+bool appendFormEscaped(const char* value, char* out, size_t outSize, size_t& used) {
+  static const char kHex[] = "0123456789ABCDEF";
+  for (const char* p = value; *p != '\0'; ++p) {
+    const unsigned char ch = static_cast<unsigned char>(*p);
+    if (isUnreservedFormByte(ch)) {
+      if (used + 1 >= outSize) {
+        return false;
+      }
+      out[used++] = static_cast<char>(ch);
+    } else {
+      if (used + 3 >= outSize) {
+        return false;
+      }
+      out[used++] = '%';
+      out[used++] = kHex[ch >> 4];
+      out[used++] = kHex[ch & 0x0F];
+    }
+  }
+  out[used] = '\0';  // Both append branches leave used <= outSize - 1.
+  return true;
+}
+// #endregion FUNC_appendFormEscaped
+
+// #region FUNC_appendLiteral
+// PURPOSE: Appends one fixed fragment after an escaped value; returns false
+// when the destination is full.
+bool appendLiteral(const char* literal, char* out, size_t outSize, size_t& used) {
+  const size_t length = strlen(literal);
+  if (used + length + 1 > outSize) {
+    return false;
+  }
+  memcpy(out + used, literal, length);
+  used += length;
+  out[used] = '\0';
+  return true;
+}
+// #endregion FUNC_appendLiteral
+
 // #region FUNC_isUcs2HexView
 // PURPOSE: Validates the whole content view as 4-hex-per-codepoint UCS-2
 // before any decoding, so partial garbage never becomes text.
@@ -579,6 +713,27 @@ bool formatZteDate(const char* raw, char* out, size_t outSize) {
 }
 // #endregion FUNC_formatZteDate
 
+// #region FUNC_zteSmsUtf16Units
+// PURPOSE: Shares one length rule (and one UTF-8 validity gate) between the
+// web form validation and sendSms so the encoded body always fits the modem
+// web UI's own send limit.
+size_t zteSmsUtf16Units(const char* utf8) {
+  if (utf8 == nullptr) {
+    return kZteSmsInvalidUnits;
+  }
+  size_t units = 0;
+  const char* p = utf8;
+  while (*p != '\0') {
+    uint32_t codepoint;
+    if (!decodeUtf8Codepoint(p, codepoint)) {
+      return kZteSmsInvalidUnits;
+    }
+    units += codepoint > 0xFFFF ? 2 : 1;
+  }
+  return units;
+}
+// #endregion FUNC_zteSmsUtf16Units
+
 // #region FUNC_ZteModem_ZteModem
 // PURPOSE: Binds one dialog instance to one channel and response scratch
 // buffer for its lifetime.
@@ -599,9 +754,10 @@ void ZteModem::fail(const char* stage) { failedStage_ = stage; }
 // #region FUNC_ZteModem_requestPost
 // PURPOSE: Sends one POST to goform_set_cmd_process with the mandatory
 // Referer header, the session cookie when present, and Connection: close,
-// then reads the response into the scratch buffer.
+// then reads the response into the scratch buffer; the buffer fits the
+// SEND_SMS form (a 335-unit body encodes to 1340 hex characters).
 ZteResult ZteModem::requestPost(const char* formBody) {
-  char request[768];
+  char request[2560];
   size_t used = static_cast<size_t>(snprintf(request, sizeof(request),
                                              "POST /goform/goform_set_cmd_process HTTP/1.1\r\n"
                                              "Host: %s\r\n"
@@ -900,6 +1056,28 @@ ZteResult ZteModem::fetchRd(char* rd, size_t rdSize) {
 }
 // #endregion FUNC_ZteModem_fetchRd
 
+// #region FUNC_ZteModem_fetchAd
+// PURPOSE: Builds the AD anti-CSRF token shared by every set command
+// (AD = md5(md5(wa_version) + RD)) from one fresh RD token.
+ZteResult ZteModem::fetchAd(char* ad, size_t adSize) {
+  if (adSize < 33) {
+    fail("ad");
+    return ZteResult::kProtocolError;
+  }
+  char rd[80];
+  ZteResult result = fetchRd(rd, sizeof(rd));
+  if (result != ZteResult::kSuccess) {
+    return result;
+  }
+  char inner[33];
+  codec::md5Hex(waVersion_, strlen(waVersion_), inner);
+  char concatenated[33 + sizeof(rd) + 1];
+  snprintf(concatenated, sizeof(concatenated), "%s%s", inner, rd);
+  codec::md5Hex(concatenated, strlen(concatenated), ad);
+  return ZteResult::kSuccess;
+}
+// #endregion FUNC_ZteModem_fetchAd
+
 // #region FUNC_ZteModem_fetchSmsPage
 // PURPOSE: Requests one inbox page into the scratch buffer, relogging in
 // once when the modem answers the stale empty shape.
@@ -1077,17 +1255,11 @@ ZteResult ZteModem::deleteSms(const ZteSms& sms) {
       return result;
     }
   }
-  char rd[80];
-  ZteResult result = fetchRd(rd, sizeof(rd));
+  char ad[33];
+  ZteResult result = fetchAd(ad, sizeof(ad));
   if (result != ZteResult::kSuccess) {
     return result;
   }
-  char inner[33];
-  codec::md5Hex(waVersion_, strlen(waVersion_), inner);
-  char concatenated[33 + sizeof(rd) + 1];
-  snprintf(concatenated, sizeof(concatenated), "%s%s", inner, rd);
-  char ad[33];
-  codec::md5Hex(concatenated, strlen(concatenated), ad);
   char formBody[192];
   snprintf(formBody, sizeof(formBody),
            "isTest=false&goformId=DELETE_SMS&msg_id=%s%%3B&notCallback=true&AD=%s", sms.id, ad);
@@ -1131,3 +1303,140 @@ ZteResult ZteModem::readInboxStatus(ZteInboxStatus& out) {
   return ZteResult::kSuccess;
 }
 // #endregion FUNC_ZteModem_readInboxStatus
+
+// #region FUNC_buildSmsTimeString
+// PURPOSE: Renders the sms_time field in the shape the modem's own web UI
+// sends (yy;mm;dd;HH;MM;SS;+tz with an unpadded hour offset like the
+// browser's "+3"). Without a synced clock the epoch placeholder goes out
+// instead of a wrong wall-clock guess.
+void buildSmsTimeString(char* out, size_t outSize) {
+  const time_t now = time(nullptr);
+  if (now < 1577836800) {  // Before 2020-01-01: no synced clock available.
+    snprintf(out, outSize, "00;01;01;00;00;00;+0");
+    return;
+  }
+  struct tm parts;
+  gmtime_r(&now, &parts);
+  snprintf(out, outSize, "%02d;%02d;%02d;%02d;%02d;%02d;+0", (parts.tm_year + 1900) % 100,
+           parts.tm_mon + 1, parts.tm_mday, parts.tm_hour, parts.tm_min, parts.tm_sec);
+}
+// #endregion FUNC_buildSmsTimeString
+
+// #region FUNC_ZteModem_sendSms
+// PURPOSE: Sends one SMS with the request shape documented from the modem's
+// own web UI and proven by the reference clients: a fresh AD token, the
+// percent-escaped Number and sms_time, the UCS-2-hex MessageBody, ID=-1,
+// and encode_type=UNICODE; success means accepted, not yet delivered.
+ZteResult ZteModem::sendSms(const char* number, const char* textUtf8) {
+  if (number == nullptr || textUtf8 == nullptr) {
+    fail("send_input");
+    return ZteResult::kProtocolError;
+  }
+  const size_t numberLength = strlen(number);
+  if (numberLength == 0 || numberLength > kZteNumberLength) {
+    fail("send_input");
+    return ZteResult::kProtocolError;
+  }
+  for (size_t index = 0; index < numberLength; ++index) {
+    const unsigned char ch = static_cast<unsigned char>(number[index]);
+    if (ch < 32 || ch > 126) {
+      fail("send_input");
+      return ZteResult::kProtocolError;
+    }
+  }
+  const size_t units = zteSmsUtf16Units(textUtf8);
+  if (units == 0 || units == kZteSmsInvalidUnits || units > kMaxZteSmsSendUnits) {
+    fail("send_input");
+    return ZteResult::kProtocolError;
+  }
+  if (!hasSession()) {
+    ZteResult result = openSession();
+    if (result != ZteResult::kSuccess) {
+      return result;
+    }
+  }
+  char ad[33];
+  ZteResult result = fetchAd(ad, sizeof(ad));
+  if (result != ZteResult::kSuccess) {
+    return result;
+  }
+
+  char hexBody[(kMaxZteSmsSendUnits * 4) + 1];
+  encodeUcs2Hex(textUtf8, hexBody, sizeof(hexBody));
+  // Mirror the modem's own web UI: printable-ASCII text transmits as
+  // GSM7_default, anything else as UNICODE (the browser's proven request
+  // carries the same UTF-16-hex body under both labels).
+  bool asciiOnly = true;
+  for (const char* p = textUtf8; *p != '\0'; ++p) {
+    const unsigned char ch = static_cast<unsigned char>(*p);
+    if (ch < 0x20 || ch > 0x7E) {
+      asciiOnly = false;
+      break;
+    }
+  }
+  const char* encodeType = asciiOnly ? "GSM7_default" : "UNICODE";
+  char smsTime[32];
+  buildSmsTimeString(smsTime, sizeof(smsTime));
+  char formBody[1792];
+  size_t used = 0;
+  if (!appendLiteral("isTest=false&goformId=SEND_SMS&notCallback=true&Number=", formBody,
+                     sizeof(formBody), used) ||
+      !appendFormEscaped(number, formBody, sizeof(formBody), used) ||
+      !appendLiteral("&sms_time=", formBody, sizeof(formBody), used) ||
+      !appendFormEscaped(smsTime, formBody, sizeof(formBody), used) ||
+      !appendLiteral("&MessageBody=", formBody, sizeof(formBody), used) ||
+      !appendFormEscaped(hexBody, formBody, sizeof(formBody), used) ||
+      !appendLiteral("&ID=-1&encode_type=", formBody, sizeof(formBody), used) ||
+      !appendFormEscaped(encodeType, formBody, sizeof(formBody), used) ||
+      !appendLiteral("&AD=", formBody, sizeof(formBody), used) ||
+      !appendFormEscaped(ad, formBody, sizeof(formBody), used)) {
+    fail("send_form");
+    return ZteResult::kProtocolError;
+  }
+  snprintf(lastSendForm_, sizeof(lastSendForm_), "%s", formBody);
+
+  result = requestPost(formBody);
+  if (result != ZteResult::kSuccess) {
+    return result;
+  }
+  if (bodyLength_ == 0) {
+    // The B02 firmware answers some malformed SEND_SMS forms with 200 and
+    // an empty body; name it explicitly so hardware logs identify it.
+    fail("send_reply_empty");
+    return ZteResult::kSendRejected;
+  }
+  JsonView body{scratch_, scratch_ + bodyLength_};
+  char value[16];
+  if (!jsonMemberString(body, "result", value, sizeof(value)) || strcmp(value, "success") != 0) {
+    fail("send");
+    return ZteResult::kSendRejected;
+  }
+  return ZteResult::kSuccess;
+}
+// #endregion FUNC_ZteModem_sendSms
+
+// #region FUNC_ZteModem_readSendStatus
+// PURPOSE: Reads one sampled outcome of the modem's asynchronous send
+// command (sms_cmd=4): "3" completed, "2" failed, anything else (including
+// the field's absence once the command clears) counts as still in progress,
+// so the caller's bounded wait is the only timeout source.
+ZteResult ZteModem::readSendStatus(ZteSendStatus& out) {
+  out = ZteSendStatus::kInProgress;
+  ZteResult result = requestGet("isTest=false&cmd=sms_cmd_status_info&sms_cmd=4");
+  if (result != ZteResult::kSuccess) {
+    return result;
+  }
+  JsonView body{scratch_, scratch_ + bodyLength_};
+  char value[8];
+  if (!jsonMemberString(body, "sms_cmd_status_result", value, sizeof(value))) {
+    return ZteResult::kSuccess;
+  }
+  if (strcmp(value, "3") == 0) {
+    out = ZteSendStatus::kDone;
+  } else if (strcmp(value, "2") == 0) {
+    fail("send_status");
+    out = ZteSendStatus::kFailed;
+  }
+  return ZteResult::kSuccess;
+}
+// #endregion FUNC_ZteModem_readSendStatus

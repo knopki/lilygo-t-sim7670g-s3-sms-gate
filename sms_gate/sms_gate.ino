@@ -1,12 +1,14 @@
 // #region MODULE_CONTRACT
 // PURPOSE: Lets the SMS gateway join a WPA2/WPA3-Personal Wi-Fi network while
 // providing a recoverable local web interface for network, SMTP delivery,
-// and ZTE SMS source configuration, and forwards ZTE modem SMS by email
-// (ADR-0003).
+// and ZTE SMS source configuration, forwards ZTE modem SMS by email, and
+// sends outgoing SMS through the same modem (ADR-0003).
 // SCOPE:
 // - Wi-Fi provisioning, captive portal, Digest-authenticated configuration,
 // isolated persistent configuration, HTTP routes, the asynchronous SMTP
-// test-delivery lifecycle, and the ZTE poll/forward/delete lifecycle.
+// test-delivery lifecycle, the ZTE poll/forward/delete lifecycle, and the
+// asynchronous ZTE send lifecycle (recipient and body fields shared by
+// future SMS sources).
 // - NOT: The SMTP dialog itself (smtp_client), TLS transport
 // (smtp_transport), the ZTE goform dialog (zte_client), its transport
 // (zte_transport), SMS from the onboard modem, GNSS, and OTA logic.
@@ -47,6 +49,13 @@ constexpr size_t kBootTraceCapacity = 1024;
 constexpr unsigned long kZtePollIntervalMs = 15UL * 1000UL;
 constexpr size_t kZteScratchSize = 20UL * 1024UL;
 constexpr size_t kZteStatusLength = 160;
+// The modem's send command is asynchronous: one status sample per second,
+// bounded, mirrors its own web UI polling.
+constexpr int kZteSendStatusAttempts = 20;
+constexpr unsigned long kZteSendStatusDelayMs = 1000;
+// NTP sources for the wall clock SEND_SMS validates (sms_time); the modem
+// runs its own SNTP and rejects far-off timestamps.
+constexpr const char* kNtpServers[] = {"pool.ntp.org", "time.nist.gov"};
 
 enum class ConnectionState { kInitialSetup, kConnecting, kOnline, kFallbackAp };
 
@@ -99,6 +108,16 @@ bool zteTestSuccess = false;
 String zteTestMessage;
 volatile bool ztePollCycleActive = false;
 volatile bool ztePollStopRequested = false;
+
+// One asynchronous ZTE SMS send at a time; started by an HTTP route with the
+// recipient and body fields every SMS source will share, run on its own
+// task, and excluded from poll/test cycles on the same modem.
+String zteSendTo;
+String zteSendText;
+volatile bool zteSendRunning = false;
+volatile bool zteSendDone = false;
+bool zteSendSuccess = false;
+String zteSendMessage;
 TaskHandle_t ztePollTaskHandle = nullptr;
 portMUX_TYPE zteStatusMux = portMUX_INITIALIZER_UNLOCKED;
 char zteLastStatus[kZteStatusLength] = "";
@@ -224,6 +243,16 @@ void beginStationAttempt() {
 }
 // #endregion FUNC_beginStationAttempt
 
+// #region FUNC_startWallClock
+// PURPOSE: Starts the bundled SNTP client whenever the station has an IP,
+// because SEND_SMS validates sms_time against the modem's own synced clock;
+// buildSmsTimeString keeps its placeholder until the first fix arrives.
+void startWallClock() {
+  configTime(0, 0, kNtpServers[0], kNtpServers[1]);
+  Serial.printf("event=sntp_begin server=%s\n", kNtpServers[0]);
+}
+// #endregion FUNC_startWallClock
+
 // #region FUNC_onStationConnected
 // PURPOSE: Records healthy station connectivity and starts local name
 // discovery.
@@ -231,6 +260,7 @@ void onStationConnected(bool deferAccessPointShutdown) {
   connectionState = ConnectionState::kOnline;
   nextReconnectAt = 0;
   lastConnectionError = "";
+  startWallClock();
   startMdns();
   Serial.printf("event=sta_connected ip=%s\n", WiFi.localIP().toString().c_str());
   if (accessPointActive) {
@@ -767,6 +797,8 @@ const char* zteResultName(ZteResult result) {
       return "login_rejected";
     case ZteResult::kStaleSession:
       return "stale_session";
+    case ZteResult::kSendRejected:
+      return "send_rejected";
     default:
       return "protocol_error";
   }
@@ -961,7 +993,7 @@ void ztePollTask(void*) {
       continue;
     }
     waitingForStation = false;
-    if (zteTestRunning) {
+    if (zteTestRunning || zteSendRunning) {
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
     }
@@ -1147,6 +1179,10 @@ void handleZteTestStart() {
     sendJsonError(409, F("A connection test is already in progress."));
     return;
   }
+  if (zteSendRunning) {
+    sendJsonError(409, F("An SMS send is in progress; try again in a few seconds."));
+    return;
+  }
   if (ztePollCycleActive) {
     sendJsonError(409, F("A poll cycle is in progress; try again in a few seconds."));
     return;
@@ -1191,6 +1227,229 @@ void handleZteTestStatus() {
   sendJson(server, 200, renderAsyncOpJson(op));
 }
 // #endregion FUNC_handleZteTestStatus
+
+// #region FUNC_isValidZteSmsRecipient
+// PURPOSE: Accepts only an optional leading plus followed by digits so the
+// Number field can never smuggle form separators into the goform request.
+bool isValidZteSmsRecipient(const String& value) {
+  if (value.length() < 3 || value.length() > 20) {
+    return false;
+  }
+  for (size_t index = 0; index < value.length(); ++index) {
+    const char ch = value[index];
+    if (ch == '+' && index == 0) {
+      continue;
+    }
+    if (ch < '0' || ch > '9') {
+      return false;
+    }
+  }
+  return true;
+}
+// #endregion FUNC_isValidZteSmsRecipient
+
+// #region FUNC_readZteSendForm
+// PURPOSE: Validates the outgoing-SMS form (recipient and body) every SMS
+// source will share; the body rule is the modem's own UNICODE send limit in
+// UTF-16 code units, so emoji and Cyrillic are counted like the modem does.
+bool readZteSendForm(String& to, String& text, String& error) {
+  to = server.arg("to");
+  to.trim();
+  if (!isValidZteSmsRecipient(to)) {
+    error = F("Recipient must be 3\u201320 digits with an optional leading +.");
+    return false;
+  }
+  text = server.arg("text");
+  const size_t units = zteSmsUtf16Units(text.c_str());
+  if (units == kZteSmsInvalidUnits) {
+    error = F("The message is not valid UTF-8 text.");
+    return false;
+  }
+  if (units == 0) {
+    error = F("Enter the message text.");
+    return false;
+  }
+  if (units > kMaxZteSmsSendUnits) {
+    error = F("The message is too long; the modem accepts at most 335 characters.");
+    return false;
+  }
+  return true;
+}
+// #endregion FUNC_readZteSendForm
+
+// #region FUNC_zteReplySnippet
+// PURPOSE: Reduces one modem reply to a short printable-ASCII snippet for
+// Serial events and the UI; never contains credentials (goform replies hold
+// only result codes and counters).
+String zteReplySnippet(const char* body) {
+  String snippet;
+  for (const char* p = body; *p != '\0' && snippet.length() < 96; ++p) {
+    const unsigned char ch = static_cast<unsigned char>(*p);
+    snippet += (ch >= 32 && ch <= 126) ? static_cast<char>(ch) : '.';
+  }
+  return snippet;
+}
+// #endregion FUNC_zteReplySnippet
+
+// #region FUNC_zteSendTask
+// PURPOSE: Runs one send on its own task: LOGIN, SEND_SMS, then bounded
+// one-per-second status samples until the modem completes or fails the
+// command, publishing the outcome last.
+void zteSendTask(void*) {
+  const String to = zteSendTo;
+  const String text = zteSendText;
+  const unsigned long startedAt = millis();
+  Serial.printf("event=zte_send_begin to=%s units=%u epoch=%ld heap=%u\n", to.c_str(),
+                static_cast<unsigned>(zteSmsUtf16Units(text.c_str())),
+                static_cast<long>(time(nullptr)), static_cast<unsigned>(ESP.getFreeHeap()));
+
+  char* scratch = static_cast<char*>(malloc(kZteScratchSize));
+  NetworkZteChannel channel;
+  ZteModem modem(channel, scratch, scratch == nullptr ? 0 : kZteScratchSize);
+  ZteResult result = scratch == nullptr ? ZteResult::kProtocolError
+                                        : modem.login(storedZteConfig.host.c_str(),
+                                                      storedZteConfig.password.c_str());
+  bool confirmed = false;
+  bool statusFailed = false;
+  if (result == ZteResult::kSuccess) {
+    result = modem.sendSms(to.c_str(), text.c_str());
+  }
+  if (result == ZteResult::kSuccess) {
+    for (int attempt = 0; attempt < kZteSendStatusAttempts; ++attempt) {
+      vTaskDelay(pdMS_TO_TICKS(kZteSendStatusDelayMs));
+      ZteSendStatus status;
+      const ZteResult pollResult = modem.readSendStatus(status);
+      if (pollResult != ZteResult::kSuccess) {
+        result = pollResult;  // Transport failed mid-send; the SMS may still deliver.
+        break;
+      }
+      if (status == ZteSendStatus::kDone) {
+        confirmed = true;
+        break;
+      }
+      if (status == ZteSendStatus::kFailed) {
+        statusFailed = true;
+        break;
+      }
+    }
+  }
+  free(scratch);
+
+  String message;
+  if (scratch == nullptr) {
+    message = F("Send failed: out of memory.");
+  } else if (confirmed) {
+    message = F("SMS sent to ");
+    message += to;
+    message += '.';
+  } else if (statusFailed) {
+    result = ZteResult::kProtocolError;
+    message = F("The modem accepted the message but reported the send as failed ");
+    message += F("(check the number and the SMS center). [stage=send_status]");
+  } else if (result == ZteResult::kSuccess) {
+    // Accepted, but the bounded status wait ended without a terminal sample.
+    message = F("The modem accepted the message but its status stayed in progress; ");
+    message += F("it may still be delivered. [stage=send_status]");
+  } else if (result == ZteResult::kSendRejected) {
+    message = F("The modem rejected the message. Modem reply: ");
+    message += zteReplySnippet(modem.lastBody());
+  } else {
+    message = F("Send failed [stage=");
+    message += modem.failedStage();
+    message += ']';
+  }
+  zteSendMessage = message;
+  zteSendSuccess = confirmed;
+  if (!confirmed) {
+    // Byte-level diagnosis: the exact request the modem rejected (holds no
+    // credentials; AD is an anti-CSRF token, the number/text are the
+    // operator's own message).
+    Serial.printf("event=zte_send_form form=%s\n", modem.lastSendForm());
+  }
+  const String replyDetail =
+      result == ZteResult::kSendRejected ? zteReplySnippet(modem.lastBody()) : String();
+  Serial.printf(
+      "event=zte_send_complete result=%s confirmed=%s stage=%s elapsed_ms=%lu detail=%s\n",
+      zteResultName(result), confirmed ? "true" : "false", modem.failedStage(),
+      millis() - startedAt, replyDetail.c_str());
+  zteSendRunning = false;
+  zteSendDone = true;  // Published last: readers treat done as data-ready.
+  vTaskDelete(nullptr);
+}
+// #endregion FUNC_zteSendTask
+
+// #region FUNC_handleZteSendStart
+// PURPOSE: Starts one outgoing SMS on a dedicated task so loop() and the
+// HTTP server stay responsive during the modem dialog.
+void handleZteSendStart() {
+  Serial.println("event=http_zte_send_submit");
+  if (!requireAuthentication()) {
+    return;
+  }
+  if (zteSendRunning) {
+    sendJsonError(409, F("An SMS send is already in progress."));
+    return;
+  }
+  if (zteTestRunning) {
+    sendJsonError(409, F("A connection test is in progress; try again in a few seconds."));
+    return;
+  }
+  if (ztePollCycleActive) {
+    sendJsonError(409, F("A poll cycle is in progress; try again in a few seconds."));
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    sendJsonError(400, F("The device is not connected to a Wi-Fi network."));
+    return;
+  }
+  if (!zteConfigLoaded || storedZteConfig.host.length() == 0 ||
+      storedZteConfig.password.length() == 0) {
+    sendJsonError(400, F("Save the ZTE modem settings (host and password) before sending."));
+    return;
+  }
+  // SEND_SMS validates sms_time; without an SNTP fix the modem rejects it.
+  if (time(nullptr) < 1577836800) {  // Before 2020-01-01: clock not synced yet.
+    sendJsonError(503, F("Waiting for the internet time sync; try again in a minute."));
+    return;
+  }
+  String to;
+  String text;
+  String error;
+  if (!readZteSendForm(to, text, error)) {
+    sendJsonError(400, error);
+    return;
+  }
+  zteSendTo = to;
+  zteSendText = text;
+  zteSendDone = false;
+  zteSendMessage = "";
+  zteSendRunning = true;
+  if (xTaskCreatePinnedToCore(zteSendTask, "zte_send", 16384, nullptr, 1, nullptr, 0) != pdPASS) {
+    zteSendRunning = false;
+    Serial.println("event=zte_send_failed reason=task_create");
+    sendJsonError(503, F("The send could not be started. Try again."));
+    return;
+  }
+  sendJson(server, 200, renderMessageJson(F("Send started.")));
+}
+// #endregion FUNC_handleZteSendStart
+
+// #region FUNC_handleZteSendStatus
+// PURPOSE: Reports asynchronous send progress to the polling browser UI.
+void handleZteSendStatus() {
+  if (!requireAuthentication()) {
+    return;
+  }
+  WebAsyncOp op;
+  op.running = zteSendRunning;
+  op.done = zteSendDone;
+  if (zteSendDone) {
+    op.result = zteSendSuccess ? "success" : "failed";
+    op.message = zteSendMessage;
+  }
+  sendJson(server, 200, renderAsyncOpJson(op));
+}
+// #endregion FUNC_handleZteSendStatus
 
 // #region FUNC_handleSmtpConfigRequest
 // PURPOSE: Returns the stored SMTP profile (without the password) for form
@@ -1320,6 +1579,8 @@ void configureWebServer() {
   server.on("/api/zte", HTTP_POST, handleZteSaveSubmission);
   server.on("/api/zte/test", HTTP_POST, handleZteTestStart);
   server.on("/api/zte/test", HTTP_GET, handleZteTestStatus);
+  server.on("/api/zte/send", HTTP_POST, handleZteSendStart);
+  server.on("/api/zte/send", HTTP_GET, handleZteSendStatus);
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.printf("event=http_server_started port=%u\n", kHttpPort);

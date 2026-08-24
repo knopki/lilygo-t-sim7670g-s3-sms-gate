@@ -1,18 +1,19 @@
 // #region MODULE_CONTRACT
 // PURPOSE: Runs the proven ZTE MF79RU HiLink goform dialog (LOGIN, inbox
-// paging, DELETE_SMS with the AD token; see ADR-0003) over an abstract
-// channel so the protocol logic stays host-testable.
+// paging, DELETE_SMS and SEND_SMS with the AD token; see ADR-0003) over an
+// abstract channel so the protocol logic stays host-testable.
 // SCOPE:
 // - One HTTP/1.1 request per command with Connection: close, the mandatory
 // Referer header, the stok session cookie, a lenient fixed-shape JSON
-// scanner, UCS-2-hex SMS decoding, modem timestamp formatting, one
-// stale-session relogin per command, bounded inbox paging with order
-// auto-detection, and delete verification.
-// - NOT: Sockets, TLS, NVS persistence, SMTP delivery, and HTTP route
-// handling.
+// scanner, UCS-2-hex SMS decoding and encoding, modem timestamp formatting,
+// one stale-session relogin per command, bounded inbox paging with order
+// auto-detection, delete verification, and one send-status query sample.
+// - NOT: Sockets, TLS, NVS persistence, SMTP delivery, send-status polling
+// pacing, and HTTP route handling.
 // INVARIANTS: Credentials are never copied into error paths or stage names;
 // the channel is stopped before every return; the modem inbox remains the
-// only delivery state (one oldest incoming SMS per findOldestIncoming).
+// only delivery state (one oldest incoming SMS per findOldestIncoming);
+// outgoing message bodies never exceed the modem web UI's own send limit.
 // DEPENDENCIES: Pure C++ (zte_record.h field limits, codec.h base64/MD5);
 // the device channel lives in zte_transport.h.
 // #endregion MODULE_CONTRACT
@@ -32,6 +33,11 @@ constexpr size_t kMaxZteSmsTextBytes = 4096;
 constexpr uint16_t kZteHttpPort = 80;
 constexpr size_t kZtePageSize = 5;
 constexpr uint8_t kZteMaxPages = 21;  // 21 x 5 covers the 100-message device inbox
+// Send limit of the modem's own web UI for UNICODE messages: five
+// concatenated UCS-2 parts of 70 code units, minus the part headers.
+constexpr size_t kMaxZteSmsSendUnits = 335;
+// Returned by zteSmsUtf16Units for malformed UTF-8 input.
+constexpr size_t kZteSmsInvalidUnits = SIZE_MAX;
 
 // #region CLASS_ZteChannel
 // PURPOSE: Abstracts the byte transport so tests can script a modem and the
@@ -56,7 +62,7 @@ class ZteChannel {
 
 // #region ENUM_ZteResult
 // PURPOSE: Gives the caller one stable outcome per failure class for Serial
-// events and the web test route.
+// events and the web send/test routes.
 enum class ZteResult {
   kSuccess,
   kConnectFailed,
@@ -64,6 +70,7 @@ enum class ZteResult {
   kLoginRejected,
   kStaleSession,
   kProtocolError,
+  kSendRejected,
 };
 // #endregion ENUM_ZteResult
 
@@ -83,6 +90,11 @@ struct ZteSms {
 
 bool formatZteDate(const char* raw, char* out, size_t outSize);
 
+// Counts the UTF-16 code units a UTF-8 text occupies once encoded as the
+// modem's UCS-2-hex MessageBody; returns kZteSmsInvalidUnits on malformed
+// UTF-8 so both the web form and sendSms share one length rule.
+size_t zteSmsUtf16Units(const char* utf8);
+
 // #region CLASS_ZteInboxStatus
 // PURPOSE: Reports the device-storage occupancy the test route shows the
 // operator before polling is enabled.
@@ -91,6 +103,13 @@ struct ZteInboxStatus {
   uint16_t total;
 };
 // #endregion CLASS_ZteInboxStatus
+
+// #region ENUM_ZteSendStatus
+// PURPOSE: Reports one sampled outcome of the modem's asynchronous send
+// command (sms_cmd_status_info, sms_cmd=4): 1 keeps running, 3 completed,
+// 2 failed; anything else counts as still in progress.
+enum class ZteSendStatus { kInProgress, kDone, kFailed };
+// #endregion ENUM_ZteSendStatus
 
 // #region CLASS_ZteModem
 // PURPOSE: Owns one modem session (login, cookie, and firmware version) and
@@ -115,9 +134,28 @@ class ZteModem {
   // Reads sms_capacity_info for the device storage.
   ZteResult readInboxStatus(ZteInboxStatus& out);
 
+  // Sends one SMS (SEND_SMS with a fresh AD token, UCS-2-hex body, always
+  // UNICODE encoding); success means the modem accepted the command, and
+  // the caller confirms delivery with readSendStatus samples.
+  ZteResult sendSms(const char* number, const char* textUtf8);
+
+  // Reads one send-command status sample in the current session.
+  ZteResult readSendStatus(ZteSendStatus& out);
+
+  // Exact form body of the last SEND_SMS attempt ("" before the first
+  // send), so callers can log the request bytes for byte-level protocol
+  // diagnosis against a known-good browser capture.
+  const char* lastSendForm() const { return lastSendForm_; }
+
   const char* waVersion() const { return waVersion_; }
   // Stage at which the last operation failed ("" on success); stable token.
   const char* failedStage() const { return failedStage_; }
+  // Read-only view of the last response body (the scratch buffer; possibly
+  // stale after later requests), so callers can log what the modem replied.
+  const char* lastBody() const { return scratch_ != nullptr ? scratch_ : ""; }
+  // Length of the last response body (0 means the modem answered 200 with
+  // an empty body — its rejection signature for malformed SEND_SMS forms).
+  size_t lastBodyLength() const { return bodyLength_; }
 
  private:
   ZteResult loginSession();
@@ -127,6 +165,7 @@ class ZteModem {
   ZteResult readResponse();
   ZteResult requestVersions();
   ZteResult fetchRd(char* rd, size_t rdSize);
+  ZteResult fetchAd(char* ad, size_t adSize);
   ZteResult fetchSmsPage(unsigned int page);
   ZteResult scanOldest(ZteSms& out, bool& found);
   ZteResult verifyAbsent(const char* targetId);
@@ -143,5 +182,6 @@ class ZteModem {
   char waVersion_[96];
   size_t bodyLength_ = 0;
   const char* failedStage_ = "";
+  char lastSendForm_[1792] = "";
 };
 // #endregion CLASS_ZteModem
