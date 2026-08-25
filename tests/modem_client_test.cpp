@@ -518,20 +518,83 @@ void testReadDeleteSend() {
   ch2.addScript("AT+CMGD=1", {"OK"});
   ModemClient client2(ch2, scratch, sizeof(scratch));
   assert(client2.deleteSms("1") == ModemResult::kSuccess);
-  // send validation (no AT)
+  // send validation (no AT) — shared 335-unit limit via sms_validate.h
   FakeModemChannel ch3;
   ModemClient client3(ch3, scratch, sizeof(scratch));
-  assert(client3.sendSms("+79990000000", "Hello") == ModemResult::kProtocolError);
-  assert(strcmp(client3.failedStage(), "not_implemented") == 0);
   assert(client3.sendSms("", "Hello") == ModemResult::kProtocolError);
   assert(strcmp(client3.failedStage(), "send_input") == 0);
   assert(client3.sendSms("+7999", "") == ModemResult::kProtocolError);
+  assert(strcmp(client3.failedStage(), "send_input") == 0);
   std::string tooLong(336, 'A');
   assert(client3.sendSms("+7999", tooLong.c_str()) == ModemResult::kProtocolError);
+  assert(strcmp(client3.failedStage(), "send_input") == 0);
   assert(client3.sendSms("+7999", "\xFF") == ModemResult::kProtocolError);
+  assert(strcmp(client3.failedStage(), "send_input") == 0);
+  assert(client3.sendSms("++7999", "Hello") == ModemResult::kProtocolError);
+  assert(strcmp(client3.failedStage(), "send_input") == 0);
   puts("testReadDeleteSend ok");
 }
 // #endregion FUNC_testFindOldestUnreadScenarios
+
+// #region FUNC_testModemSend
+void testModemSendUcs2() {
+  FakeModemChannel ch;
+  char scratch[512];
+  // Number +79990000000 -> 002B00370039003900390030003000300030003000300030, "Hello" -> 00480065006C006C006F
+  ch.addScript("AT+CMGF=1", {"OK"});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
+  ch.addScript("AT+CMGS=\"002B00370039003900390030003000300030003000300030\"", {">", "+CMGS: 123", "OK"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  assert(client.sendSms("+79990000000", "Hello") == ModemResult::kSuccess);
+  puts("testModemSendUcs2 ok");
+}
+void testModemSendCyrillic() {
+  FakeModemChannel ch;
+  char scratch[1024];
+  ch.addScript("AT+CMGF=1", {"OK"});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
+  // "Привет" -> 041F04400438043204350442
+  ch.addScript("AT+CMGS=\"002B00370039003900390030003000300030003000300030\"", {">", "+CMGS: 45", "OK"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  assert(client.sendSms("+79990000000", "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82") == ModemResult::kSuccess);
+  puts("testModemSendCyrillic ok");
+}
+void testModemSendPromptTimeout() {
+  FakeModemChannel ch;
+  char scratch[512];
+  ch.addScript("AT+CMGF=1", {"OK"});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
+  // No '>' prompt -> timeout (empty script returns -1)
+  ch.addScript("AT+CMGS=\"002B00370039003900390030003000300030003000300030\"", {});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  assert(client.sendSms("+79990000000", "Hi") == ModemResult::kTimeout);
+  assert(strcmp(client.failedStage(), "cmgs_prompt") == 0);
+  puts("testModemSendPromptTimeout ok");
+}
+void testModemSendCmsError() {
+  FakeModemChannel ch;
+  char scratch[512];
+  ch.addScript("AT+CMGF=1", {"OK"});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
+  ch.addScript("AT+CMGS=\"002B00370039003900390030003000300030003000300030\"", {">", "+CMS ERROR: 500", "ERROR"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  assert(client.sendSms("+79990000000", "Hi") == ModemResult::kSendRejected);
+  assert(strcmp(client.failedStage(), "cms_error") == 0);
+  puts("testModemSendCmsError ok");
+}
+void testModemSendProtocolError() {
+  FakeModemChannel ch;
+  char scratch[512];
+  ch.addScript("AT+CMGF=1", {"OK"});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
+  // OK without +CMGS -> protocol error
+  ch.addScript("AT+CMGS=\"002B00370039003900390030003000300030003000300030\"", {">", "OK"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  assert(client.sendSms("+79990000000", "Hi") == ModemResult::kProtocolError);
+  assert(strcmp(client.failedStage(), "protocol") == 0);
+  puts("testModemSendProtocolError ok");
+}
+// #endregion FUNC_testModemSend
 
 // #region FUNC_testInitSequence
 void testInitSuccess() {
@@ -607,6 +670,11 @@ int main() {
   testFindOldestUnreadOrdered();
   testFindOldestUnreadEmptyAndError();
   testReadDeleteSend();
+  testModemSendUcs2();
+  testModemSendCyrillic();
+  testModemSendPromptTimeout();
+  testModemSendCmsError();
+  testModemSendProtocolError();
   testInitSuccess();
   testInitNotPresent();
   testDeleteCmsError();

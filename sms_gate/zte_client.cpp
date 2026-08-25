@@ -364,83 +364,6 @@ bool isHexDigit(char ch) {
 }
 // #endregion FUNC_isHexDigit
 
-// #region FUNC_decodeUtf8Codepoint
-// PURPOSE: Decodes one codepoint at p (rejecting overlong forms, surrogates,
-// and truncated sequences) and advances the cursor past it.
-bool decodeUtf8Codepoint(const char*& p, uint32_t& codepoint) {
-  const unsigned char lead = static_cast<unsigned char>(*p++);
-  if (lead < 0x80) {
-    codepoint = lead;
-    return true;
-  }
-  size_t continuationCount;
-  uint32_t minimum;
-  if ((lead & 0xE0) == 0xC0) {
-    continuationCount = 1;
-    minimum = 0x80;
-    codepoint = lead & 0x1F;
-  } else if ((lead & 0xF0) == 0xE0) {
-    continuationCount = 2;
-    minimum = 0x800;
-    codepoint = lead & 0x0F;
-  } else if ((lead & 0xF8) == 0xF0) {
-    continuationCount = 3;
-    minimum = 0x10000;
-    codepoint = lead & 0x07;
-  } else {
-    return false;
-  }
-  for (size_t index = 0; index < continuationCount; ++index) {
-    const unsigned char byte = static_cast<unsigned char>(p[index]);
-    if ((byte & 0xC0) != 0x80) {
-      return false;
-    }
-    codepoint = (codepoint << 6) | (byte & 0x3F);
-  }
-  p += continuationCount;
-  if (codepoint < minimum || codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
-    return false;
-  }
-  return true;
-}
-// #endregion FUNC_decodeUtf8Codepoint
-
-// #region FUNC_appendUcs2HexUnit
-// PURPOSE: Writes one UTF-16 code unit as four uppercase hex digits (the
-// modem's MessageBody content encoding), truncating when the buffer is full.
-void appendUcs2HexUnit(uint16_t unit, char* out, size_t outSize, size_t& used) {
-  static const char kHex[] = "0123456789ABCDEF";
-  for (int shift = 12; shift >= 0 && used + 1 < outSize; shift -= 4) {
-    out[used++] = kHex[(unit >> shift) & 0x0F];
-  }
-}
-// #endregion FUNC_appendUcs2HexUnit
-
-// #region FUNC_encodeUcs2Hex
-// PURPOSE: Encodes validated UTF-8 text as the UCS-2-hex MessageBody
-// (surrogate pairs for astral codepoints); returns the hex length.
-size_t encodeUcs2Hex(const char* utf8, char* out, size_t outSize) {
-  size_t used = 0;
-  const char* p = utf8;
-  while (*p != '\0' && used + 1 < outSize) {
-    uint32_t codepoint;
-    if (!decodeUtf8Codepoint(p, codepoint)) {
-      out[used] = '\0';
-      return used;
-    }
-    if (codepoint <= 0xFFFF) {
-      appendUcs2HexUnit(static_cast<uint16_t>(codepoint), out, outSize, used);
-    } else {
-      const uint32_t offset = codepoint - 0x10000;
-      appendUcs2HexUnit(static_cast<uint16_t>(0xD800 + (offset >> 10)), out, outSize, used);
-      appendUcs2HexUnit(static_cast<uint16_t>(0xDC00 + (offset & 0x3FF)), out, outSize, used);
-    }
-  }
-  out[used] = '\0';
-  return used;
-}
-// #endregion FUNC_encodeUcs2Hex
-
 // #region FUNC_isUnreservedFormByte
 // PURPOSE: Recognizes the characters application/x-www-form-urlencoded may
 // carry literally; every other byte (including '+' and ';') is percent-
@@ -1433,7 +1356,7 @@ ZteResult ZteModem::sendSms(const char* number, const char* textUtf8) {
   }
 
   char hexBody[(kMaxZteSmsSendUnits * 4) + 1];
-  encodeUcs2Hex(textUtf8, hexBody, sizeof(hexBody));
+  codec::encodeUcs2Hex(textUtf8, hexBody, sizeof(hexBody));
   // Mirror the modem's own web UI: printable-ASCII text transmits as
   // GSM7_default, anything else as UNICODE (the browser's proven request
   // carries the same UTF-16-hex body under both labels).

@@ -332,4 +332,66 @@ inline size_t decodeUcs2HexView(const char* hex, char* out, size_t outSize) {
 }
 // #endregion FUNC_decodeUcs2HexView
 
+// #region FUNC_encodeUcs2Hex
+// PURPOSE: Encodes validated UTF-8 text as UCS2 hex (4 hex per UTF-16 code
+// unit, surrogate pairs for astral codepoints), truncating at outSize.
+inline void appendUcs2HexUnitInternal(uint16_t unit, char* out, size_t outSize, size_t& used) {
+  static const char kHex[] = "0123456789ABCDEF";
+  for (int shift = 12; shift >= 0 && used + 1 < outSize; shift -= 4)
+    out[used++] = kHex[(unit >> shift) & 0x0F];
+}
+inline bool decodeUtf8OneForEncode(const char*& p, uint32_t& out) {
+  const unsigned char lead = static_cast<unsigned char>(*p++);
+  if (lead < 0x80) {
+    out = lead;
+    return true;
+  }
+  size_t cont = 0;
+  uint32_t min = 0;
+  if ((lead & 0xE0) == 0xC0) {
+    cont = 1;
+    min = 0x80;
+    out = lead & 0x1F;
+  } else if ((lead & 0xF0) == 0xE0) {
+    cont = 2;
+    min = 0x800;
+    out = lead & 0x0F;
+  } else if ((lead & 0xF8) == 0xF0) {
+    cont = 3;
+    min = 0x10000;
+    out = lead & 0x07;
+  } else
+    return false;
+  for (size_t i = 0; i < cont; ++i) {
+    const unsigned char b = static_cast<unsigned char>(p[i]);
+    if ((b & 0xC0) != 0x80) return false;
+    out = (out << 6) | (b & 0x3F);
+  }
+  p += cont;
+  if (out < min || out > 0x10FFFF || (out >= 0xD800 && out <= 0xDFFF)) return false;
+  return true;
+}
+inline size_t encodeUcs2Hex(const char* utf8, char* out, size_t outSize) {
+  if (utf8 == nullptr || out == nullptr || outSize == 0) return 0;
+  size_t used = 0;
+  const char* p = utf8;
+  while (*p != '\0' && used + 1 < outSize) {
+    uint32_t cp = 0;
+    if (!decodeUtf8OneForEncode(p, cp)) {
+      out[used] = '\0';
+      return used;
+    }
+    if (cp <= 0xFFFF)
+      appendUcs2HexUnitInternal(static_cast<uint16_t>(cp), out, outSize, used);
+    else {
+      const uint32_t off = cp - 0x10000;
+      appendUcs2HexUnitInternal(static_cast<uint16_t>(0xD800 + (off >> 10)), out, outSize, used);
+      appendUcs2HexUnitInternal(static_cast<uint16_t>(0xDC00 + (off & 0x3FF)), out, outSize, used);
+    }
+  }
+  out[used] = '\0';
+  return used;
+}
+// #endregion FUNC_encodeUcs2Hex
+
 }  // namespace codec

@@ -1,20 +1,23 @@
 // #region MODULE_CONTRACT
 // PURPOSE: Host-testable AT dialog for the onboard SIM7670G modem (see
-// ADR-0004 and docs/research/modem-sim7670g.md). Owns status polling, and
-// the future SMS lifecycle (receive/send/delete over AT+CMGL/CMGR/CMGD/CMGS),
-// over an abstract ModemChannel so logic stays testable without hardware.
+// ADR-0004 and docs/research/modem-sim7670g.md). Owns status polling and
+// the SMS lifecycle (receive/delete over AT+CMGL/CMGR/CMGD and send over
+// AT+CMGS/CSCS/CMGF), over an abstract ModemChannel so logic stays testable
+// without hardware.
 // SCOPE:
 // - Status init and poll (AT, ATE0, CMEE, CPIN, CSQ, CESQ, CEREG, CREG,
 //   CGATT, COPS, CPMS, CCLK, CGMR/GSN), line parsing, stable ModemResult and
-//   failedStage, future ModemSms lifecycle (CMGL/CMGR/CMGD/CMGS/CNMI).
+//   failedStage, ModemSms lifecycle (CMGL/CMGR/CMGD/CMGS/CNMI) including
+//   UCS2-hex send (AT+CMGS with ">" prompt and +CMGS/+CMS ERROR handling).
 // - NOT: HardwareSerial ownership and pin control (modem_transport.h),
 //   SMTP delivery, HTTP routes, NVS persistence.
 // INVARIANTS: Every public method leaves the channel in a stopped/idle state
 // on return; credentials never appear in stage names; SMS are deleted only
-// after SMTP acceptance (future step); parsing tolerates 99/255 unknown
-// sentinels and +CMS/+CME ERROR; all public entities have GRACE contracts.
-// DEPENDENCIES: Pure C++ (codec.h for printable checks); device channel
-// lives in modem_transport.h; tests use FakeModemChannel.
+// after SMTP acceptance; parsing tolerates 99/255 unknown sentinels and
+// +CMS/+CME ERROR; all public entities have GRACE contracts.
+// DEPENDENCIES: Pure C++ (codec.h for UCS2 encode/decode, sms_validate.h for
+// 335-unit limit); device channel lives in modem_transport.h; tests use
+// FakeModemChannel.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -110,10 +113,18 @@ class ModemClient {
   ModemResult findOldestUnread(ModemSms& out, bool& found);
   ModemResult readSms(const char* id, ModemSms& out);
   ModemResult deleteSms(const char* id);
+  // #region METHOD_ModemClient_sendSms
+  // PURPOSE: Sends one SMS via AT+CMGS in UCS2 (CMGF=1, CSCS="UCS2");
+  // success only on +CMGS:<mr> followed by OK; CMS ERROR maps to
+  // kSendRejected, missing +CMGS to kProtocolError.
+  // REQUIRES: isValidSmsRecipient(number) && 1<=smsUtf16Units(textUtf8)<=335 && valid UTF-8
+  // ENSURES: channel idle, failedStage stable, lastReply in scratch.
   ModemResult sendSms(const char* number, const char* textUtf8);
+  // #endregion METHOD_ModemClient_sendSms
 
   const char* failedStage() const { return failedStage_; }
   const char* lastReply() const { return scratch_ ? scratch_ : ""; }
+  const char* lastSendHex() const { return lastSendHex_; }
 
  private:
   ModemResult sendCommand(const char* cmd, unsigned long timeoutMs);
@@ -125,6 +136,7 @@ class ModemClient {
   size_t scratchSize_;
   const char* failedStage_ = "";
   size_t replyLen_ = 0;
+  char lastSendHex_[1792] = "";
 };
 // #endregion CLASS_ModemClient
 

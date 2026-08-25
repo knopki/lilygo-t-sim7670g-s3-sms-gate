@@ -949,9 +949,8 @@ ModemResult ModemClient::deleteSms(const char* id) {
 // #endregion METHOD_ModemClient_deleteSms
 // #region METHOD_ModemClient_sendSms
 // PURPOSE: Validates recipient and UTF-8 text under the shared 335-unit
-// limit (no AT yet); keeps the same failedStage contract as
-// ZteModem::sendSms so the future POST /api/sms/send can dispatch
-// without storage changes. AT send is intentionally not implemented yet.
+// limit and performs the UCS2 AT send: CMGF=1, CSCS="UCS2", CMGS with
+// ">" prompt, body + 0x1A, then +CMGS/+CMS ERROR/OK handling.
 ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
   if (number == nullptr || textUtf8 == nullptr) {
     fail("send_input");
@@ -966,7 +965,120 @@ ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
     fail("send_input");
     return ModemResult::kProtocolError;
   }
-  fail("not_implemented");
-  return ModemResult::kProtocolError;
+  lastSendHex_[0] = '\0';
+  channel_.purge();
+  // Encode number and body as UCS2 hex (DRY via codec::encodeUcs2Hex).
+  char hexNumber[128] = "";
+  char hexBody[1400] = "";
+  codec::encodeUcs2Hex(number, hexNumber, sizeof(hexNumber));
+  codec::encodeUcs2Hex(textUtf8, hexBody, sizeof(hexBody));
+  snprintf(lastSendHex_, sizeof(lastSendHex_), "%s:%s", hexNumber, hexBody);
+
+  // Step 1: AT+CMGF=1
+  if (sendCommand("AT+CMGF=1", 3000) != ModemResult::kSuccess) {
+    fail("cmgf");
+    return ModemResult::kProtocolError;
+  }
+  ModemResult r = readResponse();
+  if (r != ModemResult::kSuccess) {
+    fail("cmgf");
+    return r;
+  }
+  // Step 2: AT+CSCS="UCS2"
+  if (sendCommand("AT+CSCS=\"UCS2\"", 3000) != ModemResult::kSuccess) {
+    fail("cscs");
+    return ModemResult::kProtocolError;
+  }
+  r = readResponse();
+  if (r != ModemResult::kSuccess) {
+    fail("cscs");
+    return r;
+  }
+  // Step 3: AT+CMGS="<hexNumber>" -> await ">"
+  char cmd[160] = "";
+  snprintf(cmd, sizeof(cmd), "AT+CMGS=\"%s\"", hexNumber);
+  channel_.purge();
+  size_t cmdLen = strlen(cmd);
+  char withCr[192];
+  if (cmdLen + 2 >= sizeof(withCr)) {
+    fail("cmgs_prompt");
+    return ModemResult::kProtocolError;
+  }
+  memcpy(withCr, cmd, cmdLen);
+  withCr[cmdLen++] = '\r';
+  withCr[cmdLen++] = '\n';
+  if (!channel_.write(withCr, cmdLen)) {
+    fail("cmgs_prompt");
+    return ModemResult::kTimeout;
+  }
+  char line[192] = "";
+  bool promptSeen = false;
+  for (int attempt = 0; attempt < 6; ++attempt) {
+    int len = channel_.readLine(line, sizeof(line), 1000);
+    if (len < 0) {
+      // Timeout waiting for prompt
+      fail("cmgs_prompt");
+      return ModemResult::kTimeout;
+    }
+    if (len == 0) continue;
+    if (strchr(line, '>') != nullptr) {
+      promptSeen = true;
+      break;
+    }
+    if (strstr(line, "+CMS ERROR") != nullptr || strstr(line, "+CME ERROR") != nullptr ||
+        strcmp(line, "ERROR") == 0) {
+      if (scratch_ && scratchSize_ > 0) snprintf(scratch_, scratchSize_, "%s", line);
+      fail("cms_error");
+      return ModemResult::kSendRejected;
+    }
+    // Ignore echo and other URCs, keep waiting
+  }
+  if (!promptSeen) {
+    fail("cmgs_prompt");
+    return ModemResult::kTimeout;
+  }
+  // Step 4: send body + Ctrl-Z
+  if (!channel_.write(hexBody, strlen(hexBody))) {
+    fail("cms_error");
+    return ModemResult::kTimeout;
+  }
+  const char ctrlZ = 0x1A;
+  if (!channel_.write(&ctrlZ, 1)) {
+    fail("cms_error");
+    return ModemResult::kTimeout;
+  }
+  // Step 5: wait for +CMGS: and OK (30-60s)
+  bool haveCmgs = false;
+  for (int attempt = 0; attempt < 60; ++attempt) {
+    int len = channel_.readLine(line, sizeof(line), 1000);
+    if (len < 0) {
+      fail("timeout");
+      return ModemResult::kTimeout;
+    }
+    if (len == 0) continue;
+    if (scratch_ && scratchSize_ > 0) {
+      snprintf(scratch_, scratchSize_, "%s", line);
+      replyLen_ = strlen(scratch_);
+    }
+    if (strncmp(line, "+CMGS:", 6) == 0) {
+      haveCmgs = true;
+      continue;
+    }
+    if (strcmp(line, "OK") == 0) {
+      if (haveCmgs) return ModemResult::kSuccess;
+      fail("protocol");
+      return ModemResult::kProtocolError;
+    }
+    if (strstr(line, "+CMS ERROR") != nullptr || strstr(line, "+CME ERROR") != nullptr) {
+      fail("cms_error");
+      return ModemResult::kSendRejected;
+    }
+    if (strcmp(line, "ERROR") == 0) {
+      fail("cms_error");
+      return ModemResult::kSendRejected;
+    }
+  }
+  fail("timeout");
+  return ModemResult::kTimeout;
 }
 // #endregion METHOD_ModemClient_sendSms

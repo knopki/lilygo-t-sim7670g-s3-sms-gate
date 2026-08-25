@@ -406,11 +406,11 @@
         <button type="button" id="zte-test-button">Test connection</button>
       </form>
       <p id="zte-test-status" class="hint"></p>
-      <h2>Send SMS</h2>
-      <p class="hint">Sends through the configured ZTE modem. Up to 335 characters; the recipient is a phone number.</p>
-      <form id="sms-send-form">
+      <h2>Send SMS via ZTE MF79RU</h2>
+      <p class="hint">Sends through the ZTE modem. Up to 335 characters; the recipient is a phone number.</p>
+      <form id="zte-send-form">
         <fieldset>
-          <legend>New message</legend>
+          <legend>ZTE message</legend>
           <label>To (phone number)
             <input required maxlength="20" name="to" inputmode="tel" placeholder="+79990000000" autocomplete="off">
           </label>
@@ -418,9 +418,24 @@
             <textarea required maxlength="335" name="text" rows="4"></textarea>
           </label>
         </fieldset>
-        <button type="submit">Send SMS</button>
+        <button type="submit">Send via ZTE</button>
       </form>
-      <p id="sms-send-status" class="hint"></p>
+      <p id="zte-send-status" class="hint"></p>
+      <h2>Send SMS via Internal modem (SIM7670G)</h2>
+      <p class="hint">Sends through the internal SIM7670G via AT+CMGS/UCS2. Up to 335 characters.</p>
+      <form id="modem-send-form">
+        <fieldset>
+          <legend>Internal modem message</legend>
+          <label>To (phone number)
+            <input required maxlength="20" name="to" inputmode="tel" placeholder="+79990000000" autocomplete="off">
+          </label>
+          <label>Message
+            <textarea required maxlength="335" name="text" rows="4"></textarea>
+          </label>
+        </fieldset>
+        <button type="submit">Send via SIM7670G</button>
+      </form>
+      <p id="modem-send-status" class="hint"></p>
       <h2>Change administrator password</h2>
       <form id="password-form">
         <label>Current password
@@ -472,8 +487,11 @@
 			.getElementById("modem-source-form")
 			.addEventListener("submit", submitModemSourceSave);
 		document
-			.getElementById("sms-send-form")
-			.addEventListener("submit", submitSmsSend);
+			.getElementById("zte-send-form")
+			.addEventListener("submit", submitZteSend);
+		document
+			.getElementById("modem-send-form")
+			.addEventListener("submit", submitModemSend);
 		document
 			.getElementById("password-form")
 			.addEventListener("submit", submitPasswordChange);
@@ -981,19 +999,24 @@
 		};
 	}
 
-	function smsSendFields(form) {
+	function zteSendFields(form) {
 		return {
 			to: form.elements.to.value.trim(),
 			text: form.elements.text.value,
 		};
 	}
-
-	async function submitSmsSend(event) {
+	function modemSendFields(form) {
+		return {
+			to: form.elements.to.value.trim(),
+			text: form.elements.text.value,
+		};
+	}
+	// #region FUNC_submitZteSend
+	// PURPOSE: Validates and sends an SMS via the ZTE modem (separate form).
+	async function submitZteSend(event) {
 		event.preventDefault();
-		if (busy) {
-			return;
-		}
-		const fields = smsSendFields(event.target);
+		if (busy) return;
+		const fields = zteSendFields(event.target);
 		if (!/^\+?\d{3,20}$/.test(fields.to)) {
 			setBanner(
 				"error",
@@ -1009,13 +1032,11 @@
 			startPath: "/api/zte/send",
 			statusPath: "/api/zte/send",
 			fields: fields,
-			statusEl: document.getElementById("sms-send-status"),
-			busyMessage: "Sending the SMS…",
+			statusEl: document.getElementById("zte-send-status"),
+			busyMessage: "Sending the SMS via ZTE…",
 			onDone: (succeeded) => {
-				if (!succeeded) {
-					return;
-				}
-				const form = document.getElementById("sms-send-form");
+				if (!succeeded) return;
+				const form = document.getElementById("zte-send-form");
 				if (form) {
 					form.elements.to.value = "";
 					form.elements.text.value = "";
@@ -1023,6 +1044,41 @@
 			},
 		});
 	}
+	// #endregion FUNC_submitZteSend
+	// #region FUNC_submitModemSend
+	// PURPOSE: Validates and sends an SMS via the internal SIM7670G (separate form).
+	async function submitModemSend(event) {
+		event.preventDefault();
+		if (busy) return;
+		const fields = modemSendFields(event.target);
+		if (!/^\+?\d{3,20}$/.test(fields.to)) {
+			setBanner(
+				"error",
+				"Enter a phone number of 3–20 digits, optionally starting with +.",
+			);
+			return;
+		}
+		if (fields.text.length === 0) {
+			setBanner("error", "Enter the message text.");
+			return;
+		}
+		await startAsyncTest({
+			startPath: "/api/modem/send",
+			statusPath: "/api/modem/send",
+			fields: fields,
+			statusEl: document.getElementById("modem-send-status"),
+			busyMessage: "Sending the SMS via SIM7670G…",
+			onDone: (succeeded) => {
+				if (!succeeded) return;
+				const form = document.getElementById("modem-send-form");
+				if (form) {
+					form.elements.to.value = "";
+					form.elements.text.value = "";
+				}
+			},
+		});
+	}
+	// #endregion FUNC_submitModemSend
 
 	function startStatusTimer() {
 		stopStatusTimer();

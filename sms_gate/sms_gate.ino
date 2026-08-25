@@ -3,20 +3,21 @@
 // providing a recoverable local web interface for network, SMTP delivery,
 // ZTE and onboard SIM7670G SMS source configuration, forwards ZTE and
 // SIM7670G modem SMS by email, sends outgoing SMS through the ZTE modem
-// (ADR-0003), and polls the onboard SIM7670G for status and SMS forwarding
-// (ADR-0004).
+// (ADR-0003) and the onboard SIM7670G (ADR-0004), and polls the onboard
+// SIM7670G for status and SMS forwarding.
 // SCOPE:
 // - Wi-Fi provisioning, captive portal, Digest-authenticated configuration,
 // isolated persistent configuration, HTTP routes, the asynchronous SMTP
 // test-delivery lifecycle, the ZTE poll/forward/delete lifecycle, the
 // asynchronous ZTE send lifecycle, the always-on SIM7670G status poll
 // (present/CPIN/CSQ/CESQ/CEREG/CPMS/CCLK) exposed at GET /api/modem/status,
-// and the SIM7670G SMS poll/forward/delete lifecycle with label alias and
-// dynamic poll interval.
+// the SIM7670G SMS poll/forward/delete lifecycle with label alias and
+// dynamic poll interval, and the asynchronous SIM7670G AT send lifecycle
+// (AT+CMGS/UCS2) exposed at POST /api/modem/send and POST /api/sms/send?via=modem.
 // - NOT: The SMTP dialog itself (smtp_client), TLS transport
 // (smtp_transport), the ZTE goform dialog (zte_client), its transport
 // (zte_transport), the SIM7670G AT transport details in modem_transport.h beyond
-// thin Serial1 binding, SMS send on the SIM7670G, GNSS, and OTA logic.
+// thin Serial1 binding, GNSS, and OTA logic.
 // INVARIANTS: Credentials are never written to Serial or
 // returned in HTTP responses; the SMTP and modem passwords are never
 // serialized; incoming ZTE and SIM7670G SMS are deleted only after SMTP
@@ -152,7 +153,12 @@ ModemSourceStore modemSourceStore;
 RuntimeModemSourceConfig storedModemSource;
 bool modemSourceLoaded = false;
 volatile bool modemPollCycleActive = false;
+String modemSendTo;
+String modemSendText;
 volatile bool modemSendRunning = false;
+volatile bool modemSendDone = false;
+bool modemSendSuccess = false;
+String modemSendMessage;
 
 // #region FUNC_recordBootStage
 // PURPOSE: Preserves startup events until native USB CDC becomes ready, so the
@@ -1167,6 +1173,181 @@ void syncModemTask() {
 }
 // #endregion FUNC_syncModemTask
 
+// #region FUNC_stopModemTask
+// PURPOSE: Stops the always-on modem poll task so the send task can own
+// Serial1 exclusively (Variant A, mirrors syncZtePollTask stop phase).
+bool stopModemTask() {
+  if (g_modemTaskHandle == nullptr) return true;
+  g_modemTaskStopRequested = true;
+  const unsigned long deadline = millis() + 5000;
+  while (g_modemTaskHandle != nullptr && millis() < deadline) delay(10);
+  g_modemTaskStopRequested = false;
+  if (g_modemTaskHandle != nullptr) {
+    Serial.println("event=modem_task_stop_timeout");
+    return false;
+  }
+  return true;
+}
+// #endregion FUNC_stopModemTask
+
+// #region FUNC_startModemTask
+// PURPOSE: Restarts the always-on modem poll task after a send completes.
+void startModemTask() {
+  if (g_modemTaskHandle != nullptr) return;
+  syncModemTask();
+}
+// #endregion FUNC_startModemTask
+
+// #region FUNC_modemSendTask
+// PURPOSE: Runs one SIM7670G send on its own task: stops the poll task,
+// owns Serial1 via ModemTransport, calls ModemClient::sendSms in UCS2,
+// restarts the poll task and publishes the outcome last.
+void modemSendTask(void*) {
+  const String to = modemSendTo;
+  const String text = modemSendText;
+  const unsigned long startedAt = millis();
+  Serial.printf("event=modem_send_begin to=%s units=%u heap=%u\n", to.c_str(),
+                static_cast<unsigned>(smsUtf16Units(text.c_str())),
+                static_cast<unsigned>(ESP.getFreeHeap()));
+  char* scratch = static_cast<char*>(malloc(kModemScratchSize));
+  const bool stopped = stopModemTask();
+  if (!stopped) {
+    Serial.println("event=modem_send_complete result=stop_failed stage=stop_timeout");
+    free(scratch);
+    modemSendMessage = F("Send failed: modem busy, try again.");
+    modemSendSuccess = false;
+    modemSendRunning = false;
+    modemSendDone = true;
+    vTaskDelete(nullptr);
+    return;
+  }
+  ModemTransport transport;
+  transport.begin();
+  ModemClient client(transport, scratch, scratch == nullptr ? 0 : kModemScratchSize);
+  ModemResult result =
+      scratch == nullptr ? ModemResult::kProtocolError : client.sendSms(to.c_str(), text.c_str());
+  String message;
+  if (scratch == nullptr) {
+    message = F("Send failed: out of memory.");
+  } else if (result == ModemResult::kSuccess) {
+    message = F("SMS sent to ");
+    message += to;
+    message += '.';
+  } else if (result == ModemResult::kSendRejected) {
+    message = F("The modem rejected the message [stage=");
+    message += client.failedStage();
+    message += ']';
+    if (client.lastReply()[0] != '\0') {
+      message += F(" Modem reply: ");
+      message += client.lastReply();
+    }
+  } else if (result == ModemResult::kTimeout) {
+    message = F("Send timed out [stage=");
+    message += client.failedStage();
+    message += ']';
+  } else {
+    message = F("Send failed [stage=");
+    message += client.failedStage();
+    message += ']';
+  }
+  modemSendMessage = message;
+  modemSendSuccess = result == ModemResult::kSuccess;
+  if (!modemSendSuccess) {
+    Serial.printf("event=modem_send_form form=%s\n", client.lastSendHex());
+  }
+  free(scratch);
+  transport.end();
+  startModemTask();
+  Serial.printf("event=modem_send_complete result=%s stage=%s elapsed_ms=%lu heap=%u\n",
+                result == ModemResult::kSuccess
+                    ? "success"
+                    : (result == ModemResult::kSendRejected
+                           ? "send_rejected"
+                           : (result == ModemResult::kTimeout ? "timeout" : "protocol_error")),
+                client.failedStage(), millis() - startedAt,
+                static_cast<unsigned>(ESP.getFreeHeap()));
+  modemSendRunning = false;
+  modemSendDone = true;
+  vTaskDelete(nullptr);
+}
+// #endregion FUNC_modemSendTask
+
+bool readZteSendForm(String& to, String& text, String& error);
+
+// #region FUNC_handleModemSendStart
+// PURPOSE: Starts one SIM7670G outgoing SMS on a dedicated task; mirrors
+// handleZteSendStart but owns Serial1 via stopModemTask and checks CPIN.
+void handleModemSendStart() {
+  Serial.println("event=http_modem_send_submit");
+  if (!requireAuthentication()) return;
+  if (modemSendRunning) {
+    sendJsonError(409, F("An SMS send is already in progress."));
+    return;
+  }
+  if (zteSendRunning) {
+    sendJsonError(409, F("An SMS send is already in progress."));
+    return;
+  }
+  if (modemPollCycleActive) {
+    sendJsonError(409, F("A modem poll cycle is in progress; try again in a few seconds."));
+    return;
+  }
+  if (ztePollCycleActive) {
+    sendJsonError(409, F("A poll cycle is in progress; try again in a few seconds."));
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    sendJsonError(400, F("The device is not connected to a Wi-Fi network."));
+    return;
+  }
+  const ModemStatus snapshot = readModemStatus();
+  if (!snapshot.present) {
+    sendJsonError(503, F("The internal modem is not responding; try again."));
+    return;
+  }
+  if (strcmp(snapshot.cpin, "READY") != 0) {
+    sendJsonError(503, F("The SIM card is not ready; check the modem status."));
+    return;
+  }
+  String to;
+  String text;
+  String error;
+  if (!readZteSendForm(to, text, error)) {
+    sendJsonError(400, error);
+    return;
+  }
+  modemSendTo = to;
+  modemSendText = text;
+  modemSendDone = false;
+  modemSendMessage = "";
+  modemSendSuccess = false;
+  modemSendRunning = true;
+  if (xTaskCreatePinnedToCore(modemSendTask, "modem_send", 8192, nullptr, 1, nullptr, 0) !=
+      pdPASS) {
+    modemSendRunning = false;
+    Serial.println("event=modem_send_failed reason=task_create");
+    sendJsonError(503, F("The send could not be started. Try again."));
+    return;
+  }
+  sendJson(server, 200, renderMessageJson(F("Send started.")));
+}
+// #endregion FUNC_handleModemSendStart
+
+// #region FUNC_handleModemSendStatus
+// PURPOSE: Reports asynchronous modem send progress to the polling browser UI.
+void handleModemSendStatus() {
+  if (!requireAuthentication()) return;
+  WebAsyncOp op;
+  op.running = modemSendRunning;
+  op.done = modemSendDone;
+  if (modemSendDone) {
+    op.result = modemSendSuccess ? "success" : "failed";
+    op.message = modemSendMessage;
+  }
+  sendJson(server, 200, renderAsyncOpJson(op));
+}
+// #endregion FUNC_handleModemSendStatus
+
 // #region FUNC_sanitizeSenderForSubject
 // PURPOSE: Reduces a sender field to printable ASCII so it can travel in an
 // SMTP subject; control characters become spaces and others '?'.
@@ -1302,7 +1483,7 @@ void ztePollTask(void*) {
       continue;
     }
     waitingForStation = false;
-    if (zteTestRunning || zteSendRunning) {
+    if (zteTestRunning || zteSendRunning || modemSendRunning) {
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
     }
@@ -1585,11 +1766,11 @@ void handleZteTestStart() {
     sendJsonError(409, F("A connection test is already in progress."));
     return;
   }
-  if (zteSendRunning) {
+  if (zteSendRunning || modemSendRunning) {
     sendJsonError(409, F("An SMS send is in progress; try again in a few seconds."));
     return;
   }
-  if (ztePollCycleActive) {
+  if (ztePollCycleActive || modemPollCycleActive) {
     sendJsonError(409, F("A poll cycle is in progress; try again in a few seconds."));
     return;
   }
@@ -1821,7 +2002,7 @@ void handleZteSendStart() {
   if (!requireAuthentication()) {
     return;
   }
-  if (zteSendRunning) {
+  if (zteSendRunning || modemSendRunning) {
     sendJsonError(409, F("An SMS send is already in progress."));
     return;
   }
@@ -1829,7 +2010,7 @@ void handleZteSendStart() {
     sendJsonError(409, F("A connection test is in progress; try again in a few seconds."));
     return;
   }
-  if (ztePollCycleActive) {
+  if (ztePollCycleActive || modemPollCycleActive) {
     sendJsonError(409, F("A poll cycle is in progress; try again in a few seconds."));
     return;
   }
@@ -1887,22 +2068,17 @@ void handleZteSendStatus() {
 // #endregion FUNC_handleZteSendStatus
 
 // #region FUNC_handleSmsSendStart
-// PURPOSE: Unified send entry point for the future POST /api/sms/send
-// {via:"zte"|"modem", to, text}; keeps POST /api/zte/send as a
-// deprecated alias. Validation is fully shared via sms_validate.h so
-// switching storage is unnecessary; "modem" is acknowledged but not yet
-// implemented (shares the same 335-unit limit and recipient rule).
+// PURPOSE: Unified send entry point POST /api/sms/send {via:"zte"|"modem", to, text};
+// keeps POST /api/zte/send and POST /api/modem/send as direct aliases.
+// Validation is fully shared via sms_validate.h; each via branches to its
+// own async lifecycle (ZTE goform vs modem AT).
 void handleSmsSendStart() {
   Serial.println("event=http_sms_send_submit");
-  if (!requireAuthentication()) {
-    return;
-  }
+  if (!requireAuthentication()) return;
   String via = server.arg("via");
   via.trim();
   via.toLowerCase();
-  if (via.length() == 0) {
-    via = "zte";
-  }
+  if (via.length() == 0) via = "zte";
   if (via != "zte" && via != "modem") {
     sendJsonError(400, F("Field via must be \"zte\" or \"modem\"."));
     return;
@@ -1915,12 +2091,48 @@ void handleSmsSendStart() {
     return;
   }
   if (via == "modem") {
-    Serial.printf("event=sms_send_rejected via=modem reason=not_implemented to=%s units=%u\n",
-                  to.c_str(), static_cast<unsigned>(smsUtf16Units(text.c_str())));
-    sendJsonError(501, F("Modem SMS send is not yet implemented; the request was validated."));
+    if (modemSendRunning || zteSendRunning) {
+      sendJsonError(409, F("An SMS send is already in progress."));
+      return;
+    }
+    if (zteTestRunning) {
+      sendJsonError(409, F("A connection test is in progress; try again in a few seconds."));
+      return;
+    }
+    if (modemPollCycleActive || ztePollCycleActive) {
+      sendJsonError(409, F("A poll cycle is in progress; try again in a few seconds."));
+      return;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+      sendJsonError(400, F("The device is not connected to a Wi-Fi network."));
+      return;
+    }
+    const ModemStatus snapshot = readModemStatus();
+    if (!snapshot.present) {
+      sendJsonError(503, F("The internal modem is not responding; try again."));
+      return;
+    }
+    if (strcmp(snapshot.cpin, "READY") != 0) {
+      sendJsonError(503, F("The SIM card is not ready; check the modem status."));
+      return;
+    }
+    modemSendTo = to;
+    modemSendText = text;
+    modemSendDone = false;
+    modemSendMessage = "";
+    modemSendSuccess = false;
+    modemSendRunning = true;
+    if (xTaskCreatePinnedToCore(modemSendTask, "modem_send", 8192, nullptr, 1, nullptr, 0) !=
+        pdPASS) {
+      modemSendRunning = false;
+      Serial.println("event=modem_send_failed reason=task_create");
+      sendJsonError(503, F("The send could not be started. Try again."));
+      return;
+    }
+    sendJson(server, 200, renderMessageJson(F("Send started.")));
     return;
   }
-  if (zteSendRunning) {
+  if (zteSendRunning || modemSendRunning) {
     sendJsonError(409, F("An SMS send is already in progress."));
     return;
   }
@@ -1928,7 +2140,7 @@ void handleSmsSendStart() {
     sendJsonError(409, F("A connection test is in progress; try again in a few seconds."));
     return;
   }
-  if (ztePollCycleActive) {
+  if (ztePollCycleActive || modemPollCycleActive) {
     sendJsonError(409, F("A poll cycle is in progress; try again in a few seconds."));
     return;
   }
@@ -2090,6 +2302,8 @@ void configureWebServer() {
   server.on("/api/zte/test", HTTP_GET, handleZteTestStatus);
   server.on("/api/zte/send", HTTP_POST, handleZteSendStart);
   server.on("/api/zte/send", HTTP_GET, handleZteSendStatus);
+  server.on("/api/modem/send", HTTP_POST, handleModemSendStart);
+  server.on("/api/modem/send", HTTP_GET, handleModemSendStatus);
   server.on("/api/sms/send", HTTP_POST, handleSmsSendStart);
   server.on("/api/modem/status", HTTP_GET, handleModemStatusRequest);
   server.on("/api/modem/source", HTTP_GET, handleModemSourceRequest);
