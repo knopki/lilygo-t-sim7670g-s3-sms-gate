@@ -76,7 +76,7 @@ constexpr unsigned int kZteOutgoingCleanupMaxAttempts = kZteMaxPages * kZtePageS
 constexpr const char* kNtpServers[] = {"pool.ntp.org", "time.nist.gov"};
 constexpr unsigned long kModemPollIntervalMs = 15UL * 1000UL;
 constexpr size_t kModemScratchSize = 2048;
-constexpr uint32_t kModemTaskStack = 8192;
+constexpr uint32_t kModemTaskStack = 16384;
 
 enum class ConnectionState { kInitialSetup, kConnecting, kOnline, kFallbackAp };
 
@@ -1322,8 +1322,8 @@ void handleModemSendStart() {
   modemSendMessage = "";
   modemSendSuccess = false;
   modemSendRunning = true;
-  if (xTaskCreatePinnedToCore(modemSendTask, "modem_send", 8192, nullptr, 1, nullptr, 0) !=
-      pdPASS) {
+  if (xTaskCreatePinnedToCore(modemSendTask, "modem_send", kModemTaskStack, nullptr, 1, nullptr,
+                              0) != pdPASS) {
     modemSendRunning = false;
     Serial.println("event=modem_send_failed reason=task_create");
     sendJsonError(503, F("The send could not be started. Try again."));
@@ -2122,8 +2122,8 @@ void handleSmsSendStart() {
     modemSendMessage = "";
     modemSendSuccess = false;
     modemSendRunning = true;
-    if (xTaskCreatePinnedToCore(modemSendTask, "modem_send", 8192, nullptr, 1, nullptr, 0) !=
-        pdPASS) {
+    if (xTaskCreatePinnedToCore(modemSendTask, "modem_send", kModemTaskStack, nullptr, 1, nullptr,
+                                0) != pdPASS) {
       modemSendRunning = false;
       Serial.println("event=modem_send_failed reason=task_create");
       sendJsonError(503, F("The send could not be started. Try again."));

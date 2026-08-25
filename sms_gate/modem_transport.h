@@ -71,21 +71,43 @@ class ModemTransport : public ModemChannel {
     if (size < 2) return -1;
     const unsigned long deadline = millis() + timeoutMs;
     size_t used = 0;
+    bool overflow = false;
     for (;;) {
-      if (millis() > deadline && used == 0) return -1;
       if (Serial1.available() > 0) {
         int ch = Serial1.read();
         if (ch < 0) continue;
         if (ch == '\n') {
+          if (overflow) {
+            buffer[0] = '\0';
+            return -1;
+          }
           if (used > 0 && buffer[used - 1] == '\r') --used;
           buffer[used] = '\0';
           return static_cast<int>(used);
         }
-        if (used + 1 >= size) return -1;
+        if (overflow) continue;
+        if (used + 1 >= size) {
+          overflow = true;
+          continue;
+        }
         buffer[used++] = static_cast<char>(ch);
         continue;
       }
-      if (millis() > deadline) return used == 0 ? -1 : static_cast<int>(used);
+      if (millis() > deadline) {
+        if (overflow) {
+          buffer[0] = '\0';
+          return -1;
+        }
+        if (used < size) {
+          buffer[used] = '\0';
+        } else if (size > 0) {
+          buffer[size - 1] = '\0';
+        }
+        if (used > 0 && buffer[used - 1] == '\r') {
+          buffer[--used] = '\0';
+        }
+        return used == 0 ? -1 : static_cast<int>(used);
+      }
       delay(1);
     }
   }
