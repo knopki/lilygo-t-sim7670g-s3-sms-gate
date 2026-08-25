@@ -16,6 +16,7 @@ constexpr char kConfigNamespace[] = "network";
 constexpr char kConfigKey[] = "record";
 constexpr char kSmtpNamespace[] = "smtp";
 constexpr char kZteNamespace[] = "zte";
+constexpr char kModemNamespace[] = "modem";
 constexpr uint16_t kDefaultSmtpPort = 587;
 }  // namespace
 
@@ -188,19 +189,18 @@ ZteConfigRecord buildZteConfigRecord(const RuntimeZteConfig& config) {
   config.host.toCharArray(record.host, sizeof(record.host));
   config.password.toCharArray(record.password, sizeof(record.password));
   config.label.toCharArray(record.label, sizeof(record.label));
+  record.pollIntervalSec = config.pollIntervalSec;
+  if (!isValidZtePollInterval(record.pollIntervalSec)) {
+    record.pollIntervalSec = kDefaultZtePollSec;
+  }
   record.checksum = calculateZteConfigChecksum(record);
   return record;
 }
 // #endregion FUNC_buildZteConfigRecord
 
-// #region FUNC_ZteConfigStore_load
-// PURPOSE: Restores the ZTE profile only as a whole validated record so a
-// corrupt or partial blob can never reach the modem dialog. Schema changes
-// stored v1 records are migrated to v2 in place (label added, empty).
 // #region FUNC_migrateV1Record
 // PURPOSE: Recognizes a stored pre-label v1 ZTE record and rewrites it as a
-// valid v2 record with an empty label, so enabling the source later never
-// needs re-entry; returns false when the blob is not a valid v1 record.
+// valid v3 record with an empty label and default poll interval.
 bool ZteConfigStore::migrateV1Record(size_t readLength) const {
   if (readLength != sizeof(ZteConfigRecordV1)) {
     return false;
@@ -220,6 +220,8 @@ bool ZteConfigStore::migrateV1Record(size_t readLength) const {
   migrated.enabled = legacy.enabled == 1;
   migrated.host = legacy.host;
   migrated.password = legacy.password;
+  migrated.label = "";
+  migrated.pollIntervalSec = kDefaultZtePollSec;
   const ZteConfigRecord record = buildZteConfigRecord(migrated);
   if (!isZteConfigRecordValid(record) ||
       !preferences.begin(kZteNamespace, false, kConfigPartition)) {
@@ -235,10 +237,49 @@ bool ZteConfigStore::migrateV1Record(size_t readLength) const {
 }
 // #endregion FUNC_migrateV1Record
 
+// #region FUNC_migrateV2Record
+// PURPOSE: Recognizes a stored v2 ZTE record (without poll interval) and
+// rewrites it as v3 with default 15 s interval.
+bool ZteConfigStore::migrateV2Record(size_t readLength) const {
+  if (readLength != sizeof(ZteConfigRecordV2)) {
+    return false;
+  }
+  Preferences preferences;
+  if (!preferences.begin(kZteNamespace, true, kConfigPartition)) {
+    return false;
+  }
+  ZteConfigRecordV2 legacy{};
+  const size_t legacyLength = preferences.getBytes(kConfigKey, &legacy, sizeof(legacy));
+  preferences.end();
+  if (legacyLength != sizeof(legacy) || !isZteConfigRecordV2Valid(legacy)) {
+    return false;
+  }
+
+  RuntimeZteConfig migrated;
+  migrated.enabled = legacy.enabled == 1;
+  migrated.host = legacy.host;
+  migrated.password = legacy.password;
+  migrated.label = legacy.label;
+  migrated.pollIntervalSec = kDefaultZtePollSec;
+  const ZteConfigRecord record = buildZteConfigRecord(migrated);
+  if (!isZteConfigRecordValid(record) ||
+      !preferences.begin(kZteNamespace, false, kConfigPartition)) {
+    Serial.println("event=zte_load_migrated persisted=false");
+    return false;
+  }
+  const size_t writtenLength = preferences.putBytes(kConfigKey, &record, sizeof(record));
+  preferences.end();
+  const bool persisted = writtenLength == sizeof(record);
+  Serial.printf("event=zte_load_migrated from_version=2 persisted=%s\n",
+                persisted ? "true" : "false");
+  return persisted;
+}
+// #endregion FUNC_migrateV2Record
+
 // #region FUNC_ZteConfigStore_load
 // PURPOSE: Restores the ZTE profile only as a whole validated record so a
-// corrupt or partial blob can never reach the modem dialog; stored v1
-// records are migrated to v2 in place (label added, empty).
+// corrupt or partial blob can never reach the modem dialog; stored v1/v2
+// records are migrated to v3 in place.
 bool ZteConfigStore::load(RuntimeZteConfig& config) const {
   Serial.printf("event=zte_load_begin partition=%s\n", kConfigPartition);
   Preferences preferences;
@@ -252,8 +293,8 @@ bool ZteConfigStore::load(RuntimeZteConfig& config) const {
   preferences.end();
 
   if (readLength != sizeof(record)) {
-    if (migrateV1Record(readLength)) {
-      return load(config);  // Re-read as the freshly written v2 record.
+    if (migrateV1Record(readLength) || migrateV2Record(readLength)) {
+      return load(config);  // Re-read as the freshly written v3 record.
     }
     Serial.printf("event=zte_load_empty_or_invalid bytes=%u\n", static_cast<unsigned>(readLength));
     return false;
@@ -267,7 +308,9 @@ bool ZteConfigStore::load(RuntimeZteConfig& config) const {
   config.host = record.host;
   config.password = record.password;
   config.label = record.label;
-  Serial.printf("event=zte_load_complete enabled=%s\n", config.enabled ? "true" : "false");
+  config.pollIntervalSec = record.pollIntervalSec;
+  Serial.printf("event=zte_load_complete enabled=%s poll_interval=%u\n",
+                config.enabled ? "true" : "false", static_cast<unsigned>(config.pollIntervalSec));
   return true;
 }
 // #endregion FUNC_ZteConfigStore_load
@@ -296,3 +339,73 @@ bool ZteConfigStore::save(const RuntimeZteConfig& config) const {
   return saved;
 }
 // #endregion FUNC_ZteConfigStore_save
+
+// #region FUNC_buildModemSourceRecord
+// PURPOSE: Converts the runtime modem-source profile into its checksummed
+// binary record so persistence and the web form always exercise the same
+// field limits.
+ModemSourceRecord buildModemSourceRecord(const RuntimeModemSourceConfig& config) {
+  ModemSourceRecord record{};
+  record.magic = kModemSourceMagic;
+  record.version = kModemSourceVersion;
+  record.enabled = config.enabled ? 1 : 0;
+  record.pollIntervalSec = config.pollIntervalSec;
+  config.label.toCharArray(record.label, sizeof(record.label));
+  record.checksum = calculateModemSourceChecksum(record);
+  return record;
+}
+// #endregion FUNC_buildModemSourceRecord
+
+// #region FUNC_ModemSourceStore_load
+// PURPOSE: Restores the modem-source profile only as a whole validated
+// record so a corrupt or partial blob can never reach the SMS poll path.
+bool ModemSourceStore::load(RuntimeModemSourceConfig& config) const {
+  Serial.printf("event=modem_source_load_begin partition=%s\n", kConfigPartition);
+  Preferences preferences;
+  if (!preferences.begin(kModemNamespace, true, kConfigPartition)) {
+    Serial.println("event=modem_source_load_failed reason=partition_unavailable");
+    return false;
+  }
+
+  ModemSourceRecord record{};
+  const size_t readLength = preferences.getBytes(kConfigKey, &record, sizeof(record));
+  preferences.end();
+  if (readLength != sizeof(record) || !isModemSourceRecordValid(record)) {
+    Serial.printf("event=modem_source_load_empty_or_invalid bytes=%u\n",
+                  static_cast<unsigned>(readLength));
+    return false;
+  }
+
+  config.enabled = record.enabled == 1;
+  config.pollIntervalSec = record.pollIntervalSec;
+  config.label = record.label;
+  Serial.printf("event=modem_source_load_complete enabled=%s poll_interval=%u\n",
+                config.enabled ? "true" : "false", static_cast<unsigned>(config.pollIntervalSec));
+  return true;
+}
+// #endregion FUNC_ModemSourceStore_load
+
+// #region FUNC_ModemSourceStore_save
+// PURPOSE: Persists the modem-source profile only after the full record
+// passes the shared validation predicate, so web input and NVS content agree.
+bool ModemSourceStore::save(const RuntimeModemSourceConfig& config) const {
+  Serial.println("event=modem_source_save_begin");
+  const ModemSourceRecord record = buildModemSourceRecord(config);
+  if (!isModemSourceRecordValid(record)) {
+    Serial.println("event=modem_source_save_failed reason=invalid_fields");
+    return false;
+  }
+
+  Preferences preferences;
+  if (!preferences.begin(kModemNamespace, false, kConfigPartition)) {
+    Serial.println("event=modem_source_save_failed reason=partition_unavailable");
+    return false;
+  }
+  const size_t writtenLength = preferences.putBytes(kConfigKey, &record, sizeof(record));
+  preferences.end();
+  const bool saved = writtenLength == sizeof(record);
+  Serial.printf("event=modem_source_save_complete saved=%s bytes=%u\n", saved ? "true" : "false",
+                static_cast<unsigned>(writtenLength));
+  return saved;
+}
+// #endregion FUNC_ModemSourceStore_save

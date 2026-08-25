@@ -17,6 +17,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 namespace codec {
 
@@ -225,5 +226,110 @@ inline bool containsCharacter(const char* value, size_t maxLength, char expected
   return false;
 }
 // #endregion FUNC_containsCharacter
+
+// #region FUNC_isHexDigit
+// PURPOSE: Recognizes one hexadecimal digit of the UCS-2 content encoding.
+inline bool isHexDigit(char ch) {
+  return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
+}
+// #endregion FUNC_isHexDigit
+
+// #region FUNC_parseHex4
+// PURPOSE: Reads exactly four hex digits; returns 0x200000 on malformed input.
+inline uint32_t parseHex4(const char* p) {
+  uint32_t value = 0;
+  for (int i = 0; i < 4; ++i) {
+    const char ch = p[i];
+    uint32_t digit = 0;
+    if (ch >= '0' && ch <= '9')
+      digit = static_cast<uint32_t>(ch - '0');
+    else if (ch >= 'a' && ch <= 'f')
+      digit = static_cast<uint32_t>(ch - 'a' + 10);
+    else if (ch >= 'A' && ch <= 'F')
+      digit = static_cast<uint32_t>(ch - 'A' + 10);
+    else
+      return 0x200000;
+    value = (value << 4) | digit;
+  }
+  return value;
+}
+// #endregion FUNC_parseHex4
+
+// #region FUNC_appendUtf8
+// PURPOSE: Appends one codepoint as UTF-8, replacing invalid unpaired surrogates
+// with U+FFFD and truncating when out is full.
+inline void appendUtf8(uint32_t codepoint, char* out, size_t outSize, size_t& used) {
+  if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) codepoint = 0xFFFD;
+  unsigned char bytes[4];
+  size_t count = 0;
+  if (codepoint < 0x80) {
+    bytes[0] = static_cast<unsigned char>(codepoint);
+    count = 1;
+  } else if (codepoint < 0x800) {
+    bytes[0] = static_cast<unsigned char>(0xC0 | (codepoint >> 6));
+    bytes[1] = static_cast<unsigned char>(0x80 | (codepoint & 0x3F));
+    count = 2;
+  } else if (codepoint < 0x10000) {
+    bytes[0] = static_cast<unsigned char>(0xE0 | (codepoint >> 12));
+    bytes[1] = static_cast<unsigned char>(0x80 | ((codepoint >> 6) & 0x3F));
+    bytes[2] = static_cast<unsigned char>(0x80 | (codepoint & 0x3F));
+    count = 3;
+  } else {
+    bytes[0] = static_cast<unsigned char>(0xF0 | (codepoint >> 18));
+    bytes[1] = static_cast<unsigned char>(0x80 | ((codepoint >> 12) & 0x3F));
+    bytes[2] = static_cast<unsigned char>(0x80 | ((codepoint >> 6) & 0x3F));
+    bytes[3] = static_cast<unsigned char>(0x80 | (codepoint & 0x3F));
+    count = 4;
+  }
+  for (size_t i = 0; i < count && used + 1 < outSize; ++i)
+    out[used++] = static_cast<char>(bytes[i]);
+}
+// #endregion FUNC_appendUtf8
+
+// #region FUNC_isUcs2HexView
+// PURPOSE: Validates a whole buffer as 4-hex-per-codepoint UCS-2 before decoding.
+inline bool isUcs2HexView(const char* str, size_t length) {
+  if (str == nullptr) return false;
+  if (length == 0) return true;
+  if (length % 4 != 0) return false;
+  for (size_t i = 0; i < length; ++i)
+    if (!isHexDigit(str[i])) return false;
+  return true;
+}
+inline bool isUcs2HexView(const char* str) {
+  return str == nullptr ? false : isUcs2HexView(str, strlen(str));
+}
+// #endregion FUNC_isUcs2HexView
+
+// #region FUNC_decodeUcs2HexView
+// PURPOSE: Decodes validated UCS-2 hex into UTF-8 (surrogate pairs joined,
+// unpaired surrogates replaced, truncated at outSize). Returns used bytes.
+inline size_t decodeUcs2HexView(const char* hex, size_t hexLength, char* out, size_t outSize) {
+  if (hex == nullptr || out == nullptr || outSize == 0) return 0;
+  size_t used = 0;
+  const char* p = hex;
+  const char* end = hex + hexLength;
+  while (p + 4 <= end) {
+    uint32_t cp = parseHex4(p);
+    p += 4;
+    if (cp >= 0xD800 && cp <= 0xDBFF && p + 4 <= end) {
+      uint32_t low = parseHex4(p);
+      if (low >= 0xDC00 && low <= 0xDFFF) {
+        cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+        p += 4;
+      }
+    }
+    appendUtf8(cp, out, outSize, used);
+  }
+  if (used < outSize)
+    out[used] = '\0';
+  else
+    out[outSize - 1] = '\0';
+  return used;
+}
+inline size_t decodeUcs2HexView(const char* hex, char* out, size_t outSize) {
+  return hex == nullptr ? 0 : decodeUcs2HexView(hex, strlen(hex), out, outSize);
+}
+// #endregion FUNC_decodeUcs2HexView
 
 }  // namespace codec

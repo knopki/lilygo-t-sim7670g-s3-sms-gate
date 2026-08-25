@@ -24,6 +24,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "sms_validate.h"
 #include "zte_record.h"
 
 constexpr size_t kZteSmsIdLength = 15;
@@ -36,9 +37,10 @@ constexpr size_t kZtePageSize = 5;
 constexpr uint8_t kZteMaxPages = 21;  // 21 x 5 covers the 100-message device inbox
 // Send limit of the modem's own web UI for UNICODE messages: five
 // concatenated UCS-2 parts of 70 code units, minus the part headers.
-constexpr size_t kMaxZteSmsSendUnits = 335;
+// Kept for compatibility; canonical limit lives in sms_validate.h.
+constexpr size_t kMaxZteSmsSendUnits = kMaxSmsSendUnits;
 // Returned by zteSmsUtf16Units for malformed UTF-8 input.
-constexpr size_t kZteSmsInvalidUnits = SIZE_MAX;
+constexpr size_t kZteSmsInvalidUnits = kSmsInvalidUnits;
 
 // #region CLASS_ZteChannel
 // PURPOSE: Abstracts the byte transport so tests can script a modem and the

@@ -171,6 +171,7 @@ ZteConfigRecord makeRecord() {
   record.enabled = 1;
   strcpy(record.host, "192.168.0.1");
   strcpy(record.password, "modem-pass");
+  record.pollIntervalSec = kDefaultZtePollSec;
   record.checksum = calculateZteConfigChecksum(record);
   return record;
 }
@@ -274,9 +275,88 @@ void testRecordValidation() {
   record.enabled = 0;  // Disabled still keeps complete credentials.
   record.checksum = calculateZteConfigChecksum(record);
   assert(isZteConfigRecordValid(record));
+
+  record = makeRecord();
+  record.pollIntervalSec = kMinZtePollSec;
+  record.checksum = calculateZteConfigChecksum(record);
+  assert(isZteConfigRecordValid(record));
+
+  record = makeRecord();
+  record.pollIntervalSec = kMaxZtePollSec;
+  record.checksum = calculateZteConfigChecksum(record);
+  assert(isZteConfigRecordValid(record));
+
+  record = makeRecord();
+  record.pollIntervalSec = kMinZtePollSec - 1;
+  record.checksum = calculateZteConfigChecksum(record);
+  assert(!isZteConfigRecordValid(record));
+
+  record = makeRecord();
+  record.pollIntervalSec = kMaxZtePollSec + 1;
+  record.checksum = calculateZteConfigChecksum(record);
+  assert(!isZteConfigRecordValid(record));
+
+  record = makeRecord();
+  record.pollIntervalSec = 0;
+  record.checksum = calculateZteConfigChecksum(record);
+  assert(!isZteConfigRecordValid(record));
+
+  assert(isValidZtePollInterval(kDefaultZtePollSec));
+  assert(isValidZtePollInterval(kMinZtePollSec));
+  assert(isValidZtePollInterval(kMaxZtePollSec));
+  assert(!isValidZtePollInterval(kMinZtePollSec - 1));
+  assert(!isValidZtePollInterval(kMaxZtePollSec + 1));
   puts("testRecordValidation ok");
 }
 // #endregion FUNC_testRecordValidation
+
+// #region FUNC_makeV2Record
+// PURPOSE: Builds one known-good v2 record (without poll interval).
+ZteConfigRecordV2 makeV2Record() {
+  ZteConfigRecordV2 record{};
+  record.magic = kZteConfigMagic;
+  record.version = 2;
+  record.enabled = 1;
+  strcpy(record.host, "192.168.0.1");
+  strcpy(record.password, "modem-pass");
+  strcpy(record.label, "+79990000000");
+  const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
+  uint32_t hash = 2166136261UL;
+  for (size_t index = 0; index < offsetof(ZteConfigRecordV2, checksum); ++index) {
+    hash ^= bytes[index];
+    hash *= 16777619UL;
+  }
+  record.checksum = hash;
+  return record;
+}
+// #endregion FUNC_makeV2Record
+
+// #region FUNC_testV2MigrationValidation
+// PURPOSE: Proves v2 recognition accepts an original record and rejects
+// corrupted blobs before migration to v3.
+void testV2MigrationValidation() {
+  assert(isZteConfigRecordV2Valid(makeV2Record()));
+  ZteConfigRecordV2 record = makeV2Record();
+  record.checksum ^= 1;
+  assert(!isZteConfigRecordV2Valid(record));
+  record = makeV2Record();
+  record.version = 3;
+  assert(!isZteConfigRecordV2Valid(record));
+  record = makeV2Record();
+  record.label[0] = '\x01';
+  {
+    const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
+    uint32_t hash = 2166136261UL;
+    for (size_t index = 0; index < offsetof(ZteConfigRecordV2, checksum); ++index) {
+      hash ^= bytes[index];
+      hash *= 16777619UL;
+    }
+    record.checksum = hash;
+  }
+  assert(!isZteConfigRecordV2Valid(record));
+  puts("testV2MigrationValidation ok");
+}
+// #endregion FUNC_testV2MigrationValidation
 
 // #region FUNC_testV1MigrationValidation
 // PURPOSE: Proves the load-time v1 recognition accepts an original record
@@ -981,6 +1061,7 @@ int main() {
   testCodecVectors();
   testRecordValidation();
   testV1MigrationValidation();
+  testV2MigrationValidation();
   testLoginSuccess();
   testLoginRejected();
   testFindOldestAscending();

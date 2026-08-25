@@ -149,6 +149,32 @@ bool tryVariant(const BoardVariant& variant) {
         query(F("sms_storage_support"), "AT+CPMS=?");
         query(F("sms_format_support"), "AT+CMGF=?");
         query(F("sms_indication_support"), "AT+CNMI=?");
+        query(F("sms_csdh_support"), "AT+CSDH=?");
+        query(F("sms_csdh_current"), "AT+CSDH?");
+        query(F("sms_cscs_support"), "AT+CSCS=?");
+        query(F("sms_cscs_current"), "AT+CSCS?");
+        query(F("sms_cpms_current"), "AT+CPMS?");
+        query(F("sms_cnmi_current"), "AT+CNMI?");
+        // SMS setup for poll-forward-delete cycle (ADR-0004):
+        // TEXT + UCS2 + CSDH=1 (show concat header) + ME storage.
+        SerialAT.print("AT+CMGF=1\r\n");
+        readModemResponse(2000);
+        SerialAT.print("AT+CSCS=\"UCS2\"\r\n");
+        readModemResponse(2000);
+        SerialAT.print("AT+CSDH=1\r\n");
+        readModemResponse(2000);
+        SerialAT.print("AT+CPMS=\"ME\",\"ME\",\"ME\"\r\n");
+        readModemResponse(3000);
+        SerialAT.print("AT+CNMI=2,1,0,0,0\r\n");
+        readModemResponse(2000);
+        query(F("sms_cmgl_unread"), "AT+CMGL=\"REC UNREAD\"");
+        query(F("sms_cmgl_all"), "AT+CMGL=\"ALL\"");
+        // PDU alternative (for UDH fallback): list via PDU if TEXT hides concat.
+        SerialAT.print("AT+CMGF=0\r\n");
+        readModemResponse(2000);
+        query(F("sms_cmgl_pdu_all"), "AT+CMGL=4");
+        SerialAT.print("AT+CMGF=1\r\n");
+        readModemResponse(2000);
         Serial.println("event=probe_done");
         return true;
     }

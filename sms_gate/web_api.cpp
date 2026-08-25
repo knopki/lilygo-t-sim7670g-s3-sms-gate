@@ -117,7 +117,7 @@ String renderSmtpConfigJson(const WebSmtpConfig& config) {
 
 String renderZteConfigJson(const WebZteConfig& config) {
   String json;
-  json.reserve(256);
+  json.reserve(272);
   json += F("{\"present\":");
   json += config.present ? F("true") : F("false");
   json += F(",\"enabled\":");
@@ -128,11 +128,33 @@ String renderZteConfigJson(const WebZteConfig& config) {
   json += config.passwordSet ? F("true") : F("false");
   json += F(",\"label\":");
   appendJsonString(json, config.label);
+  json += F(",\"poll_interval\":");
+  json += String(config.pollIntervalSec);
   json += F(",\"last_status\":");
   appendJsonNullableString(json, config.lastStatus.length() > 0, config.lastStatus);
   json += '}';
   return json;
 }
+
+// #region FUNC_renderModemSourceJson
+// PURPOSE: Serializes WebModemSourceConfig into the /api/modem/source envelope.
+String renderModemSourceJson(const WebModemSourceConfig& config) {
+  String json;
+  json.reserve(256);
+  json += F("{\"present\":");
+  json += config.present ? F("true") : F("false");
+  json += F(",\"enabled\":");
+  json += config.enabled ? F("true") : F("false");
+  json += F(",\"poll_interval\":");
+  json += String(config.pollIntervalSec);
+  json += F(",\"label\":");
+  appendJsonString(json, config.label);
+  json += F(",\"last_status\":");
+  appendJsonNullableString(json, config.lastStatus.length() > 0, config.lastStatus);
+  json += '}';
+  return json;
+}
+// #endregion FUNC_renderModemSourceJson
 
 // #region FUNC_renderModemStatusJson
 // PURPOSE: Serializes WebModemStatus into the /api/modem/status envelope.

@@ -716,22 +716,9 @@ bool formatZteDate(const char* raw, char* out, size_t outSize) {
 // #region FUNC_zteSmsUtf16Units
 // PURPOSE: Shares one length rule (and one UTF-8 validity gate) between the
 // web form validation and sendSms so the encoded body always fits the modem
-// web UI's own send limit.
-size_t zteSmsUtf16Units(const char* utf8) {
-  if (utf8 == nullptr) {
-    return kZteSmsInvalidUnits;
-  }
-  size_t units = 0;
-  const char* p = utf8;
-  while (*p != '\0') {
-    uint32_t codepoint;
-    if (!decodeUtf8Codepoint(p, codepoint)) {
-      return kZteSmsInvalidUnits;
-    }
-    units += codepoint > 0xFFFF ? 2 : 1;
-  }
-  return units;
-}
+// web UI's own send limit. Delegates to the shared sms_validate.h helper so
+// ZTE and SIM7670G share the same 335-unit limit.
+size_t zteSmsUtf16Units(const char* utf8) { return smsUtf16Units(utf8); }
 // #endregion FUNC_zteSmsUtf16Units
 
 // #region FUNC_ZteModem_ZteModem

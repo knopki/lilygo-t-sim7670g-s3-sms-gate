@@ -17,17 +17,26 @@
 constexpr size_t kMaxZteHostLength = 63;
 constexpr size_t kMaxZtePasswordLength = 63;
 constexpr size_t kMaxZteLabelLength = 31;
+constexpr uint16_t kDefaultZtePollSec = 15;
+constexpr uint16_t kMinZtePollSec = 5;
+constexpr uint16_t kMaxZtePollSec = 300;
 constexpr uint32_t kZteConfigMagic = 0x5A544547;  // "ZTEG"
-// Version history: 1 lacked the source label; 2 = current layout after the
-// per-source phone-number/alias field was added. Load migrates stored
-// v1 data (see config_store.cpp).
-constexpr uint16_t kZteConfigVersion = 2;
+// Version history: 1 lacked the source label; 2 added label; 3 added
+// per-source poll interval (see config_store.cpp).
+constexpr uint16_t kZteConfigVersion = 3;
+
+// #region FUNC_isValidZtePollInterval
+// PURPOSE: Centralizes the per-source ZTE poll interval contract (5..300 s).
+inline bool isValidZtePollInterval(uint16_t value) {
+  return value >= kMinZtePollSec && value <= kMaxZtePollSec;
+}
+// #endregion FUNC_isValidZtePollInterval
 
 // #region CLASS_ZteConfigRecord
 // PURPOSE: Represents the ZTE modem SMS source profile (enable flag, LAN
-// host, the modem's own web-login password, and the phone number or alias
-// shown in forwarded emails) as a single NVS blob, independent of the
-// Wi-Fi and SMTP records.
+// host, the modem's own web-login password, phone number or alias shown in
+// forwarded emails, and per-source poll interval) as a single NVS blob,
+// independent of the Wi-Fi and SMTP records.
 struct ZteConfigRecord {
   uint32_t magic;
   uint16_t version;
@@ -35,6 +44,7 @@ struct ZteConfigRecord {
   char host[kMaxZteHostLength + 1];
   char password[kMaxZtePasswordLength + 1];
   char label[kMaxZteLabelLength + 1];
+  uint16_t pollIntervalSec;
   uint32_t checksum;
 };
 // #endregion CLASS_ZteConfigRecord
@@ -73,7 +83,10 @@ inline bool isZteConfigRecordValid(const ZteConfigRecord& record) {
       record.password[0] == '\0') {
     return false;
   }
-  return codec::isPrintableRange(record.label, kMaxZteLabelLength);
+  if (!codec::isPrintableRange(record.label, kMaxZteLabelLength)) {
+    return false;
+  }
+  return isValidZtePollInterval(record.pollIntervalSec);
 }
 // #endregion FUNC_isZteConfigRecordValid
 
@@ -89,6 +102,47 @@ struct ZteConfigRecordV1 {
   uint32_t checksum;
 };
 // #endregion STRUCT_ZteConfigRecordV1
+
+// #region STRUCT_ZteConfigRecordV2
+// PURPOSE: Preserves the exact v2 layout (without poll interval) so load
+// can recognize, validate, and migrate stored v2 records to v3.
+struct ZteConfigRecordV2 {
+  uint32_t magic;
+  uint16_t version;
+  uint8_t enabled;
+  char host[kMaxZteHostLength + 1];
+  char password[kMaxZtePasswordLength + 1];
+  char label[kMaxZteLabelLength + 1];
+  uint32_t checksum;
+};
+// #endregion STRUCT_ZteConfigRecordV2
+
+// #region FUNC_isZteConfigRecordV2Valid
+// PURPOSE: Validates a stored v2 record against its own original layout and
+// checksum before its fields are carried into a v3 record.
+inline bool isZteConfigRecordV2Valid(const ZteConfigRecordV2& record) {
+  const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
+  uint32_t hash = 2166136261UL;
+  for (size_t index = 0; index < offsetof(ZteConfigRecordV2, checksum); ++index) {
+    hash ^= bytes[index];
+    hash *= 16777619UL;
+  }
+  if (record.magic != kZteConfigMagic || record.version != 2 || record.checksum != hash) {
+    return false;
+  }
+  if (record.enabled != 0 && record.enabled != 1) {
+    return false;
+  }
+  if (!codec::isPrintableRange(record.host, kMaxZteHostLength) || record.host[0] == '\0') {
+    return false;
+  }
+  if (!codec::isPrintableRange(record.password, kMaxZtePasswordLength) ||
+      record.password[0] == '\0') {
+    return false;
+  }
+  return codec::isPrintableRange(record.label, kMaxZteLabelLength);
+}
+// #endregion FUNC_isZteConfigRecordV2Valid
 
 // #region FUNC_isZteConfigRecordV1Valid
 // PURPOSE: Validates a stored v1 record against its own original layout and

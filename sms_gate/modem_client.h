@@ -138,3 +138,37 @@ bool parseCpmsLine(const char* line, uint16_t& used, uint16_t& total);
 bool parseCclkLine(const char* line, char* out, size_t outSize);
 bool parseImeiLine(const char* line, char* out, size_t outSize);
 bool parseFwLine(const char* line, char* out, size_t outSize);
+// #region STRUCT_ModemCmglInfo
+// PURPOSE: Decoded fields of one +CMGL header (CSDH=0 or 1) for host tests.
+struct ModemCmglInfo {
+  uint16_t idx = 0;
+  char stat[16] = "";
+  char oa[64] = "";  // decoded UTF-8 (from UCS2 hex when needed)
+  char scts[32] = "";
+  bool hasTail = false;
+  int tooa = -1;
+  int msgLen = -1;
+};
+// #endregion STRUCT_ModemCmglInfo
+// #region STRUCT_ModemCmgrInfo
+// PURPOSE: Decoded fields of one +CMGR header (CSDH=0 or 1).
+struct ModemCmgrInfo {
+  char stat[16] = "";
+  char oa[64] = "";
+  char scts[32] = "";
+  bool hasTail = false;
+  int tooa = -1;
+  int fo = -1;
+  int pid = -1;
+  int dcs = -1;
+  char sca[64] = "";
+  int tosca = -1;
+  int msgLen = -1;
+};
+// #endregion STRUCT_ModemCmgrInfo
+bool parseCmglHeader(const char* line, ModemCmglInfo& out);
+bool parseCmgrHeader(const char* line, ModemCmgrInfo& out);
+bool parseCmglEntry(const char* headerLine, const char* bodyLine, ModemSms& out);
+bool parseCmgrEntry(const char* headerLine, const char* bodyLine, ModemSms& out);
+bool decodeModemText(const char* encoded, char* out, size_t outSize);
+bool parsePduConcat(const char* pduHex, uint8_t& ref, uint8_t& total, uint8_t& seq);

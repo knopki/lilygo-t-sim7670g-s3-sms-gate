@@ -310,6 +310,25 @@
       <div id="status"></div>
       <h2>Internal modem (SIM7670G)</h2>
       <div id="modem-status" class="hint">Loading modem status…</div>
+      <h2>SMS source: Internal modem (SIM7670G)</h2>
+      <p id="modem-source-state" class="hint"></p>
+      <form id="modem-source-form">
+        <fieldset>
+          <legend>Internal modem</legend>
+          <label class="checkbox">Forward SMS to e-mail
+            <input type="checkbox" name="enabled">
+          </label>
+          <label>Poll interval (seconds)
+            <input type="number" name="poll_interval" min="5" max="300" value="15">
+          </label>
+          <label>Phone number or alias
+            <input maxlength="31" name="label" placeholder="For example, +79990000000 (modem)" autocomplete="off">
+          </label>
+          <p class="hint">Shown in forwarded emails as the "Received on" line, optional. Poll interval 5–300 s, default 15 s. Storage ME (modem flash).</p>
+        </fieldset>
+        <button type="submit">Save settings</button>
+      </form>
+      <p id="modem-source-status" class="hint"></p>
       <h2>Change Wi-Fi network</h2>
       <form id="network-form">
         <fieldset>
@@ -375,10 +394,13 @@
           <label>Modem web password
             <input maxlength="63" name="password" type="password" autocomplete="new-password">
           </label>
+          <label>Poll interval (seconds)
+            <input type="number" name="poll_interval" min="5" max="300" value="15">
+          </label>
           <label>Phone number or alias
             <input maxlength="31" name="label" placeholder="For example, +79990000000 (ZTE)" autocomplete="off">
           </label>
-          <p class="hint">Shown in forwarded emails as the "Received on" line, so you can tell which SIM the message arrived on. Optional.</p>
+          <p class="hint">Shown in forwarded emails as the "Received on" line, so you can tell which SIM the message arrived on. Optional. Poll interval 5–300 s, default 15 s.</p>
         </fieldset>
         <button type="submit">Save settings</button>
         <button type="button" id="zte-test-button">Test connection</button>
@@ -447,6 +469,9 @@
 			.getElementById("zte-test-button")
 			.addEventListener("click", startZteTest);
 		document
+			.getElementById("modem-source-form")
+			.addEventListener("submit", submitModemSourceSave);
+		document
 			.getElementById("sms-send-form")
 			.addEventListener("submit", submitSmsSend);
 		document
@@ -454,6 +479,7 @@
 			.addEventListener("submit", submitPasswordChange);
 		loadSmtpSettings();
 		loadZteSettings();
+		loadModemSourceSettings();
 		loadModemStatus();
 		startStatusTimer();
 		startModemTimer();
@@ -799,6 +825,8 @@
 			if (response.ok && payload && form) {
 				form.elements.host.value = payload.host || "";
 				form.elements.enabled.checked = !!payload.enabled;
+				form.elements.poll_interval.value =
+					payload.poll_interval != null ? String(payload.poll_interval) : "15";
 				form.elements.label.value = payload.label || "";
 				form.elements.password.value = "";
 				form.elements.password.placeholder = payload.password_set
@@ -858,6 +886,7 @@
 			enabled: form.elements.enabled.checked ? "1" : "0",
 			host: form.elements.host.value.trim(),
 			password: form.elements.password.value,
+			poll_interval: form.elements.poll_interval.value.trim(),
 			label: form.elements.label.value.trim(),
 		};
 	}
@@ -870,6 +899,86 @@
 			statusEl: document.getElementById("zte-test-status"),
 			busyMessage: "Testing the modem connection…",
 		});
+	}
+
+	// #region FUNC_loadModemSourceSettings
+	// PURPOSE: Loads /api/modem/source and prefills the internal modem form.
+	async function loadModemSourceSettings() {
+		try {
+			const { response, payload } = await api("/api/modem/source");
+			if (response.status === 401) {
+				renderAuthRequired();
+				return;
+			}
+			const form = document.getElementById("modem-source-form");
+			if (response.ok && payload && form) {
+				form.elements.enabled.checked = !!payload.enabled;
+				form.elements.poll_interval.value =
+					payload.poll_interval != null ? String(payload.poll_interval) : "15";
+				form.elements.label.value = payload.label || "";
+				const state = document.getElementById("modem-source-state");
+				if (state) {
+					if (!payload.present) {
+						state.textContent =
+							"The internal modem source is not configured yet.";
+					} else if (payload.enabled) {
+						state.textContent =
+							"Forwarding is enabled." +
+							(payload.last_status ? " Last poll: " + payload.last_status : "");
+					} else {
+						state.textContent = "Configured, forwarding disabled.";
+					}
+				}
+			}
+		} catch (error) {
+			// Prefill is optional; the form stays usable with empty defaults.
+		}
+	}
+	// #endregion FUNC_loadModemSourceSettings
+
+	// #region FUNC_submitModemSourceSave
+	// PURPOSE: Validates and saves the internal modem source profile.
+	async function submitModemSourceSave(event) {
+		event.preventDefault();
+		if (busy) {
+			return;
+		}
+		setBusy(true);
+		try {
+			const { response, payload } = await postForm(
+				"/api/modem/source",
+				modemSourceFormFields(event.target),
+			);
+			if (response.status === 401) {
+				renderAuthRequired();
+				return;
+			}
+			if (response.ok) {
+				setBanner(
+					"ok",
+					(payload && payload.message) || "Modem source settings saved.",
+				);
+				await loadModemSourceSettings();
+			} else {
+				setBanner(
+					"error",
+					(payload && payload.error) || `Request failed (${response.status}).`,
+				);
+			}
+		} catch (error) {
+			setBanner("error", "The device could not be reached.");
+		} finally {
+			setBusy(false);
+		}
+	}
+	// #endregion FUNC_submitModemSourceSave
+
+	function modemSourceFormFields(form) {
+		return {
+			enabled: form.elements.enabled.checked ? "1" : "0",
+			poll_interval: form.elements.poll_interval.value.trim(),
+			label: form.elements.label.value.trim(),
+		};
 	}
 
 	function smsSendFields(form) {

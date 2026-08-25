@@ -43,9 +43,22 @@ struct WebZteConfig {
   bool enabled;
   String host;
   bool passwordSet;
-  String label;       // Phone number or alias shown in forwarded emails.
-  String lastStatus;  // empty until the first poll or test completed
+  String label;                   // Phone number or alias shown in forwarded emails.
+  uint16_t pollIntervalSec = 15;  // per-source poll period 5..300 s
+  String lastStatus;              // empty until the first poll or test completed
 };
+
+// #region STRUCT_WebModemSourceConfig
+// PURPOSE: Snapshot for GET /api/modem/source without exposing credentials;
+// pollIntervalSec is the per-source SMS poll period (5–300 s).
+struct WebModemSourceConfig {
+  bool present = false;
+  bool enabled = false;
+  uint16_t pollIntervalSec = 15;
+  String label;       // Phone number or alias shown in forwarded emails.
+  String lastStatus;  // empty until the first poll completes
+};
+// #endregion STRUCT_WebModemSourceConfig
 
 // #region STRUCT_WebModemStatus
 // PURPOSE: Snapshot for GET /api/modem/status without exposing credentials;
@@ -89,6 +102,10 @@ String renderZteConfigJson(const WebZteConfig& config);
 // PURPOSE: Serializes WebModemStatus into the /api/modem/status envelope.
 String renderModemStatusJson(const WebModemStatus& status);
 // #endregion FUNC_renderModemStatusJson
+// #region FUNC_renderModemSourceJson
+// PURPOSE: Serializes WebModemSourceConfig into the /api/modem/source envelope.
+String renderModemSourceJson(const WebModemSourceConfig& config);
+// #endregion FUNC_renderModemSourceJson
 String renderAsyncOpJson(const WebAsyncOp& op);
 String renderMessageJson(const String& message);
 String renderErrorJson(const String& error);

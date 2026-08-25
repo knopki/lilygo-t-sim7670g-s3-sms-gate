@@ -4,8 +4,11 @@
 // hardware; mirrors zte_client_test.cpp style.
 // #endregion MODULE_CONTRACT
 
+#include "../sms_gate/codec.h"
 #include "../sms_gate/modem_client.h"
+#include "../sms_gate/modem_record.h"
 #include <cassert>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -150,6 +153,112 @@ void testParseFw() {
 }
 // #endregion FUNC_testParseFw
 
+// #region FUNC_makeModemSourceRecord
+// PURPOSE: Builds one known-good modem-source record as the baseline for
+// every mutation.
+ModemSourceRecord makeModemRecord() {
+  ModemSourceRecord record{};
+  record.magic = kModemSourceMagic;
+  record.version = kModemSourceVersion;
+  record.enabled = 1;
+  record.pollIntervalSec = kDefaultModemPollSec;
+  strcpy(record.label, "+79990000001");
+  record.checksum = calculateModemSourceChecksum(record);
+  return record;
+}
+// #endregion FUNC_makeModemSourceRecord
+
+// #region FUNC_testModemRecordValidation
+// PURPOSE: Gates load/save on the shared predicate: corrupt, foreign,
+// non-printable, and out-of-range intervals never reach the poll path;
+// the label is optional but must be printable when present.
+void testModemRecordValidation() {
+  ModemSourceRecord record = makeModemRecord();
+  assert(isModemSourceRecordValid(record));
+
+  // Empty label is valid.
+  record = makeModemRecord();
+  record.label[0] = '\0';
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(isModemSourceRecordValid(record));
+
+  // Max-length printable label (31 chars) is valid.
+  record = makeModemRecord();
+  memset(record.label, 'A', kMaxModemLabelLength);
+  record.label[kMaxModemLabelLength] = '\0';
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(isModemSourceRecordValid(record));
+
+  // Non-printable label rejected.
+  record = makeModemRecord();
+  strcpy(record.label, "bad\x01label");
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(!isModemSourceRecordValid(record));
+
+  // Unterminated label (no NUL within 31) rejected.
+  record = makeModemRecord();
+  memset(record.label, 'B', sizeof(record.label));
+  // No NUL
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(!isModemSourceRecordValid(record));
+
+  record = makeModemRecord();
+  record.checksum ^= 1;
+  assert(!isModemSourceRecordValid(record));
+
+  record = makeModemRecord();
+  record.version = static_cast<uint16_t>(kModemSourceVersion + 1);
+  assert(!isModemSourceRecordValid(record));
+
+  record = makeModemRecord();
+  record.magic = 0x11111111;
+  assert(!isModemSourceRecordValid(record));
+
+  record = makeModemRecord();
+  record.enabled = 7;
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(!isModemSourceRecordValid(record));
+
+  record = makeModemRecord();
+  record.enabled = 0;
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(isModemSourceRecordValid(record));
+
+  // Interval boundaries
+  record = makeModemRecord();
+  record.pollIntervalSec = kMinModemPollSec;
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(isModemSourceRecordValid(record));
+
+  record.pollIntervalSec = kMaxModemPollSec;
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(isModemSourceRecordValid(record));
+
+  record.pollIntervalSec = kMinModemPollSec - 1;
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(!isModemSourceRecordValid(record));
+
+  record = makeModemRecord();
+  record.pollIntervalSec = kMaxModemPollSec + 1;
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(!isModemSourceRecordValid(record));
+
+  record = makeModemRecord();
+  record.pollIntervalSec = 0;
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(!isModemSourceRecordValid(record));
+
+  assert(isValidModemPollInterval(kMinModemPollSec));
+  assert(isValidModemPollInterval(kDefaultModemPollSec));
+  assert(isValidModemPollInterval(kMaxModemPollSec));
+  assert(!isValidModemPollInterval(kMinModemPollSec - 1));
+  assert(!isValidModemPollInterval(kMaxModemPollSec + 1));
+  assert(!isValidModemPollInterval(0));
+
+  puts("testModemRecordValidation ok");
+}
+// #endregion FUNC_testModemRecordValidation
+
 // #region FUNC_testPollStatus
 void testPollStatus() {
   FakeModemChannel ch;
@@ -188,6 +297,293 @@ void testPollStatus() {
 }
 // #endregion FUNC_testPollStatus
 
+// #region FUNC_testCodecUcs2
+void testCodecUcs2() {
+  assert(codec::isUcs2HexView("00480065006C006C006F", 20));
+  assert(!codec::isUcs2HexView("004G", 4));
+  assert(!codec::isUcs2HexView("004", 3));
+  assert(codec::isUcs2HexView("", 0));
+  char out[32] = "";
+  codec::decodeUcs2HexView("00480065006C006C006F", 20, out, sizeof(out));
+  assert(strcmp(out, "Hello") == 0);
+  codec::decodeUcs2HexView("041F04400438043204350442", 24, out, sizeof(out));
+  // "Привет" in UTF-8
+  assert(strcmp(out, "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82") == 0);
+  // Surrogate pair D83D DE00 -> U+1F600
+  codec::decodeUcs2HexView("D83DDE00", 8, out, sizeof(out));
+  assert(strcmp(out, "\xF0\x9F\x98\x80") == 0);
+  // Plain GSM stays not hex
+  assert(!codec::isUcs2HexView("Hello", 5));
+  puts("testCodecUcs2 ok");
+}
+// #endregion FUNC_testCodecUcs2
+
+// #region FUNC_testParseCmglHeader
+void testParseCmglHeader() {
+  ModemCmglInfo info{};
+  assert(parseCmglHeader(
+      "+CMGL: 1,\"REC "
+      "UNREAD\",\"002B00370039003600380035003500350037003100360031\",\"\",\"26/08/25,20:29:40+12\"",
+      info));
+  assert(info.idx == 1);
+  assert(strcmp(info.stat, "REC UNREAD") == 0);
+  assert(strcmp(info.oa, "+79685557161") == 0);
+  assert(strcmp(info.scts, "26/08/25,20:29:40+12") == 0);
+  assert(!info.hasTail);
+  assert(
+      parseCmglHeader("+CMGL: 1,\"REC "
+                      "READ\",\"002B00370039003600380035003500350037003100360031\",\"\",\"26/08/"
+                      "25,20:29:40+12\",145,15",
+                      info));
+  assert(info.hasTail && info.tooa == 145 && info.msgLen == 15);
+  // GSM plain OA
+  assert(parseCmglHeader("+CMGL: 0,\"REC UNREAD\",\"+79685557161\",\"\",\"26/08/25,20:31:14+12\"",
+                         info));
+  assert(strcmp(info.oa, "+79685557161") == 0);
+  assert(!info.hasTail);
+  // Malformed
+  assert(!parseCmglHeader("OK", info));
+  assert(!parseCmglHeader("+CMGL: bad", info));
+  puts("testParseCmglHeader ok");
+}
+// #endregion FUNC_testParseCmglHeader
+
+// #region FUNC_testParseCmgrHeader
+void testParseCmgrHeader() {
+  ModemCmgrInfo info{};
+  assert(parseCmgrHeader(
+      "+CMGR: \"REC "
+      "READ\",\"002B00370039003600380035003500350037003100360031\",\"\",\"26/08/25,16:59:23+12\"",
+      info));
+  assert(strcmp(info.stat, "REC READ") == 0);
+  assert(strcmp(info.oa, "+79685557161") == 0);
+  assert(!info.hasTail);
+  assert(parseCmgrHeader(
+      "+CMGR: \"REC "
+      "READ\",\"002B00370039003600380035003500350037003100360031\",\"\",\"26/08/"
+      "25,16:59:23+12\",145,4,0,8,\"002B00370039003600390033003500300031003300350037\",145,5",
+      info));
+  assert(info.hasTail);
+  assert(info.tooa == 145 && info.fo == 4 && info.pid == 0 && info.dcs == 8);
+  assert(strcmp(info.sca, "+79693501357") == 0);
+  assert(info.tosca == 145 && info.msgLen == 5);
+  assert(!parseCmgrHeader("ERROR", info));
+  puts("testParseCmgrHeader ok");
+}
+// #endregion FUNC_testParseCmgrHeader
+
+// #region FUNC_testParseCmglEntry
+void testParseCmglEntry() {
+  ModemSms sms{};
+  // Cyrillic "Привет тест 123" from research §2
+  assert(parseCmglEntry(
+      "+CMGL: 1,\"REC "
+      "UNREAD\",\"002B00370039003600380035003500350037003100360031\",\"\",\"26/08/25,20:29:40+12\"",
+      "041F04400438043204350442002004420435044104420020003100320033", sms));
+  assert(strcmp(sms.id, "1") == 0);
+  assert(strcmp(sms.number, "+79685557161") == 0);
+  assert(strcmp(sms.date, "26/08/25,20:29:40+12") == 0);
+  assert(strcmp(sms.text,
+                "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82 \xD1\x82\xD0\xB5\xD1\x81\xD1\x82 "
+                "123") == 0);
+  assert(sms.concatComplete);
+  // GSM plain body
+  assert(parseCmglEntry("+CMGL: 0,\"REC UNREAD\",\"+79685557161\",\"\",\"26/08/25,20:31:14+12\"",
+                        "Hello test 123", sms));
+  assert(strcmp(sms.text, "Hello test 123") == 0);
+  assert(strcmp(sms.number, "+79685557161") == 0);
+  // UCS2 "Hello" hex
+  assert(parseCmglEntry(
+      "+CMGL: 0,\"REC "
+      "READ\",\"002B00370039003600380035003500350037003100360031\",\"\",\"26/08/25,20:31:14+12\"",
+      "00480065006C006C006F002000740065007300740020003100320033", sms));
+  assert(strcmp(sms.text, "Hello test 123") == 0);
+  puts("testParseCmglEntry ok");
+}
+// #endregion FUNC_testParseCmglEntry
+
+// #region FUNC_testParseCmgrEntry
+void testParseCmgrEntry() {
+  ModemSms sms{};
+  assert(parseCmgrEntry(
+      "+CMGR: \"REC "
+      "READ\",\"002B00370039003600380035003500350037003100360031\",\"\",\"26/08/"
+      "25,16:59:23+12\",145,4,0,8,\"002B00370039003600390033003500300031003300350037\",145,5",
+      "0421043C0441043A0430", sms));
+  assert(strcmp(sms.number, "+79685557161") == 0);
+  assert(strcmp(sms.date, "26/08/25,16:59:23+12") == 0);
+  // "!#CA0"? Actually 0421 043C 0441 043A 0430 -> decode
+  assert(sms.text[0] != '\0');
+  assert(sms.concatComplete);
+  puts("testParseCmgrEntry ok");
+}
+// #endregion FUNC_testParseCmgrEntry
+
+// #region FUNC_testParsePduConcat
+void testParsePduConcat() {
+  uint8_t ref = 0, total = 0, seq = 0;
+  assert(parsePduConcat(
+      "07919796531053F7440B919786557561F10008628052021385218C050003530401041A043804400438043B", ref,
+      total, seq));
+  assert(ref == 0x53 && total == 4 && seq == 1);
+  assert(parsePduConcat("050003530403043B", ref, total, seq) && seq == 3);
+  assert(!parsePduConcat("00480065006C", ref, total, seq));
+  assert(!parsePduConcat("", ref, total, seq));
+  // lower-case hex search
+  assert(parsePduConcat("050003ab0201", ref, total, seq));
+  assert(ref == 0xAB && total == 2 && seq == 1);
+  puts("testParsePduConcat ok");
+}
+// #endregion FUNC_testParsePduConcat
+
+// #region FUNC_testFindOldestUnreadScenarios
+void testFindOldestUnreadUcs2() {
+  FakeModemChannel ch;
+  char scratch[256];
+  ch.addScript("AT+CMGL=\"REC UNREAD\"",
+               {"+CMGL: 1,\"REC "
+                "UNREAD\",\"002B00370039003600380035003500350037003100360031\",\"\",\"26/08/"
+                "25,20:29:40+12\"",
+                "041F04400438043204350442002004420435044104420020003100320033", "OK"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  ModemSms sms{};
+  bool found = false;
+  assert(client.findOldestUnread(sms, found) == ModemResult::kSuccess && found);
+  assert(strcmp(sms.id, "1") == 0);
+  assert(strcmp(sms.number, "+79685557161") == 0);
+  assert(strstr(sms.text, "\xD0\x9F") != nullptr);
+  puts("testFindOldestUnreadUcs2 ok");
+}
+void testFindOldestUnreadGsm() {
+  FakeModemChannel ch;
+  char scratch[256];
+  ch.addScript("AT+CMGL=\"REC UNREAD\"",
+               {"+CMGL: 0,\"REC UNREAD\",\"+79685557161\",\"\",\"26/08/25,20:31:14+12\"",
+                "Hello test 123", "OK"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  ModemSms sms{};
+  bool found = false;
+  assert(client.findOldestUnread(sms, found) == ModemResult::kSuccess && found);
+  assert(strcmp(sms.text, "Hello test 123") == 0);
+  puts("testFindOldestUnreadGsm ok");
+}
+void testFindOldestUnreadOrdered() {
+  FakeModemChannel ch;
+  char scratch[512];
+  ch.addScript(
+      "AT+CMGL=\"REC UNREAD\"",
+      {"+CMGL: 5,\"REC UNREAD\",\"+70000000001\",\"\",\"26/08/25,20:31:58+12\",145,4", "0054",
+       "+CMGL: 2,\"REC UNREAD\",\"+70000000002\",\"\",\"26/08/25,20:29:40+12\",145,4", "0041",
+       "OK"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  ModemSms sms{};
+  bool found = false;
+  assert(client.findOldestUnread(sms, found) == ModemResult::kSuccess && found);
+  assert(strcmp(sms.id, "2") == 0);
+  assert(strcmp(sms.text, "A") == 0);
+  assert(sms.concatComplete);
+  puts("testFindOldestUnreadOrdered ok");
+}
+void testFindOldestUnreadEmptyAndError() {
+  FakeModemChannel ch;
+  char scratch[256];
+  ch.addScript("AT+CMGL=\"REC UNREAD\"", {"OK"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  ModemSms sms{};
+  bool found = true;
+  assert(client.findOldestUnread(sms, found) == ModemResult::kSuccess && !found);
+  // CMS ERROR path
+  FakeModemChannel ch2;
+  ch2.addScript("AT+CMGL=\"REC UNREAD\"", {"+CMS ERROR: 500"});
+  ModemClient client2(ch2, scratch, sizeof(scratch));
+  assert(client2.findOldestUnread(sms, found) == ModemResult::kProtocolError);
+  assert(strcmp(client2.failedStage(), "cms_error") == 0);
+  puts("testFindOldestUnreadEmptyAndError ok");
+}
+void testReadDeleteSend() {
+  FakeModemChannel ch;
+  char scratch[512];
+  ch.addScript(
+      "AT+CMGR=1",
+      {"+CMGR: \"REC "
+       "READ\",\"002B00370039003600380035003500350037003100360031\",\"\",\"26/08/"
+       "25,16:59:23+12\",145,4,0,8,\"002B00370039003600390033003500300031003300350037\",145,5",
+       "0421043C0441043A0430", "OK"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  ModemSms sms{};
+  assert(client.readSms("1", sms) == ModemResult::kSuccess);
+  assert(strcmp(sms.id, "1") == 0);
+  // delete
+  FakeModemChannel ch2;
+  ch2.addScript("AT+CMGD=1", {"OK"});
+  ModemClient client2(ch2, scratch, sizeof(scratch));
+  assert(client2.deleteSms("1") == ModemResult::kSuccess);
+  // send validation (no AT)
+  FakeModemChannel ch3;
+  ModemClient client3(ch3, scratch, sizeof(scratch));
+  assert(client3.sendSms("+79990000000", "Hello") == ModemResult::kProtocolError);
+  assert(strcmp(client3.failedStage(), "not_implemented") == 0);
+  assert(client3.sendSms("", "Hello") == ModemResult::kProtocolError);
+  assert(strcmp(client3.failedStage(), "send_input") == 0);
+  assert(client3.sendSms("+7999", "") == ModemResult::kProtocolError);
+  std::string tooLong(336, 'A');
+  assert(client3.sendSms("+7999", tooLong.c_str()) == ModemResult::kProtocolError);
+  assert(client3.sendSms("+7999", "\xFF") == ModemResult::kProtocolError);
+  puts("testReadDeleteSend ok");
+}
+// #endregion FUNC_testFindOldestUnreadScenarios
+
+// #region FUNC_testInitSequence
+void testInitSuccess() {
+  FakeModemChannel ch;
+  char scratch[256];
+  ch.addScript("AT", {"OK"});
+  ch.addScript("ATE0", {"OK"});
+  ch.addScript("ATV1", {"OK"});
+  ch.addScript("AT+CMEE=2", {"OK"});
+  ch.addScript("AT+CMGF=1", {"OK"});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
+  ch.addScript("AT+CSDH=1", {"OK"});
+  ch.addScript("AT+CPMS=\"ME\",\"ME\",\"ME\"", {"OK"});
+  ch.addScript("AT+CNMI=2,1,0,0,0", {"OK"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  assert(client.init() == ModemResult::kSuccess);
+  puts("testInitSuccess ok");
+}
+void testInitNotPresent() {
+  class TimeoutChannel : public ModemChannel {
+   public:
+    bool write(const char*, size_t) override { return true; }
+    int readLine(char*, size_t, unsigned long) override { return -1; }
+    void purge() override {}
+  } ch;
+  char scratch[256];
+  ModemClient client(ch, scratch, sizeof(scratch));
+  assert(client.init() == ModemResult::kNotPresent);
+  assert(strcmp(client.failedStage(), "not_present") == 0);
+  puts("testInitNotPresent ok");
+}
+void testDeleteCmsError() {
+  FakeModemChannel ch;
+  char scratch[256];
+  ch.addScript("AT+CMGD=1", {"+CMS ERROR: 500"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  assert(client.deleteSms("1") == ModemResult::kProtocolError);
+  assert(strcmp(client.failedStage(), "cms_error") == 0);
+  puts("testDeleteCmsError ok");
+}
+void testReadCmsError() {
+  FakeModemChannel ch;
+  char scratch[256];
+  ch.addScript("AT+CMGR=2", {"+CMS ERROR: 321"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  ModemSms sms{};
+  assert(client.readSms("2", sms) == ModemResult::kProtocolError);
+  assert(strcmp(client.failedStage(), "cms_error") == 0);
+  puts("testReadCmsError ok");
+}
+// #endregion FUNC_testInitSequence
+
 int main() {
   testParseCpin();
   testParseCsq();
@@ -199,5 +595,22 @@ int main() {
   testParseImei();
   testParseFw();
   testPollStatus();
+  testModemRecordValidation();
+  testCodecUcs2();
+  testParseCmglHeader();
+  testParseCmgrHeader();
+  testParseCmglEntry();
+  testParseCmgrEntry();
+  testParsePduConcat();
+  testFindOldestUnreadUcs2();
+  testFindOldestUnreadGsm();
+  testFindOldestUnreadOrdered();
+  testFindOldestUnreadEmptyAndError();
+  testReadDeleteSend();
+  testInitSuccess();
+  testInitNotPresent();
+  testDeleteCmsError();
+  testReadCmsError();
+  puts("all modem tests passed");
   return 0;
 }

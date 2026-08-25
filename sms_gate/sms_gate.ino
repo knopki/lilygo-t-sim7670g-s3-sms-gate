@@ -1,27 +1,30 @@
 // #region MODULE_CONTRACT
 // PURPOSE: Lets the SMS gateway join a WPA2/WPA3-Personal Wi-Fi network while
 // providing a recoverable local web interface for network, SMTP delivery,
-// ZTE and onboard SIM7670G SMS source configuration, forwards ZTE modem SMS
-// by email, sends outgoing SMS through the ZTE modem (ADR-0003), and polls
-// the onboard SIM7670G for read-only status (ADR-0004).
+// ZTE and onboard SIM7670G SMS source configuration, forwards ZTE and
+// SIM7670G modem SMS by email, sends outgoing SMS through the ZTE modem
+// (ADR-0003), and polls the onboard SIM7670G for status and SMS forwarding
+// (ADR-0004).
 // SCOPE:
 // - Wi-Fi provisioning, captive portal, Digest-authenticated configuration,
 // isolated persistent configuration, HTTP routes, the asynchronous SMTP
 // test-delivery lifecycle, the ZTE poll/forward/delete lifecycle, the
-// asynchronous ZTE send lifecycle, and the always-on SIM7670G status poll
-// (present/CPIN/CSQ/CESQ/CEREG/CPMS/CCLK) exposed at GET /api/modem/status.
+// asynchronous ZTE send lifecycle, the always-on SIM7670G status poll
+// (present/CPIN/CSQ/CESQ/CEREG/CPMS/CCLK) exposed at GET /api/modem/status,
+// and the SIM7670G SMS poll/forward/delete lifecycle with label alias and
+// dynamic poll interval.
 // - NOT: The SMTP dialog itself (smtp_client), TLS transport
 // (smtp_transport), the ZTE goform dialog (zte_client), its transport
 // (zte_transport), the SIM7670G AT transport details in modem_transport.h beyond
-// thin Serial1 binding, SMS receive/send/delete on the SIM7670G, GNSS, and
-// OTA logic.
+// thin Serial1 binding, SMS send on the SIM7670G, GNSS, and OTA logic.
 // INVARIANTS: Credentials are never written to Serial or
 // returned in HTTP responses; the SMTP and modem passwords are never
-// serialized; incoming ZTE SMS are deleted only after SMTP acceptance;
-// outgoing records are cleaned only after a terminal modem send status;
-// modem status is published under a portMUX without blocking HTTP workers.
+// serialized; incoming ZTE and SIM7670G SMS are deleted only after SMTP
+// acceptance; outgoing ZTE records are cleaned only after a terminal modem
+// send status; modem status is published under a portMUX without blocking HTTP
+// workers.
 // DEPENDENCIES: Uses Arduino-ESP32 WiFi, WebServer, DNSServer, ESPmDNS,
-// and Preferences; modem status via modem_client.* over modem_transport.h.
+// and Preferences; modem status and SMS via modem_client.* over modem_transport.h.
 // #endregion MODULE_CONTRACT
 
 #include <Arduino.h>
@@ -37,6 +40,7 @@
 #include "config_store.h"
 #include "modem_client.h"
 #include "modem_transport.h"
+#include "sms_validate.h"
 #include "smtp_client.h"
 #include "smtp_transport.h"
 #include "web_api.h"
@@ -54,7 +58,7 @@ constexpr unsigned long kReconnectIntervalMs = 60UL * 1000UL;
 constexpr unsigned long kApShutdownDelayMs = 3UL * 1000UL;
 constexpr unsigned long kSerialHeartbeatIntervalMs = 5UL * 1000UL;
 constexpr size_t kBootTraceCapacity = 1024;
-constexpr unsigned long kZtePollIntervalMs = 15UL * 1000UL;
+constexpr unsigned long kZtePollIntervalMs = 15UL * 1000UL;  // fallback; see getZtePollIntervalMs()
 constexpr size_t kZteScratchSize = 20UL * 1024UL;
 constexpr size_t kZteStatusLength = 160;
 // The modem's send command is asynchronous: one status sample per second,
@@ -71,7 +75,7 @@ constexpr unsigned int kZteOutgoingCleanupMaxAttempts = kZteMaxPages * kZtePageS
 constexpr const char* kNtpServers[] = {"pool.ntp.org", "time.nist.gov"};
 constexpr unsigned long kModemPollIntervalMs = 15UL * 1000UL;
 constexpr size_t kModemScratchSize = 2048;
-constexpr uint32_t kModemTaskStack = 4096;
+constexpr uint32_t kModemTaskStack = 8192;
 
 enum class ConnectionState { kInitialSetup, kConnecting, kOnline, kFallbackAp };
 
@@ -143,6 +147,12 @@ ModemStatus g_modemStatus;
 portMUX_TYPE g_modemMux = portMUX_INITIALIZER_UNLOCKED;
 TaskHandle_t g_modemTaskHandle = nullptr;
 volatile bool g_modemTaskStopRequested = false;
+
+ModemSourceStore modemSourceStore;
+RuntimeModemSourceConfig storedModemSource;
+bool modemSourceLoaded = false;
+volatile bool modemPollCycleActive = false;
+volatile bool modemSendRunning = false;
 
 // #region FUNC_recordBootStage
 // PURPOSE: Preserves startup events until native USB CDC becomes ready, so the
@@ -906,9 +916,166 @@ void handleModemStatusRequest() {
 }
 // #endregion FUNC_handleModemStatusRequest
 
+String sanitizeSenderForSubject(const char* sender);
+
+// #region FUNC_shouldRunModemSms
+// PURPOSE: Gates one SIM7670G SMS poll on SMTP presence, per-source enable,
+// Wi-Fi connectivity, CPIN READY, and idle Serial1.
+bool shouldRunModemSms(const ModemStatus& snapshot) {
+  if (!modemSourceLoaded || !storedModemSource.enabled) return false;
+  if (!smtpConfigLoaded || storedSmtpConfig.host.length() == 0 ||
+      storedSmtpConfig.password.length() == 0)
+    return false;
+  if (WiFi.status() != WL_CONNECTED) return false;
+  if (!snapshot.present || strcmp(snapshot.cpin, "READY") != 0) return false;
+  if (modemSendRunning) return false;
+  return true;
+}
+// #endregion FUNC_shouldRunModemSms
+
+// #region FUNC_getZtePollIntervalMs
+// PURPOSE: Returns the NVS-backed ZTE poll interval (5–300 s) as ms,
+// falling back to 15 s when the stored value is out of range.
+unsigned long getZtePollIntervalMs() {
+  const uint16_t sec = zteConfigLoaded ? storedZteConfig.pollIntervalSec : kDefaultZtePollSec;
+  if (!isValidZtePollInterval(sec)) return kDefaultZtePollSec * 1000UL;
+  return static_cast<unsigned long>(sec) * 1000UL;
+}
+// #endregion FUNC_getZtePollIntervalMs
+
+// #region FUNC_getModemPollIntervalMs
+// PURPOSE: Returns the NVS-backed modem poll interval (5–300 s) as ms,
+// falling back to the 15 s default when the stored value is out of range.
+unsigned long getModemPollIntervalMs() {
+  const uint16_t sec = modemSourceLoaded ? storedModemSource.pollIntervalSec : kDefaultModemPollSec;
+  if (!isValidModemPollInterval(sec)) return kDefaultModemPollSec * 1000UL;
+  return static_cast<unsigned long>(sec) * 1000UL;
+}
+// #endregion FUNC_getModemPollIntervalMs
+
+// #region FUNC_buildSmsEmailFromParts
+// PURPOSE: Shared email renderer for ZTE and SIM7670G SMS so both sources
+// produce the same subject/body shape (alias via Received on:,INCOMPLETE).
+void buildSmsEmailFromParts(const char* senderRaw, const String& label, const char* id,
+                            const char* dateRaw, const char* text, bool concatComplete,
+                            const char* received, const char* total, String& subject,
+                            String& body) {
+  const String sender = sanitizeSenderForSubject(senderRaw != nullptr ? senderRaw : "");
+  if (!concatComplete) {
+    const char* rec = (received != nullptr && received[0] != '\0') ? received : "?";
+    const char* tot = (total != nullptr && total[0] != '\0') ? total : "?";
+    subject = F("[INCOMPLETE ");
+    subject += rec;
+    subject += '/';
+    subject += tot;
+    subject += F("] SMS from ");
+    subject += sender;
+  } else {
+    subject = F("SMS from ");
+    subject += sender;
+  }
+  body = F("Sender: ");
+  body += sender;
+  if (label.length() > 0) {
+    body += F("\nReceived on: ");
+    body += label;
+  }
+  body += F("\nModem message ID: ");
+  body += id != nullptr ? id : "";
+  body += F("\nModem date: ");
+  char formatted[64];
+  formatZteDate(dateRaw != nullptr ? dateRaw : "", formatted, sizeof(formatted));
+  body += formatted;
+  body += F("\n\n");
+  if (!concatComplete) {
+    body +=
+        F("WARNING: modem received only part of this concatenated SMS; "
+          "this email contains the available fragment.\n\n");
+  }
+  body += text != nullptr ? text : "";
+}
+// #endregion FUNC_buildSmsEmailFromParts
+
+// #region FUNC_buildModemSmsEmail
+// PURPOSE: Renders one SIM7670G ModemSms as subject/body via the shared
+// helper, using the modem-source label alias.
+void buildModemSmsEmail(const ModemSms& sms, String& subject, String& body) {
+  buildSmsEmailFromParts(sms.number, storedModemSource.label, sms.id, sms.date, sms.text,
+                         sms.concatComplete, sms.concatReceived, sms.concatTotal, subject, body);
+}
+// #endregion FUNC_buildModemSmsEmail
+
+// #region FUNC_forwardModemSms
+// PURPOSE: Delivers one SIM7670G SMS via the stored SMTP profile; true only
+// on 250 OK.
+bool forwardModemSms(const ModemSms& sms) {
+  const unsigned long startedAt = millis();
+  Serial.printf("event=modem_forward_begin id=%s number=%s heap=%u\n", sms.id, sms.number,
+                static_cast<unsigned>(ESP.getFreeHeap()));
+  SecureSmtpChannel channel;
+  SmtpClient client(channel);
+  client.setStageListener(logSmtpStage);
+  String subject;
+  String body;
+  buildModemSmsEmail(sms, subject, body);
+  const SmtpConfigRecord record = buildSmtpConfigRecord(storedSmtpConfig);
+  const SmtpSendResult result =
+      client.sendMail(record, mdnsHostname.c_str(), subject.c_str(), body.c_str());
+  Serial.printf(
+      "event=modem_forward_result id=%s result=%s stage=%s code=%d elapsed_ms=%lu "
+      "heap=%u\n",
+      sms.id, smtpResultName(result), client.failedStage(), client.lastReplyCode(),
+      millis() - startedAt, static_cast<unsigned>(ESP.getFreeHeap()));
+  return result == SmtpSendResult::kSuccess;
+}
+// #endregion FUNC_forwardModemSms
+
+// #region FUNC_runModemPollCycle
+// PURPOSE: One SIM7670G poll → oldest REC UNREAD → SMTP forward → delete and
+// verify; Serial events mirror the ZTE cycle without blocking HTTP workers.
+void runModemPollCycle(ModemClient& client) {
+  Serial.printf("event=modem_poll_begin heap=%u\n", static_cast<unsigned>(ESP.getFreeHeap()));
+  modemPollCycleActive = true;
+  ModemSms sms;
+  bool found = false;
+  ModemResult result = client.findOldestUnread(sms, found);
+  if (result != ModemResult::kSuccess) {
+    String safeStage = String(client.failedStage());
+    safeStage.replace("=", "_");
+    Serial.printf("event=modem_poll_complete result=scan_failed stage=%s\n", safeStage.c_str());
+    modemPollCycleActive = false;
+    return;
+  }
+  if (!found) {
+    Serial.println("event=modem_poll_complete result=inbox_empty");
+    modemPollCycleActive = false;
+    return;
+  }
+  Serial.printf("event=modem_sms_found id=%s number=%s complete=%s\n", sms.id, sms.number,
+                sms.concatComplete ? "true" : "false");
+  if (!forwardModemSms(sms)) {
+    Serial.printf("event=modem_poll_complete result=forward_failed id=%s\n", sms.id);
+    modemPollCycleActive = false;
+    return;
+  }
+  result = client.deleteSms(sms.id);
+  if (result == ModemResult::kSuccess) {
+    Serial.printf("event=modem_delete_complete id=%s\n", sms.id);
+    Serial.printf("event=modem_poll_complete result=forwarded id=%s\n", sms.id);
+  } else {
+    String safeStage = String(client.failedStage());
+    safeStage.replace("=", "_");
+    Serial.printf("event=modem_delete_failed id=%s stage=%s\n", sms.id, safeStage.c_str());
+    Serial.printf("event=modem_poll_complete result=delete_unverified id=%s\n", sms.id);
+  }
+  modemPollCycleActive = false;
+}
+// #endregion FUNC_runModemPollCycle
+
 // #region FUNC_modemTask
-// PURPOSE: Owns scratch and Serial1, brings up the Classic SIM7670G, then
-// polls status every kModemPollIntervalMs and publishes event=modem_status.
+// PURPOSE: Owns scratch and Serial1, brings up the Classic SIM7670G, polls
+// status every dynamic pollIntervalSec and, when gated, forwards one oldest
+// REC UNREAD SMS via SMTP before deleting it.
 void modemTask(void*) {
   char* scratch = static_cast<char*>(malloc(kModemScratchSize));
   if (scratch == nullptr) {
@@ -925,10 +1092,12 @@ void modemTask(void*) {
   ModemClient client(transport, scratch, kModemScratchSize);
   ModemResult initResult = client.init();
   if (initResult == ModemResult::kSuccess) {
-    Serial.printf("event=modem_ready variant=classic heap=%u\n",
-                  static_cast<unsigned>(ESP.getFreeHeap()));
+    Serial.printf("event=modem_ready variant=classic heap=%u stack_hwm=%u\n",
+                  static_cast<unsigned>(ESP.getFreeHeap()),
+                  static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
   } else {
-    Serial.printf("event=modem_error stage=%s\n", client.failedStage());
+    Serial.printf("event=modem_error stage=%s stack_hwm=%u\n", client.failedStage(),
+                  static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
   }
   while (!g_modemTaskStopRequested) {
     ModemStatus status;
@@ -939,12 +1108,12 @@ void modemTask(void*) {
       Serial.printf(
           "event=modem_status present=%s cpin=%s cereg=%d creg=%d rssi=%d "
           "rsrp=%d rsrq=%d cops=%s act=%d used_me=%u total_me=%u used_sm=%u "
-          "total_sm=%u cclk=%s\n",
+          "total_sm=%u cclk=%s stack_hwm=%u\n",
           status.present ? "true" : "false", status.cpin, status.ceregStat, status.cregStat,
           status.csqRssiDbm, status.cesqRsrpDbm, status.cesqRsrqDb, status.copsOp, status.copsAct,
           static_cast<unsigned>(status.smsUsedMe), static_cast<unsigned>(status.smsTotalMe),
           static_cast<unsigned>(status.smsUsedSm), static_cast<unsigned>(status.smsTotalSm),
-          status.cclk);
+          status.cclk, static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
     } else {
       ModemStatus absent;
       absent.present = false;
@@ -953,7 +1122,14 @@ void modemTask(void*) {
       publishModemStatus(absent);
       Serial.printf("event=modem_error stage=%s\n", safeStage.c_str());
     }
-    for (unsigned long waited = 0; waited < kModemPollIntervalMs && !g_modemTaskStopRequested;
+    if (!modemSendRunning) {
+      const ModemStatus snapshot = readModemStatus();
+      if (shouldRunModemSms(snapshot)) {
+        runModemPollCycle(client);
+      }
+    }
+    const unsigned long intervalMs = getModemPollIntervalMs();
+    for (unsigned long waited = 0; waited < intervalMs && !g_modemTaskStopRequested;
          waited += 250) {
       vTaskDelay(pdMS_TO_TICKS(250));
     }
@@ -967,8 +1143,9 @@ void modemTask(void*) {
 // #endregion FUNC_modemTask
 
 // #region FUNC_syncModemTask
-// PURPOSE: Ensures exactly one always-on modem poll task, mirroring the
-// ZTE poll lifecycle but without an SMTP gating condition.
+// PURPOSE: Ensures exactly one always-on modem poll task; the SMS sub-cycle
+// inside it is gated by SMTP/label/Wi-Fi/CPIN, but status polling stays
+// always on.
 void syncModemTask() {
   if (g_modemTaskHandle != nullptr) {
     g_modemTaskStopRequested = true;
@@ -1013,42 +1190,11 @@ String sanitizeSenderForSubject(const char* sender) {
 // #endregion FUNC_sanitizeSenderForSubject
 
 // #region FUNC_buildSmsEmail
-// PURPOSE: Renders one SMS as the email subject and UTF-8 body, mirroring
-// the reference forwarder's message layout.
+// PURPOSE: Renders one ZTE SMS as the email subject/body via the shared
+// helper so ZTE and SIM7670G share one layout.
 void buildSmsEmail(const ZteSms& sms, String& subject, String& body) {
-  const String sender = sanitizeSenderForSubject(sms.number);
-  if (!sms.concatComplete) {
-    const char* received = sms.concatReceived[0] != '\0' ? sms.concatReceived : "?";
-    const char* total = sms.concatTotal[0] != '\0' ? sms.concatTotal : "?";
-    subject = F("[INCOMPLETE ");
-    subject += received;
-    subject += '/';
-    subject += total;
-    subject += F("] SMS from ");
-    subject += sender;
-  } else {
-    subject = F("SMS from ");
-    subject += sender;
-  }
-  body = F("Sender: ");
-  body += sender;
-  if (storedZteConfig.label.length() > 0) {
-    body += F("\nReceived on: ");
-    body += storedZteConfig.label;
-  }
-  body += F("\nModem message ID: ");
-  body += sms.id;
-  body += F("\nModem date: ");
-  char zteDate[64];
-  formatZteDate(sms.dateRaw, zteDate, sizeof(zteDate));
-  body += zteDate;
-  body += F("\n\n");
-  if (!sms.concatComplete) {
-    body +=
-        F("WARNING: modem received only part of this concatenated SMS; "
-          "this email contains the available fragment.\n\n");
-  }
-  body += sms.textUtf8;
+  buildSmsEmailFromParts(sms.number, storedZteConfig.label, sms.id, sms.dateRaw, sms.textUtf8,
+                         sms.concatComplete, sms.concatReceived, sms.concatTotal, subject, body);
 }
 // #endregion FUNC_buildSmsEmail
 
@@ -1163,8 +1309,8 @@ void ztePollTask(void*) {
     ztePollCycleActive = true;
     runZtePollCycle(modem);
     ztePollCycleActive = false;
-    for (unsigned long waited = 0; waited < kZtePollIntervalMs && !ztePollStopRequested;
-         waited += 250) {
+    const unsigned long intervalMs = getZtePollIntervalMs();
+    for (unsigned long waited = 0; waited < intervalMs && !ztePollStopRequested; waited += 250) {
       vTaskDelay(pdMS_TO_TICKS(250));
     }
   }
@@ -1244,7 +1390,7 @@ void zteTestTask(void*) {
 
 // #region FUNC_readZteForm
 // PURPOSE: Validates the ZTE form into a runtime profile; an empty password
-// keeps the stored one, matching the SMTP form contract.
+// keeps the stored one, poll interval is bounded 5–300 s.
 bool readZteForm(RuntimeZteConfig& candidate, String& error) {
   candidate.enabled = server.arg("enabled") == F("1");
   candidate.host = server.arg("host");
@@ -1272,13 +1418,26 @@ bool readZteForm(RuntimeZteConfig& candidate, String& error) {
     error = F("The phone number or alias must contain up to 31 printable ASCII characters.");
     return false;
   }
+  String intervalRaw = server.arg("poll_interval");
+  intervalRaw.trim();
+  if (intervalRaw.length() == 0) {
+    error = F("Poll interval must be a number between 5 and 300 seconds.");
+    return false;
+  }
+  char* end = nullptr;
+  const long parsed = strtol(intervalRaw.c_str(), &end, 10);
+  if (end == nullptr || *end != '\0' || parsed < kMinZtePollSec || parsed > kMaxZtePollSec) {
+    error = F("Poll interval must be a number between 5 and 300 seconds.");
+    return false;
+  }
+  candidate.pollIntervalSec = static_cast<uint16_t>(parsed);
   return true;
 }
 // #endregion FUNC_readZteForm
 
 // #region FUNC_buildWebZteConfig
 // PURPOSE: Snapshots the stored ZTE profile for the JSON API without ever
-// serializing the password.
+// serializing the password; exposes poll interval and alias label.
 WebZteConfig buildWebZteConfig() {
   WebZteConfig web;
   web.present = zteConfigLoaded && storedZteConfig.host.length() > 0;
@@ -1286,10 +1445,92 @@ WebZteConfig buildWebZteConfig() {
   web.host = web.present ? storedZteConfig.host : String();
   web.passwordSet = web.present && storedZteConfig.password.length() > 0;
   web.label = web.present ? storedZteConfig.label : String();
+  web.pollIntervalSec = web.present ? storedZteConfig.pollIntervalSec : kDefaultZtePollSec;
   web.lastStatus = readZteLastStatus();
   return web;
 }
 // #endregion FUNC_buildWebZteConfig
+
+// #region FUNC_buildWebModemSourceConfig
+// PURPOSE: Snapshots the stored modem-source profile for the JSON API without
+// ever serializing credentials; exposes poll interval and alias label.
+WebModemSourceConfig buildWebModemSourceConfig() {
+  WebModemSourceConfig web;
+  web.present = modemSourceLoaded;
+  web.enabled = web.present && storedModemSource.enabled;
+  web.pollIntervalSec = web.present ? storedModemSource.pollIntervalSec : kDefaultModemPollSec;
+  web.label = web.present ? storedModemSource.label : String();
+  web.lastStatus = String();
+  return web;
+}
+// #endregion FUNC_buildWebModemSourceConfig
+
+// #region FUNC_readModemSourceForm
+// PURPOSE: Validates the modem-source form into a runtime profile; the
+// single checkbox controls forwarding, poll interval is bounded 5–300 s,
+// and the alias label is optional printable ASCII up to 31 chars.
+bool readModemSourceForm(RuntimeModemSourceConfig& candidate, String& error) {
+  candidate.enabled = server.arg("enabled") == F("1");
+  String intervalRaw = server.arg("poll_interval");
+  intervalRaw.trim();
+  if (intervalRaw.length() == 0) {
+    error = F("Poll interval must be a number between 5 and 300 seconds.");
+    return false;
+  }
+  char* end = nullptr;
+  const long parsed = strtol(intervalRaw.c_str(), &end, 10);
+  if (end == nullptr || *end != '\0' || parsed < kMinModemPollSec || parsed > kMaxModemPollSec) {
+    error = F("Poll interval must be a number between 5 and 300 seconds.");
+    return false;
+  }
+  candidate.pollIntervalSec = static_cast<uint16_t>(parsed);
+  candidate.label = server.arg("label");
+  candidate.label.trim();
+  if (candidate.label.length() > kMaxModemLabelLength || !isPrintableAscii(candidate.label)) {
+    error = F("The phone number or alias must contain up to 31 printable ASCII characters.");
+    return false;
+  }
+  return true;
+}
+// #endregion FUNC_readModemSourceForm
+
+// #region FUNC_handleModemSourceRequest
+// PURPOSE: Returns the stored modem-source profile for form prefill in the
+// browser UI; Digest-protected after initial setup like /api/zte.
+void handleModemSourceRequest() {
+  if (config.ssid.length() > 0 && !requireAuthentication()) {
+    return;
+  }
+  sendJson(server, 200, renderModemSourceJson(buildWebModemSourceConfig()));
+}
+// #endregion FUNC_handleModemSourceRequest
+
+// #region FUNC_handleModemSourceSave
+// PURPOSE: Validates and persists the modem-source profile; the poll interval
+// is applied without a reboot because modemTask reads it dynamically.
+void handleModemSourceSave() {
+  Serial.println("event=http_modem_source_submit");
+  if (config.ssid.length() > 0 && !requireAuthentication()) {
+    return;
+  }
+  RuntimeModemSourceConfig candidate;
+  String error;
+  if (!readModemSourceForm(candidate, error)) {
+    sendJsonError(400, error);
+    return;
+  }
+  if (!modemSourceStore.save(candidate)) {
+    sendJsonError(500, F("The modem source configuration could not be saved."));
+    return;
+  }
+  storedModemSource = candidate;
+  modemSourceLoaded = true;
+  Serial.printf("event=modem_source_saved enabled=%s poll_interval=%u\n",
+                candidate.enabled ? "true" : "false",
+                static_cast<unsigned>(candidate.pollIntervalSec));
+  sendJson(server, 200, renderMessageJson(F("Modem source settings saved.")));
+}
+// #endregion FUNC_handleModemSourceSave
 
 // #region FUNC_handleZteConfigRequest
 // PURPOSE: Returns the stored ZTE profile (without the password) for form
@@ -1325,7 +1566,9 @@ void handleZteSaveSubmission() {
   zteTestDone = false;
   zteTestMessage = "";
   syncZtePollTask();
-  Serial.println("event=zte_saved");
+  Serial.printf("event=zte_saved enabled=%s poll_interval=%u\n",
+                candidate.enabled ? "true" : "false",
+                static_cast<unsigned>(candidate.pollIntervalSec));
   sendJson(server, 200, renderMessageJson(F("ZTE settings saved.")));
 }
 // #endregion FUNC_handleZteSaveSubmission
@@ -1394,37 +1637,25 @@ void handleZteTestStatus() {
 // #region FUNC_isValidZteSmsRecipient
 // PURPOSE: Accepts only an optional leading plus followed by digits so the
 // Number field can never smuggle form separators into the goform request.
-bool isValidZteSmsRecipient(const String& value) {
-  if (value.length() < 3 || value.length() > 20) {
-    return false;
-  }
-  for (size_t index = 0; index < value.length(); ++index) {
-    const char ch = value[index];
-    if (ch == '+' && index == 0) {
-      continue;
-    }
-    if (ch < '0' || ch > '9') {
-      return false;
-    }
-  }
-  return true;
-}
+// Kept for compatibility; delegates to the shared sms_validate.h helper so
+// the future POST /api/sms/send can validate identically for both sources.
+bool isValidZteSmsRecipient(const String& value) { return isValidSmsRecipient(value); }
 // #endregion FUNC_isValidZteSmsRecipient
 
 // #region FUNC_readZteSendForm
 // PURPOSE: Validates the outgoing-SMS form (recipient and body) every SMS
-// source will share; the body rule is the modem's own UNICODE send limit in
-// UTF-16 code units, so emoji and Cyrillic are counted like the modem does.
+// source will share; the body rule is the shared 335-unit limit from
+// sms_validate.h so emoji and Cyrillic are counted like the modem does.
 bool readZteSendForm(String& to, String& text, String& error) {
   to = server.arg("to");
   to.trim();
-  if (!isValidZteSmsRecipient(to)) {
+  if (!isValidSmsRecipient(to)) {
     error = F("Recipient must be 3\u201320 digits with an optional leading +.");
     return false;
   }
   text = server.arg("text");
-  const size_t units = zteSmsUtf16Units(text.c_str());
-  if (units == kZteSmsInvalidUnits) {
+  const size_t units = smsUtf16Units(text.c_str());
+  if (units == kSmsInvalidUnits) {
     error = F("The message is not valid UTF-8 text.");
     return false;
   }
@@ -1432,7 +1663,7 @@ bool readZteSendForm(String& to, String& text, String& error) {
     error = F("Enter the message text.");
     return false;
   }
-  if (units > kMaxZteSmsSendUnits) {
+  if (units > kMaxSmsSendUnits) {
     error = F("The message is too long; the modem accepts at most 335 characters.");
     return false;
   }
@@ -1655,6 +1886,80 @@ void handleZteSendStatus() {
 }
 // #endregion FUNC_handleZteSendStatus
 
+// #region FUNC_handleSmsSendStart
+// PURPOSE: Unified send entry point for the future POST /api/sms/send
+// {via:"zte"|"modem", to, text}; keeps POST /api/zte/send as a
+// deprecated alias. Validation is fully shared via sms_validate.h so
+// switching storage is unnecessary; "modem" is acknowledged but not yet
+// implemented (shares the same 335-unit limit and recipient rule).
+void handleSmsSendStart() {
+  Serial.println("event=http_sms_send_submit");
+  if (!requireAuthentication()) {
+    return;
+  }
+  String via = server.arg("via");
+  via.trim();
+  via.toLowerCase();
+  if (via.length() == 0) {
+    via = "zte";
+  }
+  if (via != "zte" && via != "modem") {
+    sendJsonError(400, F("Field via must be \"zte\" or \"modem\"."));
+    return;
+  }
+  String to;
+  String text;
+  String error;
+  if (!readZteSendForm(to, text, error)) {
+    sendJsonError(400, error);
+    return;
+  }
+  if (via == "modem") {
+    Serial.printf("event=sms_send_rejected via=modem reason=not_implemented to=%s units=%u\n",
+                  to.c_str(), static_cast<unsigned>(smsUtf16Units(text.c_str())));
+    sendJsonError(501, F("Modem SMS send is not yet implemented; the request was validated."));
+    return;
+  }
+  if (zteSendRunning) {
+    sendJsonError(409, F("An SMS send is already in progress."));
+    return;
+  }
+  if (zteTestRunning) {
+    sendJsonError(409, F("A connection test is in progress; try again in a few seconds."));
+    return;
+  }
+  if (ztePollCycleActive) {
+    sendJsonError(409, F("A poll cycle is in progress; try again in a few seconds."));
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    sendJsonError(400, F("The device is not connected to a Wi-Fi network."));
+    return;
+  }
+  if (!zteConfigLoaded || storedZteConfig.host.length() == 0 ||
+      storedZteConfig.password.length() == 0) {
+    sendJsonError(400, F("Save the ZTE modem settings (host and password) before sending."));
+    return;
+  }
+  if (time(nullptr) < 1577836800) {
+    sendJsonError(503, F("Waiting for the internet time sync; try again in a minute."));
+    return;
+  }
+  zteSendTo = to;
+  zteSendText = text;
+  zteSendDone = false;
+  zteSendMessage = "";
+  zteSendRunning = true;
+  if (xTaskCreatePinnedToCore(zteSendTask, "zte_send", 16384, nullptr, 1, nullptr, 0) != pdPASS) {
+    zteSendRunning = false;
+    Serial.println("event=zte_send_failed reason=task_create");
+    sendJsonError(503, F("The send could not be started. Try again."));
+    return;
+  }
+  sendJson(server, 200, renderMessageJson(F("Send started.")));
+}
+// #endregion FUNC_handleSmsSendStart
+
 // #region FUNC_handleSmtpConfigRequest
 // PURPOSE: Returns the stored SMTP profile (without the password) for form
 // prefill in the browser UI.
@@ -1785,7 +2090,10 @@ void configureWebServer() {
   server.on("/api/zte/test", HTTP_GET, handleZteTestStatus);
   server.on("/api/zte/send", HTTP_POST, handleZteSendStart);
   server.on("/api/zte/send", HTTP_GET, handleZteSendStatus);
+  server.on("/api/sms/send", HTTP_POST, handleSmsSendStart);
   server.on("/api/modem/status", HTTP_GET, handleModemStatusRequest);
+  server.on("/api/modem/source", HTTP_GET, handleModemSourceRequest);
+  server.on("/api/modem/source", HTTP_POST, handleModemSourceSave);
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.printf("event=http_server_started port=%u\n", kHttpPort);
@@ -1824,10 +2132,29 @@ void setupFirmware() {
   recordBootStage(String(F("event=boot_smtp_config_loaded present=")) +
                   (smtpConfigLoaded ? F("true") : F("false")));
   zteConfigLoaded = zteConfigStore.load(storedZteConfig);
-  recordBootStage(String(F("event=boot_zte_config_loaded present=")) +
-                  (zteConfigLoaded ? String(storedZteConfig.enabled ? F("true enabled=true")
-                                                                    : F("true enabled=false"))
-                                   : F("false")));
+  {
+    String zteBoot = String(F("event=boot_zte_config_loaded present=")) +
+                     (zteConfigLoaded ? String(F("true")) : String(F("false")));
+    if (zteConfigLoaded) {
+      zteBoot += F(" enabled=");
+      zteBoot += storedZteConfig.enabled ? F("true") : F("false");
+      zteBoot += F(" poll_interval=");
+      zteBoot += String(storedZteConfig.pollIntervalSec);
+    }
+    recordBootStage(zteBoot);
+  }
+  modemSourceLoaded = modemSourceStore.load(storedModemSource);
+  {
+    String modemBoot = String(F("event=boot_modem_source_loaded present=")) +
+                       (modemSourceLoaded ? String(F("true")) : String(F("false")));
+    if (modemSourceLoaded) {
+      modemBoot += F(" enabled=");
+      modemBoot += storedModemSource.enabled ? F("true") : F("false");
+      modemBoot += F(" poll_interval=");
+      modemBoot += String(storedModemSource.pollIntervalSec);
+    }
+    recordBootStage(modemBoot);
+  }
 
   recordBootStage(F("event=boot_http_routes_begin"));
   configureWebServer();
