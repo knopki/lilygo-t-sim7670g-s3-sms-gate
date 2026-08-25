@@ -24,6 +24,8 @@
   uncommitted changes in the worktree is the expected end state.
 - If a commit is requested, format its message according to Conventional
   Commits.
+- Project is managed by mise-en-place. Run tools via mise exec like `mise exec -- arduino-cli`.
+- Don't enumerate ports. Target device, if present, connected to `/dev/ttyACM0`.
 
 <!-- #endregion SECTION_Dev_Rules -->
 
@@ -53,7 +55,7 @@ decision do not require an ADR.
 
   ```bash
   python3 tools/gen_assets.py  # or: mise run assets
-  arduino-cli compile sms_gate
+  mise exec -- arduino-cli compile sms_gate
   ```
 
 - Run the host configuration-record test:
