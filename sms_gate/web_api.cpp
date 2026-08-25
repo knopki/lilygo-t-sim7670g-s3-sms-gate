@@ -134,6 +134,57 @@ String renderZteConfigJson(const WebZteConfig& config) {
   return json;
 }
 
+// #region FUNC_renderModemStatusJson
+// PURPOSE: Serializes WebModemStatus into the /api/modem/status envelope.
+String renderModemStatusJson(const WebModemStatus& status) {
+  String json;
+  json.reserve(420);
+  json += F("{\"present\":");
+  json += status.present ? F("true") : F("false");
+  json += F(",\"cpin\":");
+  appendJsonString(json, status.cpin);
+  json += F(",\"signal\":{\"rssi_dbm\":");
+  json += String(status.rssiDbm);
+  json += F(",\"ber\":");
+  json += String(status.ber);
+  json += F(",\"rsrp_dbm\":");
+  json += String(status.rsrpDbm);
+  json += F(",\"rsrq_db\":");
+  json += String(status.rsrqDb);
+  json += F("}");
+  json += F(",\"registration\":{\"cereg\":");
+  json += String(status.cereg);
+  json += F(",\"creg\":");
+  json += String(status.creg);
+  json += F(",\"attached\":");
+  json += status.attached ? F("true") : F("false");
+  json += F("}");
+  json += F(",\"operator\":{\"name\":");
+  appendJsonString(json, status.oper);
+  json += F(",\"act\":");
+  json += String(status.act);
+  json += F("}");
+  json += F(",\"clock\":");
+  appendJsonNullableString(json, status.clock.length() > 0, status.clock);
+  json += F(",\"sms_storage\":{\"mem\":\"ME\",\"used\":");
+  json += String(status.smsUsedMe);
+  json += F(",\"total\":");
+  json += String(status.smsTotalMe);
+  json += F(",\"mem2\":\"SM\",\"used2\":");
+  json += String(status.smsUsedSm);
+  json += F(",\"total2\":");
+  json += String(status.smsTotalSm);
+  json += F("}");
+  json += F(",\"identity\":{\"imei\":");
+  appendJsonString(json, status.imei);
+  json += F(",\"fw\":");
+  appendJsonString(json, status.fw);
+  json += F("}");
+  json += '}';
+  return json;
+}
+// #endregion FUNC_renderModemStatusJson
+
 String renderAsyncOpJson(const WebAsyncOp& op) {
   String json;
   json.reserve(op.message.length() + 64);

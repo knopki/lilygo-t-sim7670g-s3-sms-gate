@@ -47,6 +47,31 @@ struct WebZteConfig {
   String lastStatus;  // empty until the first poll or test completed
 };
 
+// #region STRUCT_WebModemStatus
+// PURPOSE: Snapshot for GET /api/modem/status without exposing credentials;
+// RSSI/RSRP already converted to dBm, unknown → 0.
+struct WebModemStatus {
+  bool present = false;
+  String cpin;
+  int rssiDbm = 0;
+  int ber = 99;
+  int rsrpDbm = 0;
+  int rsrqDb = 0;
+  int cereg = -1;
+  int creg = -1;
+  bool attached = false;
+  String oper;
+  int act = -1;
+  String clock;
+  uint16_t smsUsedMe = 0;
+  uint16_t smsTotalMe = 0;
+  uint16_t smsUsedSm = 0;
+  uint16_t smsTotalSm = 0;
+  String imei;
+  String fw;
+};
+// #endregion STRUCT_WebModemStatus
+
 // Shape shared by every one-shot asynchronous test route (SMTP, ZTE).
 struct WebAsyncOp {
   bool running;
@@ -60,6 +85,10 @@ void appendJsonString(String& out, const String& value);
 String renderStatusJson(const WebStatus& status);
 String renderSmtpConfigJson(const WebSmtpConfig& config);
 String renderZteConfigJson(const WebZteConfig& config);
+// #region FUNC_renderModemStatusJson
+// PURPOSE: Serializes WebModemStatus into the /api/modem/status envelope.
+String renderModemStatusJson(const WebModemStatus& status);
+// #endregion FUNC_renderModemStatusJson
 String renderAsyncOpJson(const WebAsyncOp& op);
 String renderMessageJson(const String& message);
 String renderErrorJson(const String& error);

@@ -1,23 +1,27 @@
 // #region MODULE_CONTRACT
 // PURPOSE: Lets the SMS gateway join a WPA2/WPA3-Personal Wi-Fi network while
 // providing a recoverable local web interface for network, SMTP delivery,
-// and ZTE SMS source configuration, forwards ZTE modem SMS by email, and
-// sends outgoing SMS through the same modem (ADR-0003).
+// ZTE and onboard SIM7670G SMS source configuration, forwards ZTE modem SMS
+// by email, sends outgoing SMS through the ZTE modem (ADR-0003), and polls
+// the onboard SIM7670G for read-only status (ADR-0004).
 // SCOPE:
 // - Wi-Fi provisioning, captive portal, Digest-authenticated configuration,
 // isolated persistent configuration, HTTP routes, the asynchronous SMTP
-// test-delivery lifecycle, the ZTE poll/forward/delete lifecycle, and the
-// asynchronous ZTE send lifecycle (recipient and body fields shared by
-// future SMS sources), including cleanup of terminal outgoing records.
+// test-delivery lifecycle, the ZTE poll/forward/delete lifecycle, the
+// asynchronous ZTE send lifecycle, and the always-on SIM7670G status poll
+// (present/CPIN/CSQ/CESQ/CEREG/CPMS/CCLK) exposed at GET /api/modem/status.
 // - NOT: The SMTP dialog itself (smtp_client), TLS transport
 // (smtp_transport), the ZTE goform dialog (zte_client), its transport
-// (zte_transport), SMS from the onboard modem, GNSS, and OTA logic.
+// (zte_transport), the SIM7670G AT transport details in modem_transport.h beyond
+// thin Serial1 binding, SMS receive/send/delete on the SIM7670G, GNSS, and
+// OTA logic.
 // INVARIANTS: Credentials are never written to Serial or
 // returned in HTTP responses; the SMTP and modem passwords are never
 // serialized; incoming ZTE SMS are deleted only after SMTP acceptance;
-// outgoing records are cleaned only after a terminal modem send status.
+// outgoing records are cleaned only after a terminal modem send status;
+// modem status is published under a portMUX without blocking HTTP workers.
 // DEPENDENCIES: Uses Arduino-ESP32 WiFi, WebServer, DNSServer, ESPmDNS,
-// and Preferences.
+// and Preferences; modem status via modem_client.* over modem_transport.h.
 // #endregion MODULE_CONTRACT
 
 #include <Arduino.h>
@@ -25,11 +29,14 @@
 #include <ESPmDNS.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <cstring>
 #include <esp_mac.h>
 #include <esp_system.h>
 #include <new>
 
 #include "config_store.h"
+#include "modem_client.h"
+#include "modem_transport.h"
 #include "smtp_client.h"
 #include "smtp_transport.h"
 #include "web_api.h"
@@ -62,6 +69,9 @@ constexpr unsigned int kZteOutgoingCleanupMaxAttempts = kZteMaxPages * kZtePageS
 // NTP sources for the wall clock SEND_SMS validates (sms_time); the modem
 // runs its own SNTP and rejects far-off timestamps.
 constexpr const char* kNtpServers[] = {"pool.ntp.org", "time.nist.gov"};
+constexpr unsigned long kModemPollIntervalMs = 15UL * 1000UL;
+constexpr size_t kModemScratchSize = 2048;
+constexpr uint32_t kModemTaskStack = 4096;
 
 enum class ConnectionState { kInitialSetup, kConnecting, kOnline, kFallbackAp };
 
@@ -127,6 +137,12 @@ String zteSendMessage;
 TaskHandle_t ztePollTaskHandle = nullptr;
 portMUX_TYPE zteStatusMux = portMUX_INITIALIZER_UNLOCKED;
 char zteLastStatus[kZteStatusLength] = "";
+
+// On-board SIM7670G status cache (ADR-0004, step 1 read-only).
+ModemStatus g_modemStatus;
+portMUX_TYPE g_modemMux = portMUX_INITIALIZER_UNLOCKED;
+TaskHandle_t g_modemTaskHandle = nullptr;
+volatile bool g_modemTaskStopRequested = false;
 
 // #region FUNC_recordBootStage
 // PURPOSE: Preserves startup events until native USB CDC becomes ready, so the
@@ -832,6 +848,147 @@ String readZteLastStatus() {
   return snapshot;
 }
 // #endregion FUNC_readZteLastStatus
+
+// #region FUNC_publishModemStatus
+// PURPOSE: Atomically publishes one polled SIM7670G snapshot for HTTP readers.
+void publishModemStatus(const ModemStatus& status) {
+  portENTER_CRITICAL(&g_modemMux);
+  g_modemStatus = status;
+  portEXIT_CRITICAL(&g_modemMux);
+}
+// #endregion FUNC_publishModemStatus
+
+// #region FUNC_readModemStatus
+// PURPOSE: Snapshots the modem cache without holding the spinlock across
+// String construction or UART access.
+ModemStatus readModemStatus() {
+  portENTER_CRITICAL(&g_modemMux);
+  const ModemStatus snapshot = g_modemStatus;
+  portEXIT_CRITICAL(&g_modemMux);
+  return snapshot;
+}
+// #endregion FUNC_readModemStatus
+
+// #region FUNC_buildWebModemStatus
+// PURPOSE: Maps the portMUX snapshot to the JSON shape, keeping credentials
+// out of the envelope and converting RSSI sentinels to dBm.
+WebModemStatus buildWebModemStatus() {
+  const ModemStatus raw = readModemStatus();
+  WebModemStatus web;
+  web.present = raw.present;
+  web.cpin = String(raw.cpin);
+  web.rssiDbm = raw.csqRssiDbm;
+  web.ber = raw.csqBer;
+  web.rsrpDbm = raw.cesqRsrpDbm;
+  web.rsrqDb = raw.cesqRsrqDb;
+  web.cereg = raw.ceregStat;
+  web.creg = raw.cregStat;
+  web.attached = raw.cgatt;
+  web.oper = String(raw.copsOp);
+  web.act = raw.copsAct;
+  web.clock = String(raw.cclk);
+  web.smsUsedMe = raw.smsUsedMe;
+  web.smsTotalMe = raw.smsTotalMe;
+  web.smsUsedSm = raw.smsUsedSm;
+  web.smsTotalSm = raw.smsTotalSm;
+  web.imei = String(raw.imei);
+  web.fw = String(raw.fw);
+  return web;
+}
+// #endregion FUNC_buildWebModemStatus
+
+// #region FUNC_handleModemStatusRequest
+// PURPOSE: Serves GET /api/modem/status; Digest-protected after initial setup
+// like /api/zte and the SMTP routes.
+void handleModemStatusRequest() {
+  if (config.ssid.length() > 0 && !requireAuthentication()) return;
+  sendJson(server, 200, renderModemStatusJson(buildWebModemStatus()));
+}
+// #endregion FUNC_handleModemStatusRequest
+
+// #region FUNC_modemTask
+// PURPOSE: Owns scratch and Serial1, brings up the Classic SIM7670G, then
+// polls status every kModemPollIntervalMs and publishes event=modem_status.
+void modemTask(void*) {
+  char* scratch = static_cast<char*>(malloc(kModemScratchSize));
+  if (scratch == nullptr) {
+    Serial.println("event=modem_error stage=no_scratch");
+    g_modemTaskHandle = nullptr;
+    vTaskDelete(nullptr);
+    return;
+  }
+  ModemTransport transport;
+  transport.begin();
+  transport.powerPulse();
+  Serial.println("event=modem_init_begin variant=classic");
+  vTaskDelay(pdMS_TO_TICKS(3000));
+  ModemClient client(transport, scratch, kModemScratchSize);
+  ModemResult initResult = client.init();
+  if (initResult == ModemResult::kSuccess) {
+    Serial.printf("event=modem_ready variant=classic heap=%u\n",
+                  static_cast<unsigned>(ESP.getFreeHeap()));
+  } else {
+    Serial.printf("event=modem_error stage=%s\n", client.failedStage());
+  }
+  while (!g_modemTaskStopRequested) {
+    ModemStatus status;
+    ModemResult result = client.pollStatus(status);
+    if (result == ModemResult::kSuccess) {
+      status.updatedMs = millis();
+      publishModemStatus(status);
+      Serial.printf(
+          "event=modem_status present=%s cpin=%s cereg=%d creg=%d rssi=%d "
+          "rsrp=%d rsrq=%d cops=%s act=%d used_me=%u total_me=%u used_sm=%u "
+          "total_sm=%u cclk=%s\n",
+          status.present ? "true" : "false", status.cpin, status.ceregStat, status.cregStat,
+          status.csqRssiDbm, status.cesqRsrpDbm, status.cesqRsrqDb, status.copsOp, status.copsAct,
+          static_cast<unsigned>(status.smsUsedMe), static_cast<unsigned>(status.smsTotalMe),
+          static_cast<unsigned>(status.smsUsedSm), static_cast<unsigned>(status.smsTotalSm),
+          status.cclk);
+    } else {
+      ModemStatus absent;
+      absent.present = false;
+      String safeStage = String(client.failedStage());
+      safeStage.replace("=", "_");
+      publishModemStatus(absent);
+      Serial.printf("event=modem_error stage=%s\n", safeStage.c_str());
+    }
+    for (unsigned long waited = 0; waited < kModemPollIntervalMs && !g_modemTaskStopRequested;
+         waited += 250) {
+      vTaskDelay(pdMS_TO_TICKS(250));
+    }
+  }
+  transport.end();
+  free(scratch);
+  Serial.println("event=modem_task_stopped");
+  g_modemTaskHandle = nullptr;
+  vTaskDelete(nullptr);
+}
+// #endregion FUNC_modemTask
+
+// #region FUNC_syncModemTask
+// PURPOSE: Ensures exactly one always-on modem poll task, mirroring the
+// ZTE poll lifecycle but without an SMTP gating condition.
+void syncModemTask() {
+  if (g_modemTaskHandle != nullptr) {
+    g_modemTaskStopRequested = true;
+    const unsigned long deadline = millis() + 5000;
+    while (g_modemTaskHandle != nullptr && millis() < deadline) delay(10);
+    g_modemTaskStopRequested = false;
+    if (g_modemTaskHandle != nullptr) {
+      Serial.println("event=modem_task_stop_timeout");
+      return;
+    }
+  }
+  if (xTaskCreatePinnedToCore(modemTask, "modem_poll", kModemTaskStack, nullptr, 1,
+                              &g_modemTaskHandle, 0) != pdPASS) {
+    g_modemTaskHandle = nullptr;
+    Serial.println("event=modem_task_start_failed reason=task_create");
+    return;
+  }
+  Serial.println("event=modem_task_started");
+}
+// #endregion FUNC_syncModemTask
 
 // #region FUNC_sanitizeSenderForSubject
 // PURPOSE: Reduces a sender field to printable ASCII so it can travel in an
@@ -1628,6 +1785,7 @@ void configureWebServer() {
   server.on("/api/zte/test", HTTP_GET, handleZteTestStatus);
   server.on("/api/zte/send", HTTP_POST, handleZteSendStart);
   server.on("/api/zte/send", HTTP_GET, handleZteSendStatus);
+  server.on("/api/modem/status", HTTP_GET, handleModemStatusRequest);
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.printf("event=http_server_started port=%u\n", kHttpPort);
@@ -1674,6 +1832,8 @@ void setupFirmware() {
   recordBootStage(F("event=boot_http_routes_begin"));
   configureWebServer();
   syncZtePollTask();
+  recordBootStage(F("event=modem_init_begin variant=classic"));
+  syncModemTask();
   recordBootStage(F("event=boot_http_routes_complete"));
   bootTraceCollecting = false;
 }
@@ -1704,7 +1864,17 @@ void loopFirmware() {
                    ? "connecting"
                    : (connectionState == ConnectionState::kFallbackAp ? "fallback-ap"
                                                                       : "initial-ap"));
-    Serial.printf("firmware alive; mode=%s\n", mode);
+    const ModemStatus modemSnapshot = readModemStatus();
+    const char* modemState =
+        !modemSnapshot.present
+            ? "offline"
+            : (strcmp(modemSnapshot.cpin, "READY") != 0
+                   ? "no-sim"
+                   : (modemSnapshot.ceregStat != 1 && modemSnapshot.ceregStat != 5 &&
+                              modemSnapshot.cregStat != 1 && modemSnapshot.cregStat != 5
+                          ? "no-signal"
+                          : "ready"));
+    Serial.printf("firmware alive; mode=%s modem=%s\n", mode, modemState);
   }
 
   if (connectionState == ConnectionState::kConnecting) {

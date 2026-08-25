@@ -1,113 +1,115 @@
 :root {
-  color-scheme: light dark;
+	color-scheme: light dark;
 }
 
 body {
-  font: 16px system-ui, sans-serif;
-  max-width: 42rem;
-  margin: 2rem auto;
-  padding: 0 1rem;
-  line-height: 1.45;
+	font:
+		16px system-ui,
+		sans-serif;
+	max-width: 42rem;
+	margin: 2rem auto;
+	padding: 0 1rem;
+	line-height: 1.45;
 }
 
 h1 {
-  font-size: 1.5rem;
+	font-size: 1.5rem;
 }
 
 h2 {
-  font-size: 1.2rem;
-  margin-top: 2rem;
+	font-size: 1.2rem;
+	margin-top: 2rem;
 }
 
 fieldset {
-  margin: 1.25rem 0;
-  padding: 1rem;
-  border-radius: .4rem;
+	margin: 1.25rem 0;
+	padding: 1rem;
+	border-radius: 0.4rem;
 }
 
 label {
-  display: block;
-  margin: .7rem 0;
+	display: block;
+	margin: 0.7rem 0;
 }
 
 .hint {
-  color: #555;
+	color: #555;
 }
 
 .error {
-  color: #9b1c1c;
-  font-weight: 600;
+	color: #9b1c1c;
+	font-weight: 600;
 }
 
 .banner {
-  padding: .6rem .9rem;
-  border-radius: .4rem;
+	padding: 0.6rem 0.9rem;
+	border-radius: 0.4rem;
 }
 
 .banner.ok {
-  background: #e6f4ea;
-  color: #1e4620;
+	background: #e6f4ea;
+	color: #1e4620;
 }
 
 .banner.error {
-  background: #fdecea;
-  color: #7a1c1c;
+	background: #fdecea;
+	color: #7a1c1c;
 }
 
 input,
 select,
 textarea {
-  display: block;
-  box-sizing: border-box;
-  width: 100%;
-  padding: .5rem;
-  margin-top: .2rem;
-  font: inherit;
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	padding: 0.5rem;
+	margin-top: 0.2rem;
+	font: inherit;
 }
 
 label.checkbox input {
-  display: inline-block;
-  width: auto;
-  margin-right: .4rem;
+	display: inline-block;
+	width: auto;
+	margin-right: 0.4rem;
 }
 
 button {
-  padding: .55rem .9rem;
-  margin-right: .5rem;
+	padding: 0.55rem 0.9rem;
+	margin-right: 0.5rem;
 }
 
 button:disabled {
-  opacity: .6;
+	opacity: 0.6;
 }
 
 dl.status {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: .3rem 1.2rem;
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 0.3rem 1.2rem;
 }
 
 dl.status dt {
-  color: #555;
+	color: #555;
 }
 
 dl.status dd {
-  margin: 0;
-  overflow-wrap: anywhere;
+	margin: 0;
+	overflow-wrap: anywhere;
 }
 
 @media (prefers-color-scheme: dark) {
-  .hint,
-  dl.status dt {
-    color: #aaa;
-  }
+	.hint,
+	dl.status dt {
+		color: #aaa;
+	}
 
-  .banner.ok {
-    background: #1b3a1f;
-    color: #b6e2bd;
-  }
+	.banner.ok {
+		background: #1b3a1f;
+		color: #b6e2bd;
+	}
 
-  .banner.error {
-    background: #46191c;
-    color: #f3b8b4;
-  }
+	.banner.error {
+		background: #46191c;
+		color: #f3b8b4;
+	}
 }
