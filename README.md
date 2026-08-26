@@ -259,40 +259,25 @@ www/                  # Client-rendered UI sources (index.html, app.js, style.cs
 tools/
 └── gen_assets.py     # Gzips www/ into sms_gate/web_assets.h
 tests/
-├── config_record_test.cpp  # Host test for record integrity and limits
-├── smtp_client_test.cpp    # Host test for SMTP record and dialog sequencing
-└── zte_client_test.cpp     # Host test for the ZTE goform dialog and record
+├── config_record_test.cpp    # Host test for record integrity and limits
+├── smtp_client_test.cpp      # Host test for SMTP record and dialog sequencing
+├── zte_client_test.cpp       # Host test for the ZTE goform dialog and record
+├── modem_client_test.cpp     # Host test for SIM7670G AT dialog and parsers
+├── zte_form_codec_test.cpp   # Host test for form-urlencoding
+├── sms_validate_test.cpp     # Host test for shared SMS validation (recipient/335 units)
+├── email_builder_test.cpp    # Host test for subject/body rendering
+├── web_api_test.cpp          # Host test for JSON escaping and envelope rendering
+└── host_stub/                # Minimal Arduino stubs for host tests
 ```
 
 ## Tests
 
-The portable configuration-record test has no framework dependency. Run it on a host with a C++17 compiler:
+All host tests are part of the minimum local verification. Run the full suite:
 
 ```bash
-c++ -std=c++17 -Wall -Wextra -Werror tests/config_record_test.cpp \
-  -o /tmp/config_record_test
-/tmp/config_record_test
+mise run test
 ```
 
-The SMTP dialog test scripts a fake server and asserts the exact command
-sequence, including the STARTTLS upgrade ordering and base64 credentials:
-
-```bash
-c++ -std=c++17 -Wall -Wextra -Werror tests/smtp_client_test.cpp \
-  sms_gate/smtp_client.cpp -o /tmp/smtp_client_test
-/tmp/smtp_client_test
-```
-
-The ZTE dialog test scripts a fake modem through the `ZteChannel` interface
-and asserts the request contract (LOGIN base64 password, Referer, stok
-cookie, AD token), stale-session relogin, paging/order detection, UCS-2
-decoding, delete verification, and the record validation:
-
-```bash
-c++ -std=c++17 -Wall -Wextra -Werror tests/zte_client_test.cpp \
-  sms_gate/zte_client.cpp -o /tmp/zte_client_test
-/tmp/zte_client_test
-```
 
 ## Next steps
 

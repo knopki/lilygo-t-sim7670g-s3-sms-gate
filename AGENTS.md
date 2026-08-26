@@ -58,28 +58,10 @@ decision do not require an ADR.
   mise exec -- arduino-cli compile sms_gate
   ```
 
-- Run the host configuration-record test:
+- Run all host tests (preferred):
 
   ```bash
-  c++ -std=c++17 -Wall -Wextra -Werror tests/config_record_test.cpp \
-    -o /tmp/config_record_test
-  /tmp/config_record_test
-  ```
-
-- Run the host SMTP dialog and record test:
-
-  ```bash
-  c++ -std=c++17 -Wall -Wextra -Werror tests/smtp_client_test.cpp \
-    sms_gate/smtp_client.cpp -o /tmp/smtp_client_test
-  /tmp/smtp_client_test
-  ```
-
-- Run the host ZTE goform dialog and record test:
-
-  ```bash
-  c++ -std=c++17 -Wall -Wextra -Werror tests/zte_client_test.cpp \
-    sms_gate/zte_client.cpp -o /tmp/zte_client_test
-  /tmp/zte_client_test
+  mise run test
   ```
 
 - Run the available static checks before completion:
@@ -91,9 +73,7 @@ decision do not require an ADR.
   git diff --check
   ```
 
-- `mise run lint` runs Cppcheck. Treat a successful Arduino compile, focused
-  test, clang-format check, Cppcheck run, and whitespace checks as the minimum
-  local verification.
+- `mise run lint` runs Cppcheck. Treat a successful Arduino compile, `mise run test`, clang-format check, Cppcheck run, and whitespace checks as the minimum local verification.
 
 <!-- #region SECTION_Logging -->
 
@@ -165,9 +145,15 @@ sms_gate/
 www/                  # client-rendered UI sources (index.html, app.js, style.css)
 tools/gen_assets.py   # generates sms_gate/web_assets.h from www/
 tests/
-├── config_record_test.cpp  # Host test for record integrity and field limits
-├── smtp_client_test.cpp    # Host test for SMTP record and dialog sequencing
-└── zte_client_test.cpp     # Host test for the ZTE goform dialog and record
+├── config_record_test.cpp    # Host test for record integrity and field limits
+├── smtp_client_test.cpp      # Host test for SMTP record and dialog sequencing
+├── zte_client_test.cpp       # Host test for the ZTE goform dialog and record
+├── modem_client_test.cpp     # Host test for SIM7670G AT dialog and parsers
+├── zte_form_codec_test.cpp   # Host test for form-urlencoding (ZTE goform)
+├── sms_validate_test.cpp     # Host test for shared SMS validation (recipient/335 units)
+├── email_builder_test.cpp    # Host test for subject/body rendering (INCOMPLETE, alias)
+├── web_api_test.cpp          # Host test for JSON escaping and envelope rendering
+└── host_stub/                # Minimal Arduino String/WebServer stubs for host tests
 README.md             # Build, provisioning, and USB recovery procedure
 ```
 
@@ -181,7 +167,7 @@ README.md             # Build, provisioning, and USB recovery procedure
 <rule>Keep lifecycle, persistence, and UI in separate modules.</rule>
 <rule>Never commit or log credentials; use structured Serial events without secrets.</rule>
 <rule>Consult or create docs/adr/ before a new architectural trade-off.</rule>
-<rule>Run Arduino compile, config-record test, mise fmt:check, mise lint, and both git diff whitespace checks.</rule>
+<rule>Run Arduino compile, mise run test, mise fmt:check, mise lint, and both git diff whitespace checks.</rule>
 </critical_rules>
 
 <!-- #endregion RULES_REPEATED -->
