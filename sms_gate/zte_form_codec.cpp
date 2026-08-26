@@ -4,7 +4,7 @@
 // proven SEND_SMS shape.
 // #endregion MODULE_CONTRACT
 
-#include "zte_form_codec.h"
+#include "zte/zte_form_codec.h"
 
 #include <string.h>
 

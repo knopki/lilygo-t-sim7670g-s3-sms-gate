@@ -11,6 +11,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef SYSTEM_WEB_API_H
+#define SYSTEM_WEB_API_H
 
 #include <Arduino.h>
 #include <WebServer.h>
@@ -133,3 +135,4 @@ String renderMessageJson(const String& message);
 String renderErrorJson(const String& error);
 void sendJson(WebServer& server, int code, const String& json);
 void sendAsset(WebServer& server, const String& path);
+#endif  // SYSTEM_WEB_API_H

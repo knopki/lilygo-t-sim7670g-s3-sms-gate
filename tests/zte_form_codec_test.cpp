@@ -5,7 +5,7 @@
 
 #include <stdio.h>
 
-#include "../sms_gate/zte_form_codec.h"
+#include "../sms_gate/zte/zte_form_codec.h"
 
 namespace {
 

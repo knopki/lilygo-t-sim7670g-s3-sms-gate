@@ -28,15 +28,17 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef SYSTEM_HTTP_SERVER_H
+#define SYSTEM_HTTP_SERVER_H
 
 #include <Arduino.h>
 #include <WebServer.h>
 
-#include "config_store.h"
-#include "modem_service.h"
-#include "smtp_service.h"
-#include "wifi_manager.h"
-#include "zte_service.h"
+#include "persistence/config_store.h"
+#include "modem/modem_service.h"
+#include "smtp/smtp_service.h"
+#include "system/wifi_manager.h"
+#include "zte/zte_service.h"
 
 // #region CLASS_HttpServer
 // PURPOSE: Encapsulates all HTTP route registration and handlers so
@@ -89,3 +91,4 @@ class HttpServer {
   ModemService& modem_;
 };
 // #endregion CLASS_HttpServer
+#endif  // SYSTEM_HTTP_SERVER_H

@@ -4,12 +4,12 @@
 // paging shapes used by the inbox and send-status paths.
 // #endregion MODULE_CONTRACT
 
-#include "zte_json.h"
+#include "zte/zte_json.h"
 
 #include <string.h>
 
 #include "codec.h"
-#include "zte_client.h"
+#include "zte/zte_client.h"
 
 namespace {
 constexpr uint32_t kInvalidHex = 0x200000;

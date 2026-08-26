@@ -13,6 +13,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef CODEC_CODEC_UCS2_H
+#define CODEC_CODEC_UCS2_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -188,3 +190,4 @@ inline size_t encodeUcs2Hex(const char* utf8, char* out, size_t outSize) {
 // #endregion FUNC_encodeUcs2Hex
 
 }  // namespace codec
+#endif  // CODEC_CODEC_UCS2_H

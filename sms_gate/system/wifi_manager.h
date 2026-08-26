@@ -18,12 +18,14 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef SYSTEM_WIFI_MANAGER_H
+#define SYSTEM_WIFI_MANAGER_H
 
 #include <Arduino.h>
 #include <DNSServer.h>
 
-#include "config_store.h"
-#include "web_api.h"
+#include "persistence/config_store.h"
+#include "system/web_api.h"
 
 constexpr unsigned long kConnectTimeoutMs = 30UL * 1000UL;
 constexpr unsigned long kReconnectIntervalMs = 60UL * 1000UL;
@@ -90,3 +92,4 @@ class WifiManager {
   DNSServer dnsServer_;
 };
 // #endregion CLASS_WifiManager
+#endif  // SYSTEM_WIFI_MANAGER_H

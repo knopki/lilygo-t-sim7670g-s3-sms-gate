@@ -14,9 +14,12 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef PERSISTENCE_CONFIG_STORE_H
+#define PERSISTENCE_CONFIG_STORE_H
 
-#include "config_store_common.h"
-#include "config_store_modem.h"
-#include "config_store_network.h"
-#include "config_store_smtp.h"
-#include "config_store_zte.h"
+#include "persistence/config_store_common.h"
+#include "persistence/config_store_modem.h"
+#include "persistence/config_store_network.h"
+#include "persistence/config_store_smtp.h"
+#include "persistence/config_store_zte.h"
+#endif  // PERSISTENCE_CONFIG_STORE_H

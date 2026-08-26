@@ -14,14 +14,16 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef MODEM_MODEM_SERVICE_H
+#define MODEM_MODEM_SERVICE_H
 
 #include <Arduino.h>
 #include <WebServer.h>
 
-#include "config_store.h"
-#include "modem_client.h"
-#include "task_control.h"
-#include "web_api.h"
+#include "persistence/config_store.h"
+#include "modem/modem_client.h"
+#include "system/task_control.h"
+#include "system/web_api.h"
 
 // #region CLASS_ModemService
 // PURPOSE: Encapsulates the SIM7670G source state and its tasks.
@@ -80,3 +82,4 @@ class ModemService {
   void runPollCycle(ModemClient& client);
 };
 // #endregion CLASS_ModemService
+#endif  // MODEM_MODEM_SERVICE_H

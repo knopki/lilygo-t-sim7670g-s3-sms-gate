@@ -8,6 +8,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef PERSISTENCE_CONFIG_STORE_COMMON_H
+#define PERSISTENCE_CONFIG_STORE_COMMON_H
 
 #include <Arduino.h>
 
@@ -19,3 +21,4 @@ bool isPrintableAscii(const String& value);
 bool isValidPassword(const String& value);
 bool constantTimeEquals(const String& left, const String& right);
 bool parsePollInterval(const String& raw, uint16_t& out, uint16_t min, uint16_t max, String& error);
+#endif  // PERSISTENCE_CONFIG_STORE_COMMON_H

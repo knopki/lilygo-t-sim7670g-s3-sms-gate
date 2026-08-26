@@ -6,8 +6,8 @@
 // DEPENDENCIES: Uses Preferences partition label appcfg.
 // #endregion MODULE_CONTRACT
 
-#include "config_store_smtp.h"
-#include "config_store_common.h"
+#include "persistence/config_store_smtp.h"
+#include "persistence/config_store_common.h"
 
 #include <Preferences.h>
 

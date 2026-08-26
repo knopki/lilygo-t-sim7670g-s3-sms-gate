@@ -16,13 +16,15 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef SMTP_SMTP_SERVICE_H
+#define SMTP_SMTP_SERVICE_H
 
 #include <Arduino.h>
 #include <WebServer.h>
 
-#include "config_store.h"
-#include "smtp_client.h"
-#include "web_api.h"
+#include "persistence/config_store.h"
+#include "smtp/smtp_client.h"
+#include "system/web_api.h"
 
 void logSmtpStage(const char* stage, int code);
 
@@ -64,3 +66,4 @@ class SmtpService {
   void runTest();
 };
 // #endregion CLASS_SmtpService
+#endif  // SMTP_SMTP_SERVICE_H

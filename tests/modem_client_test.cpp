@@ -5,8 +5,8 @@
 // #endregion MODULE_CONTRACT
 
 #include "../sms_gate/codec.h"
-#include "../sms_gate/modem_client.h"
-#include "../sms_gate/modem_record.h"
+#include "../sms_gate/modem/modem_client.h"
+#include "../sms_gate/modem/modem_record.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>

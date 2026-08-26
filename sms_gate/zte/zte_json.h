@@ -16,6 +16,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef ZTE_ZTE_JSON_H
+#define ZTE_ZTE_JSON_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -70,3 +72,4 @@ bool isUcs2HexView(JsonView view);
 size_t decodeUcs2HexView(JsonView view, char* out, size_t outSize);
 bool captureMessage(JsonView element, ZteSms& out);
 bool parseEntryHeader(JsonView element, char* id, size_t idSize, char* tag, size_t tagSize);
+#endif  // ZTE_ZTE_JSON_H

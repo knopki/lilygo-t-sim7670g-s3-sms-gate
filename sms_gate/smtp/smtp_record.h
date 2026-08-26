@@ -8,6 +8,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef SMTP_SMTP_RECORD_H
+#define SMTP_SMTP_RECORD_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -97,3 +99,4 @@ inline bool isSmtpConfigRecordValid(const SmtpConfigRecord& record) {
   return true;
 }
 // #endregion FUNC_isSmtpConfigRecordValid
+#endif  // SMTP_SMTP_RECORD_H

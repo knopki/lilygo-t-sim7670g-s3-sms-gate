@@ -6,10 +6,12 @@
 // Preferences partition appcfg. #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef PERSISTENCE_CONFIG_STORE_ZTE_H
+#define PERSISTENCE_CONFIG_STORE_ZTE_H
 
 #include <Arduino.h>
 
-#include "zte_record.h"
+#include "zte/zte_record.h"
 
 struct RuntimeZteConfig {
   bool enabled = false;
@@ -30,3 +32,4 @@ class ZteConfigStore {
   bool migrateV1Record(size_t readLength) const;
   bool migrateV2Record(size_t readLength) const;
 };
+#endif  // PERSISTENCE_CONFIG_STORE_ZTE_H

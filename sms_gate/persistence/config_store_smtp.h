@@ -10,10 +10,12 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef PERSISTENCE_CONFIG_STORE_SMTP_H
+#define PERSISTENCE_CONFIG_STORE_SMTP_H
 
 #include <Arduino.h>
 
-#include "smtp_record.h"
+#include "smtp/smtp_record.h"
 
 struct RuntimeSmtpConfig {
   String host;
@@ -32,3 +34,4 @@ class SmtpConfigStore {
   bool load(RuntimeSmtpConfig& config) const;
   bool save(const RuntimeSmtpConfig& config) const;
 };
+#endif  // PERSISTENCE_CONFIG_STORE_SMTP_H

@@ -8,11 +8,13 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef PERSISTENCE_CONFIG_STORE_NETWORK_H
+#define PERSISTENCE_CONFIG_STORE_NETWORK_H
 
 #include <Arduino.h>
 
-#include "config_record.h"
-#include "config_store_common.h"
+#include "persistence/config_record.h"
+#include "persistence/config_store_common.h"
 
 struct RuntimeConfig {
   String ssid;
@@ -25,3 +27,4 @@ class ConfigStore {
   bool load(RuntimeConfig& config) const;
   bool save(const RuntimeConfig& config) const;
 };
+#endif  // PERSISTENCE_CONFIG_STORE_NETWORK_H

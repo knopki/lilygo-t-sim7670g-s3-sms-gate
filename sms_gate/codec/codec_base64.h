@@ -11,6 +11,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef CODEC_CODEC_BASE64_H
+#define CODEC_CODEC_BASE64_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -55,3 +57,4 @@ inline size_t encodeBase64(const char* input, size_t length, char* out, size_t o
 // #endregion FUNC_encodeBase64
 
 }  // namespace codec
+#endif  // CODEC_CODEC_BASE64_H

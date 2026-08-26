@@ -18,6 +18,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef SMTP_SMTP_TRANSPORT_H
+#define SMTP_SMTP_TRANSPORT_H
 
 #include <errno.h>
 
@@ -25,8 +27,8 @@
 #include <NetworkClientSecure.h>
 #include <lwip/sockets.h>
 
-#include "plain_socket_reader.h"
-#include "smtp_client.h"
+#include "system/plain_socket_reader.h"
+#include "smtp/smtp_client.h"
 
 extern "C" {
 // Mozilla CA bundle embedded in the firmware image by the core's prebuilt
@@ -152,3 +154,4 @@ class SecureSmtpChannel : public SmtpChannel {
   int lastErrno_ = 0;
 };
 // #endregion CLASS_SecureSmtpChannel
+#endif  // SMTP_SMTP_TRANSPORT_H

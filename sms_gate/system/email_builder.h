@@ -17,6 +17,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef SYSTEM_EMAIL_BUILDER_H
+#define SYSTEM_EMAIL_BUILDER_H
 
 #include <Arduino.h>
 
@@ -29,3 +31,4 @@ void buildSmsEmailFromParts(const char* senderRaw, const String& label, const ch
                             const char* received, const char* total, String& subject, String& body);
 void buildZteSmsEmail(const ZteSms& sms, const String& label, String& subject, String& body);
 void buildModemSmsEmail(const ModemSms& sms, const String& label, String& subject, String& body);
+#endif  // SYSTEM_EMAIL_BUILDER_H

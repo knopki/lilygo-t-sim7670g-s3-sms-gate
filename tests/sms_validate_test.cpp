@@ -6,7 +6,7 @@
 #include <cassert>
 #include <cstdio>
 #include <string>
-#include "../sms_gate/sms_validate.h"
+#include "../sms_gate/system/sms_validate.h"
 
 static int tests_run = 0;
 static int tests_pass = 0;

@@ -14,6 +14,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef SYSTEM_PLAIN_SOCKET_READER_H
+#define SYSTEM_PLAIN_SOCKET_READER_H
 
 #include <errno.h>
 
@@ -142,3 +144,4 @@ inline int plainReadBytes(int fd, char* buffer, size_t size, unsigned long deadl
   return used > 0 ? static_cast<int>(used) : -1;
 }
 // #endregion FUNC_plainReadBytes
+#endif  // SYSTEM_PLAIN_SOCKET_READER_H

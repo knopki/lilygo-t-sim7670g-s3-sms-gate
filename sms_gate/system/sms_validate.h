@@ -15,6 +15,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef SYSTEM_SMS_VALIDATE_H
+#define SYSTEM_SMS_VALIDATE_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -121,3 +123,4 @@ inline bool isValidSmsRecipient(const char* value) {
 inline bool isValidSmsRecipient(const String& value) { return isValidSmsRecipient(value.c_str()); }
 #endif
 // #endregion FUNC_isValidSmsRecipient
+#endif  // SYSTEM_SMS_VALIDATE_H

@@ -4,7 +4,7 @@
 // firmware only calls begin/loop/status/scan.
 // #endregion MODULE_CONTRACT
 
-#include "wifi_manager.h"
+#include "system/wifi_manager.h"
 
 #include <ESPmDNS.h>
 #include <WiFi.h>

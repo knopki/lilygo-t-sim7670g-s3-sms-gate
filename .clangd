@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://json.schemastore.org/clang-format-21.x.json
+
+CompileFlags:
+  Remove:
+    - -w
+    - -MMD
+    - -fno-tree-switch-conversion
+    - -mtext-section-literals
+    - -mlongcalls
+    - -fstrict-volatile-bitfields
+    - -mdisable-hardware-atomics
+
+  Add:
+    - -ferror-limit=0
+    - --include=sms_gate
+
+Diagnostics:
+  ClangTidy:
+    Add: []
+  Suppress: []
+
+Index:
+  Background: Build
+
+
+# Treat sms_gate.ino as C++ (also handled in compile_commands.json via -x c++).
+# This is a fallback for ad-hoc header checks when no DB entry matches.
+---
+If:
+  PathMatch: ".*\\.ino"
+CompileFlags:
+  Add: [-x, c++]

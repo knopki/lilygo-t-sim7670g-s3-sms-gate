@@ -3,9 +3,9 @@
 // every configuration store and HTTP form validator.
 // #endregion MODULE_CONTRACT
 
-#include "config_store_common.h"
+#include "persistence/config_store_common.h"
 
-#include "config_record.h"
+#include "persistence/config_record.h"
 
 // #region FUNC_isPrintableAscii
 // PURPOSE: Returns true when every character is in 32..126.

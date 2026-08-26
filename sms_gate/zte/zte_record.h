@@ -8,6 +8,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef ZTE_ZTE_RECORD_H
+#define ZTE_ZTE_RECORD_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -167,3 +169,4 @@ inline bool isZteConfigRecordV1Valid(const ZteConfigRecordV1& record) {
          record.password[0] != '\0';
 }
 // #endregion FUNC_isZteConfigRecordV1Valid
+#endif  // ZTE_ZTE_RECORD_H

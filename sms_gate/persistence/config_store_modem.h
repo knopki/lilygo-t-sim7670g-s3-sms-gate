@@ -8,10 +8,12 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef PERSISTENCE_CONFIG_STORE_MODEM_H
+#define PERSISTENCE_CONFIG_STORE_MODEM_H
 
 #include <Arduino.h>
 
-#include "modem_record.h"
+#include "modem/modem_record.h"
 
 struct RuntimeModemSourceConfig {
   bool enabled = false;
@@ -26,3 +28,4 @@ class ModemSourceStore {
   bool load(RuntimeModemSourceConfig& config) const;
   bool save(const RuntimeModemSourceConfig& config) const;
 };
+#endif  // PERSISTENCE_CONFIG_STORE_MODEM_H

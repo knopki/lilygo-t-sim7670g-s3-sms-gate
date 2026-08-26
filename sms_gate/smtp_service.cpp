@@ -3,14 +3,14 @@
 // monolithic sms_gate.ino only calls load/save/webConfig/readForm/startTest.
 // #endregion MODULE_CONTRACT
 
-#include "smtp_service.h"
+#include "smtp/smtp_service.h"
 
 #include <Arduino.h>
 
-#include "config_store_common.h"
-#include "smtp_client.h"
-#include "smtp_transport.h"
-#include "task_control.h"
+#include "persistence/config_store_common.h"
+#include "smtp/smtp_client.h"
+#include "smtp/smtp_transport.h"
+#include "system/task_control.h"
 
 namespace {
 

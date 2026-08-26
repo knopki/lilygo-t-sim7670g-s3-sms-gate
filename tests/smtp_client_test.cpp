@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "../sms_gate/smtp_client.h"
-#include "../sms_gate/smtp_record.h"
+#include "../sms_gate/smtp/smtp_client.h"
+#include "../sms_gate/smtp/smtp_record.h"
 
 namespace {
 

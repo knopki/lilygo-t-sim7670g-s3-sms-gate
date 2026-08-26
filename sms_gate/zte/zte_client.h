@@ -20,12 +20,14 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef ZTE_ZTE_CLIENT_H
+#define ZTE_ZTE_CLIENT_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-#include "sms_validate.h"
-#include "zte_record.h"
+#include "system/sms_validate.h"
+#include "zte/zte_record.h"
 
 constexpr size_t kZteSmsIdLength = 15;
 constexpr size_t kZteNumberLength = 40;
@@ -186,3 +188,4 @@ class ZteModem {
   char lastSendForm_[1792] = "";
 };
 // #endregion CLASS_ZteModem
+#endif  // ZTE_ZTE_CLIENT_H

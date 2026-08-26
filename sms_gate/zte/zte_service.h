@@ -14,14 +14,16 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef ZTE_ZTE_SERVICE_H
+#define ZTE_ZTE_SERVICE_H
 
 #include <Arduino.h>
 #include <WebServer.h>
 
-#include "config_store.h"
-#include "task_control.h"
-#include "web_api.h"
-#include "zte_client.h"
+#include "persistence/config_store.h"
+#include "system/task_control.h"
+#include "system/web_api.h"
+#include "zte/zte_client.h"
 
 class SmtpService;
 class WifiManager;
@@ -96,3 +98,4 @@ class ZteService {
   String replySnippet(const char* body) const;
 };
 // #endregion CLASS_ZteService
+#endif  // ZTE_ZTE_SERVICE_H

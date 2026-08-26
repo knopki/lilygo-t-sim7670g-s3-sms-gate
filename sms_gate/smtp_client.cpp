@@ -6,7 +6,7 @@
 // traceable to one stage and the last SMTP reply code.
 // #endregion MODULE_CONTRACT
 
-#include "smtp_client.h"
+#include "smtp/smtp_client.h"
 
 #include <stdio.h>
 #include <string.h>

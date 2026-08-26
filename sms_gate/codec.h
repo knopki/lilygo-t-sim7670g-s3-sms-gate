@@ -11,6 +11,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef CODEC_H
+#define CODEC_H
 
 #include <stddef.h>
 
@@ -51,3 +53,4 @@ inline bool containsCharacter(const char* value, size_t maxLength, char expected
 // #endregion FUNC_containsCharacter
 
 }  // namespace codec
+#endif  // CODEC_H

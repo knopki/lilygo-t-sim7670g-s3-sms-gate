@@ -5,7 +5,7 @@
 // recognised; all non-trivial functions have GRACE contracts.
 // #endregion MODULE_CONTRACT
 
-#include "modem_client.h"
+#include "modem/modem_client.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -13,7 +13,7 @@
 #include <string.h>
 
 #include "codec.h"
-#include "sms_validate.h"
+#include "system/sms_validate.h"
 
 namespace {
 constexpr unsigned long kModemDefaultTimeoutMs = 1000;

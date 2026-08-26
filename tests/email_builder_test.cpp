@@ -8,9 +8,9 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
-#include "../sms_gate/email_builder.h"
-#include "../sms_gate/modem_client.h"
-#include "../sms_gate/zte_client.h"
+#include "../sms_gate/system/email_builder.h"
+#include "../sms_gate/modem/modem_client.h"
+#include "../sms_gate/zte/zte_client.h"
 
 // Stub formatZteDate — real impl lives in zte_client.cpp, avoid pulling channel logic.
 bool formatZteDate(const char* raw, char* out, size_t outSize) {

@@ -21,6 +21,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef MODEM_MODEM_CLIENT_H
+#define MODEM_MODEM_CLIENT_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -171,3 +173,4 @@ bool parseCmglEntry(const char* headerLine, const char* bodyLine, ModemSms& out)
 bool parseCmgrEntry(const char* headerLine, const char* bodyLine, ModemSms& out);
 bool decodeModemText(const char* encoded, char* out, size_t outSize);
 bool parsePduConcat(const char* pduHex, uint8_t& ref, uint8_t& total, uint8_t& seq);
+#endif  // MODEM_MODEM_CLIENT_H

@@ -127,21 +127,19 @@ clear it without removing future SMS, GNSS, or email settings.
 
 ```text
 sms_gate/
-├── sms_gate.ino      # Wi-Fi lifecycle, HTTP routes, boot trace, Serial events,
-│                     # ZTE poll/forward/delete lifecycle
-├── config_record.h   # Portable checksummed network configuration record
-├── config_store.*    # appcfg NVS persistence and input validation
-├── smtp_record.h     # Portable checksummed SMTP delivery record
-├── smtp_client.*     # Host-testable SMTP dialog (STARTTLS, AUTH LOGIN, DATA)
-├── smtp_transport.h  # NetworkClientSecure binding with embedded root bundle
-├── zte_record.h      # Portable checksummed ZTE SMS-source record
-├── zte_client.*      # Host-testable ZTE goform dialog (LOGIN, paging, DELETE_SMS)
-├── zte_transport.h   # NetworkClient binding for the ZTE LAN channel
-├── codec.h           # Shared base64/MD5/field validation helpers
-├── web_api.*         # JSON API and gzipped UI asset serving
+├── sms_gate.ino      # thin setup/loop shell, boot trace, Serial events
+├── codec/            # codec headers (codec_base64/md5/ucs2.h), codec.h re-export at root
+├── persistence/      # headers: config_record.h, config_store*.h (appcfg NVS, validated)
+├── smtp/             # headers: smtp_record/client/service/transport.h
+├── zte/              # headers: zte_record/client/service/transport/json/form_codec.h
+├── modem/            # headers: modem_record/client/service/transport.h
+├── system/           # headers: wifi_manager/http_server/web_api/email_builder/task_control/sms_validate/plain_socket_reader.h
+├── *.cpp             # impl at sketch root (Arduino flat compile) — logically in same feature groups
 ├── web_assets.h      # generated gzip assets from www/ (not committed)
 ├── partitions.csv    # appcfg NVS partition and FFat layout
 └── sketch.yaml       # Arduino CLI board, USB CDC, flash, and port settings
+# headers grouped by feature (records stay in their feature); .cpp stay at root for Arduino build.
+# codec/ already header-only; smtp/zte/modem/system/persistence hold public contracts.
 www/                  # client-rendered UI sources (index.html, app.js, style.css)
 tools/gen_assets.py   # generates sms_gate/web_assets.h from www/
 tests/

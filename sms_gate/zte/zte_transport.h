@@ -16,6 +16,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef ZTE_ZTE_TRANSPORT_H
+#define ZTE_ZTE_TRANSPORT_H
 
 #include <errno.h>
 
@@ -23,8 +25,8 @@
 #include <NetworkClient.h>
 #include <lwip/sockets.h>
 
-#include "plain_socket_reader.h"
-#include "zte_client.h"
+#include "system/plain_socket_reader.h"
+#include "zte/zte_client.h"
 
 // #region CLASS_NetworkZteChannel
 // PURPOSE: One ZteChannel implementation per dialog instance so the socket
@@ -92,3 +94,4 @@ class NetworkZteChannel : public ZteChannel {
   bool recvTimeoutSet_ = false;
 };
 // #endregion CLASS_NetworkZteChannel
+#endif  // ZTE_ZTE_TRANSPORT_H

@@ -13,10 +13,12 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef MODEM_MODEM_TRANSPORT_H
+#define MODEM_MODEM_TRANSPORT_H
 
 #include <Arduino.h>
 
-#include "modem_client.h"
+#include "modem/modem_client.h"
 
 // Classic revision pin map (see docs/research/modem-sim7670g.md §1).
 constexpr int kModemPinRx = 10;
@@ -121,3 +123,4 @@ class ModemTransport : public ModemChannel {
   bool started_ = false;
 };
 // #endregion CLASS_ModemTransport
+#endif  // MODEM_MODEM_TRANSPORT_H

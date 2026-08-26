@@ -1,7 +1,7 @@
 #include <assert.h>
 #include <string.h>
 
-#include "../sms_gate/config_record.h"
+#include "../sms_gate/persistence/config_record.h"
 
 int main() {
   ConfigRecord record{};

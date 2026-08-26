@@ -13,7 +13,7 @@
 // web UI's own UNICODE limit.
 // #endregion MODULE_CONTRACT
 
-#include "zte_client.h"
+#include "zte/zte_client.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,8 +21,8 @@
 #include <time.h>
 
 #include "codec.h"
-#include "zte_form_codec.h"
-#include "zte_json.h"
+#include "zte/zte_form_codec.h"
+#include "zte/zte_json.h"
 
 namespace {
 constexpr time_t kEpochSynced = 1577836800;  // 2020-01-01 — SNTP sync threshold

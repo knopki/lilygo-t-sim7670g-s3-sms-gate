@@ -4,10 +4,10 @@
 // operator-facing message with alias, INCOMPLETE flag and modem date.
 // #endregion MODULE_CONTRACT
 
-#include "email_builder.h"
+#include "system/email_builder.h"
 
-#include "modem_client.h"
-#include "zte_client.h"
+#include "modem/modem_client.h"
+#include "zte/zte_client.h"
 
 // #region FUNC_sanitizeSenderForSubject
 // PURPOSE: Reduces a sender field to printable ASCII so it can travel in

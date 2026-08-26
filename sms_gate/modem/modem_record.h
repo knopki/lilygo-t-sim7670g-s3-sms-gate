@@ -7,6 +7,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef MODEM_MODEM_RECORD_H
+#define MODEM_MODEM_RECORD_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -73,3 +75,4 @@ inline bool isModemSourceRecordValid(const ModemSourceRecord& record) {
   return codec::isPrintableRange(record.label, sizeof(record.label));
 }
 // #endregion FUNC_isModemSourceRecordValid
+#endif  // MODEM_MODEM_RECORD_H

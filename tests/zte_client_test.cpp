@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "../sms_gate/codec.h"
-#include "../sms_gate/zte_client.h"
-#include "../sms_gate/zte_record.h"
+#include "../sms_gate/zte/zte_client.h"
+#include "../sms_gate/zte/zte_record.h"
 
 namespace {
 

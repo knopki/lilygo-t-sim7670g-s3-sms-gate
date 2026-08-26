@@ -22,12 +22,12 @@
 #include <WiFi.h>
 #include <esp_system.h>
 
-#include "config_store.h"
-#include "http_server.h"
-#include "modem_service.h"
-#include "smtp_service.h"
-#include "wifi_manager.h"
-#include "zte_service.h"
+#include "persistence/config_store.h"
+#include "system/http_server.h"
+#include "modem/modem_service.h"
+#include "smtp/smtp_service.h"
+#include "system/wifi_manager.h"
+#include "zte/zte_service.h"
 
 namespace {
 
@@ -42,7 +42,8 @@ SmtpService smtpService;
 ZteService zteService;
 WifiManager wifiManager;
 ModemService modemService;
-HttpServer httpServer(server, configStore, config, wifiManager, smtpService, zteService, modemService);
+HttpServer httpServer(server, configStore, config, wifiManager, smtpService, zteService,
+                      modemService);
 unsigned long lastSerialHeartbeatAt = 0;
 String bootTrace;
 bool bootTraceCollecting = true;

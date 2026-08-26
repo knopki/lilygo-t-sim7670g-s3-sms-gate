@@ -2,20 +2,20 @@
 // PURPOSE: Implements ZteService so sms_gate.ino only drives sync/load/save.
 // #endregion MODULE_CONTRACT
 
-#include "zte_service.h"
+#include "zte/zte_service.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <time.h>
 
-#include "config_store_common.h"
-#include "email_builder.h"
-#include "smtp_client.h"
-#include "smtp_service.h"
-#include "smtp_transport.h"
-#include "task_control.h"
-#include "wifi_manager.h"
-#include "zte_transport.h"
+#include "persistence/config_store_common.h"
+#include "system/email_builder.h"
+#include "smtp/smtp_client.h"
+#include "smtp/smtp_service.h"
+#include "smtp/smtp_transport.h"
+#include "system/task_control.h"
+#include "system/wifi_manager.h"
+#include "zte/zte_transport.h"
 
 namespace {
 

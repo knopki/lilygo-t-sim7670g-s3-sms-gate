@@ -11,6 +11,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef SYSTEM_TASK_CONTROL_H
+#define SYSTEM_TASK_CONTROL_H
 
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
@@ -94,3 +96,4 @@ class StringStatusCache {
 // #endregion CLASS_StringStatusCache
 
 }  // namespace task_control
+#endif  // SYSTEM_TASK_CONTROL_H

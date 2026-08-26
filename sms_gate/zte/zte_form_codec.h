@@ -13,9 +13,12 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef ZTE_ZTE_FORM_CODEC_H
+#define ZTE_ZTE_FORM_CODEC_H
 
 #include <stddef.h>
 
 bool isUnreservedFormByte(unsigned char ch);
 bool appendFormEscaped(const char* value, char* out, size_t outSize, size_t& used);
 bool appendLiteral(const char* literal, char* out, size_t outSize, size_t& used);
+#endif  // ZTE_ZTE_FORM_CODEC_H

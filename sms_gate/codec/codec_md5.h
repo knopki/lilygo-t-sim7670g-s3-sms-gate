@@ -12,6 +12,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef CODEC_CODEC_MD5_H
+#define CODEC_CODEC_MD5_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -158,3 +160,4 @@ inline void md5Hex(const char* data, size_t length, char out[33]) {
 // #endregion FUNC_md5Hex
 
 }  // namespace codec
+#endif  // CODEC_CODEC_MD5_H

@@ -11,10 +11,12 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef SMTP_SMTP_CLIENT_H
+#define SMTP_SMTP_CLIENT_H
 
 #include <stddef.h>
 
-#include "smtp_record.h"
+#include "smtp/smtp_record.h"
 
 // #region CLASS_SmtpChannel
 // PURPOSE: Abstracts the byte transport and TLS upgrade point so tests can
@@ -110,3 +112,4 @@ class SmtpClient {
   int lastReplyCode_ = 0;
 };
 // #endregion CLASS_SmtpClient
+#endif  // SMTP_SMTP_CLIENT_H

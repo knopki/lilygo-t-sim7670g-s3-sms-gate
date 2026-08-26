@@ -3,7 +3,7 @@
 // administrator profile in the isolated appcfg partition.
 // #endregion MODULE_CONTRACT
 
-#include "config_store_network.h"
+#include "persistence/config_store_network.h"
 
 #include <Preferences.h>
 

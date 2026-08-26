@@ -7,6 +7,8 @@
 // #endregion MODULE_CONTRACT
 
 #pragma once
+#ifndef PERSISTENCE_CONFIG_RECORD_H
+#define PERSISTENCE_CONFIG_RECORD_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -43,3 +45,4 @@ inline uint32_t calculateConfigChecksum(const ConfigRecord& record) {
   return hash;
 }
 // #endregion FUNC_calculateConfigChecksum
+#endif  // PERSISTENCE_CONFIG_RECORD_H

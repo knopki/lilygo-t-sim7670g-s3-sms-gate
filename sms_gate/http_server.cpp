@@ -2,12 +2,12 @@
 // PURPOSE: Implements HttpServer so the sketch only drives
 // setupFirmware/loopFirmware while all HTTP handlers live here.
 // #endregion MODULE_CONTRACT
-#include "http_server.h"
+#include "system/http_server.h"
 #include <Arduino.h>
 #include <WiFi.h>
-#include "config_store_common.h"
-#include "sms_validate.h"
-#include "web_api.h"
+#include "persistence/config_store_common.h"
+#include "system/sms_validate.h"
+#include "system/web_api.h"
 namespace {
 constexpr char kAdminUser[] = "admin";
 constexpr char kAuthRealm[] = "SMS Gate";
