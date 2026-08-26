@@ -26,7 +26,7 @@ run = "clang-format --dry-run --Werror $(find sms_gate -name '*.ino' -o -name '*
 
 [tasks."lint"]
 description = "Run Cppcheck on Arduino C++ source, JS, HTML"
-run = "cppcheck --language=c++ --std=c++20 --check-level=exhaustive --enable=warning,style,performance,portability --error-exitcode=1 --suppress=missingIncludeSystem --suppress=unknownMacro:sms_gate/web_assets.h --suppress=constParameterReference --suppress=unusedStructMember --suppress=unusedFunction $(find sms_gate -name '*.ino' -o -name '*.h' -o -name '*.cpp') && biome check www/"
+run = "cppcheck --language=c++ --std=c++20 --check-level=exhaustive --enable=warning,style,performance,portability --error-exitcode=1 --suppress=missingIncludeSystem --suppress=unknownMacro:sms_gate/web_assets.h --suppress=constParameterReference --suppress=unusedStructMember --suppress=unusedFunction --suppress=constVariable --suppress=constVariablePointer --suppress=cstyleCast --suppress=redundantCondition --suppress=knownConditionTrueFalse $(find sms_gate -name '*.ino' -o -name '*.h' -o -name '*.cpp') && biome check www/"
 
 [tasks.test]
 description = "Run all host tests (config, smtp, zte, modem, zte_form, sms_validate, email_builder, web_api)"

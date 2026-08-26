@@ -56,6 +56,8 @@ constexpr size_t kSmtpJsonReserve = 256;
 constexpr size_t kZteJsonReserve = 272;
 constexpr size_t kModemSourceReserve = 256;
 constexpr size_t kModemStatusReserve = 420;
+constexpr size_t kGpsConfigReserve = 128;
+constexpr size_t kGpsStatusReserve = 320;
 constexpr size_t kAsyncOpReserveExtra = 64;
 constexpr size_t kMessageReserveExtra = 32;
 }  // namespace
@@ -247,6 +249,64 @@ String renderModemStatusJson(const WebModemStatus& status) {
   return json;
 }
 // #endregion FUNC_renderModemStatusJson
+
+// #region FUNC_renderGpsConfigJson
+// PURPOSE: Serializes WebGpsConfig into /api/gps envelope.
+String renderGpsConfigJson(const WebGpsConfig& config) {
+  String json;
+  json.reserve(kGpsConfigReserve);
+  appendPresentEnabled(json, config.present, config.enabled);
+  json += F(",\"poll_interval\":");
+  json += String(config.pollIntervalSec);
+  json += F(",\"last_status\":");
+  appendJsonNullableString(json, config.lastStatus.length() > 0, config.lastStatus);
+  json += '}';
+  return json;
+}
+// #endregion FUNC_renderGpsConfigJson
+
+// #region FUNC_renderGpsStatusJson
+// PURPOSE: Serializes WebGpsStatus into /api/gps/status envelope.
+String renderGpsStatusJson(const WebGpsStatus& status) {
+  String json;
+  json.reserve(kGpsStatusReserve);
+  json += F("{\"present\":");
+  json += status.present ? F("true") : F("false");
+  json += F(",\"powered\":");
+  json += status.powered ? F("true") : F("false");
+  json += F(",\"fix\":");
+  json += status.fix ? F("true") : F("false");
+  json += F(",\"mode\":");
+  json += String(status.mode);
+  json += F(",\"sats\":{\"used\":");
+  json += String(status.satsUsed);
+  json += F(",\"visible\":");
+  json += String(status.satsVisible);
+  json += F("}");
+  json += F(",\"coords\":{\"lat\":");
+  json += String(status.lat, 6);
+  json += F(",\"lon\":");
+  json += String(status.lon, 6);
+  json += F(",\"alt\":");
+  json += String(status.alt, 1);
+  json += F("}");
+  json += F(",\"speed\":");
+  json += String(status.speed, 1);
+  json += F(",\"course\":");
+  json += String(status.course, 1);
+  json += F(",\"time\":{\"date\":");
+  appendJsonNullableString(json, status.date.length() > 0, status.date);
+  json += F(",\"utc\":");
+  appendJsonNullableString(json, status.utcTime.length() > 0, status.utcTime);
+  json += F(",\"iso\":");
+  appendJsonNullableString(json, status.isoTime.length() > 0, status.isoTime);
+  json += F("}");
+  json += F(",\"updated_ms\":");
+  json += String(status.updatedMs);
+  json += '}';
+  return json;
+}
+// #endregion FUNC_renderGpsStatusJson
 
 // #region FUNC_renderAsyncOpJson
 // PURPOSE: Serializes WebAsyncOp (running/done/result/message) for polling test/send routes.

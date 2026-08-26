@@ -21,12 +21,15 @@
 	const ASYNC_TEST_POLL_MS = 1500;
 	const MODEM_STATUS_PATH = "/api/modem/status";
 	const MODEM_INTERVAL_MS = 5000;
+	const GPS_STATUS_PATH = "/api/gps/status";
+	const GPS_INTERVAL_MS = 5000;
 
 	let networks = null;
 	let busy = false;
 	let statusTimer = null;
 	let asyncTestTimer = null;
 	let modemTimer = null;
+	let gpsTimer = null;
 
 	const esc = (value) =>
 		String(value).replace(
@@ -54,7 +57,7 @@
 			banner.textContent = "";
 			return;
 		}
-		banner.className = "banner " + kind;
+		banner.className = `banner ${kind}`;
 		banner.textContent = text;
 		banner.hidden = false;
 	}
@@ -64,7 +67,7 @@
 		let payload = null;
 		try {
 			payload = await response.json();
-		} catch (error) {
+		} catch (_error) {
 			payload = null;
 		}
 		return { response, payload };
@@ -80,12 +83,10 @@
 			["Configured network", status.ssid || "—"],
 			["Station IP", status.station_ip || "—"],
 			["Device MAC", status.mac || "—"],
-			["Signal", status.rssi_dbm == null ? "—" : status.rssi_dbm + " dBm"],
+			["Signal", status.rssi_dbm == null ? "—" : `${status.rssi_dbm} dBm`],
 			[
 				"Address",
-				status.mdns_hostname
-					? "http://" + status.mdns_hostname + ".local"
-					: "—",
+				status.mdns_hostname ? `http://${status.mdns_hostname}.local` : "—",
 			],
 		];
 		const rowsHtml = rows
@@ -122,7 +123,7 @@
 		};
 		if (!oper) return "—";
 		const name = mccMncNames[oper];
-		return name ? name + " (" + oper + ")" : oper;
+		return name ? `${name} (${oper})` : oper;
 	}
 
 	function formatClock(raw) {
@@ -133,8 +134,8 @@
 		const q = parseInt(m[1], 10);
 		const hours = q / 4;
 		const sign = hours >= 0 ? "+" : "";
-		const tz = "UTC" + sign + hours;
-		return esc(raw) + ' <span class="hint">' + esc(tz) + "</span>";
+		const tz = `UTC${sign}${hours}`;
+		return `${esc(raw)} <span class="hint">${esc(tz)}</span>`;
 	}
 
 	// #region FUNC_renderModemStatus
@@ -163,7 +164,7 @@
 		const imei = data.identity ? data.identity.imei : data.imei;
 		const fw = data.identity ? data.identity.fw : data.fw;
 		let badge = "ready";
-		if (cpin !== "READY") badge = "No SIM (" + esc(cpin) + ")";
+		if (cpin !== "READY") badge = `No SIM (${esc(cpin)})`;
 		else if (cereg !== 1 && cereg !== 5 && creg !== 1 && creg !== 5)
 			badge = "No network";
 		else if (!attached) badge = "Not attached";
@@ -215,9 +216,9 @@
 			["FW", esc(fw || "—")],
 		];
 		const rowsHtml = rows
-			.map(([l, v]) => "<dt>" + esc(l) + "</dt><dd>" + v + "</dd>")
+			.map(([l, v]) => `<dt>${esc(l)}</dt><dd>${v}</dd>`)
 			.join("");
-		return '<dl class="status">' + rowsHtml + "</dl>";
+		return `<dl class="status">${rowsHtml}</dl>`;
 	}
 	// #endregion FUNC_renderModemStatus
 
@@ -233,11 +234,78 @@
 				return;
 			}
 			if (response.ok && payload) el.innerHTML = renderModemStatus(payload);
-		} catch (error) {
+		} catch (_error) {
 			// Transient; keep last rendered content.
 		}
 	}
 	// #endregion FUNC_loadModemStatus
+
+	// #region FUNC_renderGpsStatus
+	// PURPOSE: Maps WebGpsStatus JSON into operator-readable block.
+	function renderGpsStatus(data) {
+		if (!data) return '<p class="hint">GPS unavailable.</p>';
+		if (!data.present) return '<p class="hint">Modem not responding (GPS).</p>';
+		if (!data.powered) return '<p class="hint">GNSS not powered yet.</p>';
+		const fixBadge = data.fix ? "FIX" : "No fix";
+		const coords = data.coords || {};
+		const lat = coords.lat != null ? coords.lat : data.lat;
+		const lon = coords.lon != null ? coords.lon : data.lon;
+		const alt = coords.alt != null ? coords.alt : data.alt;
+		const sats = data.sats || {};
+		const used = sats.used != null ? sats.used : data.satsUsed;
+		const vis = sats.visible != null ? sats.visible : data.satsVisible;
+		const t = data.time || {};
+		const iso = t.iso != null ? t.iso : data.isoTime;
+		const date = t.date != null ? t.date : data.date;
+		const utc = t.utc != null ? t.utc : data.utcTime;
+		const timeText = iso || (date && utc ? `${date} ${utc}` : "—");
+		const mapLink =
+			data.fix && lat && lon
+				? '<a href="https://www.openstreetmap.org/?mlat=' +
+					esc(String(lat)) +
+					"&mlon=" +
+					esc(String(lon)) +
+					"#map=16/" +
+					esc(String(lat)) +
+					"/" +
+					esc(String(lon)) +
+					'" target="_blank" rel="noopener">OpenStreetMap</a>'
+				: "—";
+		const rows = [
+			["GNSS", fixBadge + (data.powered ? " (powered)" : "")],
+			["Satellites", `${esc(String(used))} used / ${esc(String(vis))} visible`],
+			["Latitude", data.fix ? esc(String(lat)) : "—"],
+			["Longitude", data.fix ? esc(String(lon)) : "—"],
+			["Altitude", data.fix ? `${esc(String(alt))} m` : "—"],
+			["Speed", `${esc(String(data.speed != null ? data.speed : 0))} km/h`],
+			["Course", `${esc(String(data.course != null ? data.course : 0))}°`],
+			["UTC", esc(timeText) || "—"],
+			["Map", mapLink],
+		];
+		const rowsHtml = rows
+			.map(([l, v]) => `<dt>${esc(l)}</dt><dd>${v}</dd>`)
+			.join("");
+		return `<dl class="status">${rowsHtml}</dl>`;
+	}
+	// #endregion FUNC_renderGpsStatus
+
+	// #region FUNC_loadGpsStatus
+	// PURPOSE: Polls /api/gps/status and renders the GNSS block.
+	async function loadGpsStatus() {
+		const el = document.getElementById("gps-status");
+		if (!el) return;
+		try {
+			const { response, payload } = await api(GPS_STATUS_PATH);
+			if (response.status === 401) {
+				renderAuthRequired();
+				return;
+			}
+			if (response.ok && payload) el.innerHTML = renderGpsStatus(payload);
+		} catch (_error) {
+			// keep last
+		}
+	}
+	// #endregion FUNC_loadGpsStatus
 
 	function networkPickerHtml() {
 		let html =
@@ -310,6 +378,22 @@
       <div id="status"></div>
       <h2>Internal modem (SIM7670G)</h2>
       <div id="modem-status" class="hint">Loading modem status…</div>
+      <h2>GPS / GNSS (SIM7670G)</h2>
+      <div id="gps-status" class="hint">Loading GNSS status…</div>
+      <p id="gps-config-state" class="hint"></p>
+      <form id="gps-form">
+        <fieldset>
+          <legend>GNSS polling</legend>
+          <label class="checkbox">Enable GNSS polling
+            <input type="checkbox" name="enabled">
+          </label>
+          <label>Poll interval (seconds)
+            <input type="number" name="poll_interval" min="5" max="300" value="60">
+          </label>
+          <p class="hint">Active antenna etecl25t6a needs sky view. Default 60 s, 5–300 s. When fix is available the device clock is synced to GPS UTC.</p>
+        </fieldset>
+        <button type="submit">Save GPS settings</button>
+      </form>
       <h2>SMS source: Internal modem (SIM7670G)</h2>
       <p id="modem-source-state" class="hint"></p>
       <form id="modem-source-form">
@@ -454,6 +538,7 @@
 	function renderSetup(status) {
 		stopStatusTimer();
 		stopModemTimer();
+		stopGpsTimer();
 		appRoot.innerHTML = setupHtml(status);
 		renderNetworkPicker();
 		document
@@ -495,17 +580,24 @@
 		document
 			.getElementById("password-form")
 			.addEventListener("submit", submitPasswordChange);
+		document
+			.getElementById("gps-form")
+			.addEventListener("submit", submitGpsSave);
 		loadSmtpSettings();
 		loadZteSettings();
 		loadModemSourceSettings();
 		loadModemStatus();
+		loadGpsSettings();
+		loadGpsStatus();
 		startStatusTimer();
 		startModemTimer();
+		startGpsTimer();
 	}
 
 	function renderAuthRequired() {
 		stopStatusTimer();
 		stopModemTimer();
+		stopGpsTimer();
 		stopAsyncTestTimer();
 		appRoot.innerHTML = `
       <p>Authentication is required. Reload the page and sign in as <strong>admin</strong>.</p>
@@ -537,7 +629,7 @@
 			} else {
 				setBanner("error", "The network scan failed.");
 			}
-		} catch (error) {
+		} catch (_error) {
 			setBanner("error", "The device could not be reached for the scan.");
 		} finally {
 			renderNetworkPicker();
@@ -597,7 +689,7 @@
 				return;
 			}
 			if (response.ok) {
-				setBanner("ok", (payload && payload.message) || "Configuration saved.");
+				setBanner("ok", payload?.message || "Configuration saved.");
 				if (path === "/api/setup") {
 					window.setTimeout(() => window.location.reload(), 3000);
 				} else {
@@ -606,10 +698,10 @@
 			} else {
 				setBanner(
 					"error",
-					(payload && payload.error) || `Request failed (${response.status}).`,
+					payload?.error || `Request failed (${response.status}).`,
 				);
 			}
-		} catch (error) {
+		} catch (_error) {
 			setBanner("error", "The device could not be reached.");
 		} finally {
 			setBusy(false);
@@ -639,15 +731,15 @@
 				return;
 			}
 			if (response.ok) {
-				setBanner("ok", (payload && payload.message) || "Password changed.");
+				setBanner("ok", payload?.message || "Password changed.");
 				stopStatusTimer();
 			} else {
 				setBanner(
 					"error",
-					(payload && payload.error) || `Request failed (${response.status}).`,
+					payload?.error || `Request failed (${response.status}).`,
 				);
 			}
-		} catch (error) {
+		} catch (_error) {
 			setBanner("error", "The device could not be reached.");
 		} finally {
 			setBusy(false);
@@ -706,7 +798,7 @@
 					? "SMTP delivery is configured."
 					: "SMTP delivery is not configured yet.";
 			}
-		} catch (error) {
+		} catch (_error) {
 			// Prefill is optional; the form stays usable with empty defaults.
 		}
 	}
@@ -727,15 +819,15 @@
 				return;
 			}
 			if (response.ok) {
-				setBanner("ok", (payload && payload.message) || "SMTP settings saved.");
+				setBanner("ok", payload?.message || "SMTP settings saved.");
 				await loadSmtpSettings();
 			} else {
 				setBanner(
 					"error",
-					(payload && payload.error) || `Request failed (${response.status}).`,
+					payload?.error || `Request failed (${response.status}).`,
 				);
 			}
-		} catch (error) {
+		} catch (_error) {
 			setBanner("error", "The device could not be reached.");
 		} finally {
 			setBusy(false);
@@ -772,7 +864,7 @@
 			if (!response.ok) {
 				setBanner(
 					"error",
-					(payload && payload.error) || "The operation could not be started.",
+					payload?.error || "The operation could not be started.",
 				);
 				if (statusEl) {
 					statusEl.textContent = "";
@@ -782,7 +874,7 @@
 			}
 			pollAsyncTest(statusPath, statusEl, onDone);
 			return true;
-		} catch (error) {
+		} catch (_error) {
 			setBanner("error", "The device could not be reached.");
 			if (statusEl) {
 				statusEl.textContent = "";
@@ -816,7 +908,7 @@
 				if (onDone) {
 					onDone(succeeded);
 				}
-			} catch (error) {
+			} catch (_error) {
 				// The device may be busy inside a network dialog; keep polling.
 			}
 		}, ASYNC_TEST_POLL_MS);
@@ -857,13 +949,13 @@
 					} else if (payload.enabled) {
 						state.textContent =
 							"Polling is enabled." +
-							(payload.last_status ? " Last poll: " + payload.last_status : "");
+							(payload.last_status ? ` Last poll: ${payload.last_status}` : "");
 					} else {
 						state.textContent = "Configured, polling disabled.";
 					}
 				}
 			}
-		} catch (error) {
+		} catch (_error) {
 			// Prefill is optional; the form stays usable with empty defaults.
 		}
 	}
@@ -884,15 +976,15 @@
 				return;
 			}
 			if (response.ok) {
-				setBanner("ok", (payload && payload.message) || "ZTE settings saved.");
+				setBanner("ok", payload?.message || "ZTE settings saved.");
 				await loadZteSettings();
 			} else {
 				setBanner(
 					"error",
-					(payload && payload.error) || `Request failed (${response.status}).`,
+					payload?.error || `Request failed (${response.status}).`,
 				);
 			}
-		} catch (error) {
+		} catch (_error) {
 			setBanner("error", "The device could not be reached.");
 		} finally {
 			setBusy(false);
@@ -942,13 +1034,13 @@
 					} else if (payload.enabled) {
 						state.textContent =
 							"Forwarding is enabled." +
-							(payload.last_status ? " Last poll: " + payload.last_status : "");
+							(payload.last_status ? ` Last poll: ${payload.last_status}` : "");
 					} else {
 						state.textContent = "Configured, forwarding disabled.";
 					}
 				}
 			}
-		} catch (error) {
+		} catch (_error) {
 			// Prefill is optional; the form stays usable with empty defaults.
 		}
 	}
@@ -972,24 +1064,90 @@
 				return;
 			}
 			if (response.ok) {
-				setBanner(
-					"ok",
-					(payload && payload.message) || "Modem source settings saved.",
-				);
+				setBanner("ok", payload?.message || "Modem source settings saved.");
 				await loadModemSourceSettings();
 			} else {
 				setBanner(
 					"error",
-					(payload && payload.error) || `Request failed (${response.status}).`,
+					payload?.error || `Request failed (${response.status}).`,
 				);
 			}
-		} catch (error) {
+		} catch (_error) {
 			setBanner("error", "The device could not be reached.");
 		} finally {
 			setBusy(false);
 		}
 	}
 	// #endregion FUNC_submitModemSourceSave
+
+	// #region FUNC_loadGpsSettings
+	// PURPOSE: Loads /api/gps and prefills the GNSS form.
+	async function loadGpsSettings() {
+		try {
+			const { response, payload } = await api("/api/gps");
+			if (response.status === 401) {
+				renderAuthRequired();
+				return;
+			}
+			const form = document.getElementById("gps-form");
+			if (response.ok && payload && form) {
+				form.elements.enabled.checked = !!payload.enabled;
+				form.elements.poll_interval.value =
+					payload.poll_interval != null ? String(payload.poll_interval) : "60";
+				const state = document.getElementById("gps-config-state");
+				if (state) {
+					if (!payload.present)
+						state.textContent =
+							"GNSS is not configured yet (default disabled, 60 s).";
+					else if (payload.enabled)
+						state.textContent =
+							"Polling enabled." +
+							(payload.last_status ? ` ${payload.last_status}` : "");
+					else state.textContent = "Configured, polling disabled.";
+				}
+			}
+		} catch (_error) {
+			// optional
+		}
+	}
+	// #endregion FUNC_loadGpsSettings
+
+	// #region FUNC_submitGpsSave
+	async function submitGpsSave(event) {
+		event.preventDefault();
+		if (busy) return;
+		setBusy(true);
+		try {
+			const { response, payload } = await postForm(
+				"/api/gps",
+				gpsFormFields(event.target),
+			);
+			if (response.status === 401) {
+				renderAuthRequired();
+				return;
+			}
+			if (response.ok) {
+				setBanner("ok", payload?.message || "GPS settings saved.");
+				await loadGpsSettings();
+			} else
+				setBanner(
+					"error",
+					payload?.error || `Request failed (${response.status}).`,
+				);
+		} catch (_error) {
+			setBanner("error", "The device could not be reached.");
+		} finally {
+			setBusy(false);
+		}
+	}
+	// #endregion FUNC_submitGpsSave
+
+	function gpsFormFields(form) {
+		return {
+			enabled: form.elements.enabled.checked ? "1" : "0",
+			poll_interval: form.elements.poll_interval.value.trim(),
+		};
+	}
 
 	function modemSourceFormFields(form) {
 		return {
@@ -1104,6 +1262,18 @@
 		}
 	}
 
+	function startGpsTimer() {
+		stopGpsTimer();
+		gpsTimer = window.setInterval(loadGpsStatus, GPS_INTERVAL_MS);
+	}
+
+	function stopGpsTimer() {
+		if (gpsTimer !== null) {
+			window.clearInterval(gpsTimer);
+			gpsTimer = null;
+		}
+	}
+
 	async function refreshStatusBlock() {
 		if (busy || document.hidden) {
 			return;
@@ -1118,7 +1288,7 @@
 			if (response.ok && payload && statusBlock) {
 				statusBlock.innerHTML = statusHtml(payload);
 			}
-		} catch (error) {
+		} catch (_error) {
 			// Transient reachability loss; the next interval retries.
 		}
 	}
@@ -1127,7 +1297,7 @@
 		let result;
 		try {
 			result = await api(STATUS_PATH);
-		} catch (error) {
+		} catch (_error) {
 			setBanner("error", "The device could not be reached.");
 			return;
 		}

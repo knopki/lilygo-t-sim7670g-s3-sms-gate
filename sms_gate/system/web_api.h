@@ -107,6 +107,38 @@ struct WebModemStatus {
 };
 // #endregion STRUCT_WebModemStatus
 
+// #region STRUCT_WebGpsConfig
+// PURPOSE: Snapshot for GET /api/gps without exposing credentials;
+// pollIntervalSec 5..300 s, default 60 s.
+struct WebGpsConfig {
+  bool present = false;
+  bool enabled = false;
+  uint16_t pollIntervalSec = 60;
+  String lastStatus;
+};
+// #endregion STRUCT_WebGpsConfig
+
+// #region STRUCT_WebGpsStatus
+// PURPOSE: Snapshot for GET /api/gps/status — fix, coords, sats and UTC.
+struct WebGpsStatus {
+  bool present = false;
+  bool powered = false;
+  bool fix = false;
+  int mode = -1;
+  int satsUsed = 0;
+  int satsVisible = 0;
+  double lat = 0.0;
+  double lon = 0.0;
+  float alt = 0.0f;
+  float speed = 0.0f;
+  float course = 0.0f;
+  String date;
+  String utcTime;
+  String isoTime;
+  uint32_t updatedMs = 0;
+};
+// #endregion STRUCT_WebGpsStatus
+
 // #region STRUCT_WebAsyncOp
 // PURPOSE: Snapshot for one-shot async routes (SMTP/ZTE/modem test/send).
 struct WebAsyncOp {
@@ -130,6 +162,8 @@ String renderModemStatusJson(const WebModemStatus& status);
 // PURPOSE: Serializes WebModemSourceConfig into the /api/modem/source envelope.
 String renderModemSourceJson(const WebModemSourceConfig& config);
 // #endregion FUNC_renderModemSourceJson
+String renderGpsConfigJson(const WebGpsConfig& config);
+String renderGpsStatusJson(const WebGpsStatus& status);
 String renderAsyncOpJson(const WebAsyncOp& op);
 String renderMessageJson(const String& message);
 String renderErrorJson(const String& error);

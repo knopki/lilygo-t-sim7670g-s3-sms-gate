@@ -23,6 +23,7 @@
 #include <esp_system.h>
 
 #include "persistence/config_store.h"
+#include "gps/gps_service.h"
 #include "system/http_server.h"
 #include "modem/modem_service.h"
 #include "smtp/smtp_service.h"
@@ -42,8 +43,9 @@ SmtpService smtpService;
 ZteService zteService;
 WifiManager wifiManager;
 ModemService modemService;
+GpsService gpsService;
 HttpServer httpServer(server, configStore, config, wifiManager, smtpService, zteService,
-                      modemService);
+                      modemService, gpsService);
 unsigned long lastSerialHeartbeatAt = 0;
 String bootTrace;
 bool bootTraceCollecting = true;
@@ -116,6 +118,18 @@ void setupFirmware() {
     }
     recordBootStage(modemBoot);
   }
+  const bool gpsLoaded = gpsService.load();
+  {
+    String gpsBoot = String(F("event=boot_gps_config_loaded present=")) +
+                     (gpsLoaded ? String(F("true")) : String(F("false")));
+    if (gpsLoaded) {
+      gpsBoot += F(" enabled=");
+      gpsBoot += gpsService.config().enabled ? F("true") : F("false");
+      gpsBoot += F(" poll_interval=");
+      gpsBoot += String(gpsService.config().pollIntervalSec);
+    }
+    recordBootStage(gpsBoot);
+  }
 
   recordBootStage(F("event=boot_http_routes_begin"));
   httpServer.begin();
@@ -131,6 +145,7 @@ void setupFirmware() {
   }
   recordBootStage(F("event=modem_init_begin variant=classic"));
   modemService.syncTask();
+  gpsService.syncTask();
   recordBootStage(F("event=boot_http_routes_complete"));
   bootTraceCollecting = false;
 }

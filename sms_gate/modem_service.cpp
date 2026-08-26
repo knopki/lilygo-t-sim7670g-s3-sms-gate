@@ -9,6 +9,7 @@
 
 #include "persistence/config_store_common.h"
 #include "system/email_builder.h"
+#include "system/modem_lock.h"
 #include "modem/modem_transport.h"
 #include "smtp/smtp_client.h"
 #include "smtp/smtp_service.h"
@@ -234,6 +235,8 @@ void ModemService::runPollTask() {
     vTaskDelete(nullptr);
     return;
   }
+  // Init must be serialized with GNSS task — hold the shared Serial1 lock.
+  modem_lock::take(15000);
   ModemTransport transport;
   transport.begin();
   transport.powerPulse();
@@ -241,6 +244,7 @@ void ModemService::runPollTask() {
   vTaskDelay(pdMS_TO_TICKS(3000));
   ModemClient client(transport, scratch, kModemScratchSize);
   ModemResult initResult = client.init();
+  modem_lock::give();
   if (initResult == ModemResult::kSuccess) {
     Serial.printf("event=modem_ready variant=classic heap=%u stack_hwm=%u\n",
                   static_cast<unsigned>(ESP.getFreeHeap()),
@@ -250,32 +254,45 @@ void ModemService::runPollTask() {
                   static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
   }
   while (!taskStopRequested_) {
+    // Serialize Serial1 with GNSS task — GNSS poll can hold 10-12s.
+    bool haveLock = modem_lock::take(15000);
     ModemStatus status;
-    ModemResult result = client.pollStatus(status);
-    if (result == ModemResult::kSuccess) {
-      status.updatedMs = millis();
+    ModemResult result = ModemResult::kTimeout;
+    if (!haveLock) {
+      Serial.println("event=modem_poll_skipped reason=modem_busy");
+      status.present = false;
+      String safeStage = "modem_busy";
       publishStatus(status);
-      Serial.printf(
-          "event=modem_status present=%s cpin=%s cereg=%d creg=%d rssi=%d rsrp=%d rsrq=%d cops=%s "
-          "act=%d used_me=%u total_me=%u used_sm=%u total_sm=%u cclk=%s stack_hwm=%u\n",
-          status.present ? "true" : "false", status.cpin, status.ceregStat, status.cregStat,
-          status.csqRssiDbm, status.cesqRsrpDbm, status.cesqRsrqDb, status.copsOp, status.copsAct,
-          static_cast<unsigned>(status.smsUsedMe), static_cast<unsigned>(status.smsTotalMe),
-          static_cast<unsigned>(status.smsUsedSm), static_cast<unsigned>(status.smsTotalSm),
-          status.cclk, static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
-    } else {
-      ModemStatus absent;
-      absent.present = false;
-      String safeStage = String(client.failedStage());
-      safeStage.replace("=", "_");
-      publishStatus(absent);
       Serial.printf("event=modem_error stage=%s\n", safeStage.c_str());
-    }
-    if (!sendRunning_) {
-      const ModemStatus snapshot = readStatus();
-      if (shouldRunSms(snapshot)) {
-        runPollCycle(client);
+    } else {
+      result = client.pollStatus(status);
+      if (result == ModemResult::kSuccess) {
+        status.updatedMs = millis();
+        publishStatus(status);
+        Serial.printf(
+            "event=modem_status present=%s cpin=%s cereg=%d creg=%d rssi=%d rsrp=%d rsrq=%d "
+            "cops=%s "
+            "act=%d used_me=%u total_me=%u used_sm=%u total_sm=%u cclk=%s stack_hwm=%u\n",
+            status.present ? "true" : "false", status.cpin, status.ceregStat, status.cregStat,
+            status.csqRssiDbm, status.cesqRsrpDbm, status.cesqRsrqDb, status.copsOp, status.copsAct,
+            static_cast<unsigned>(status.smsUsedMe), static_cast<unsigned>(status.smsTotalMe),
+            static_cast<unsigned>(status.smsUsedSm), static_cast<unsigned>(status.smsTotalSm),
+            status.cclk, static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+      } else {
+        ModemStatus absent;
+        absent.present = false;
+        String safeStage = String(client.failedStage());
+        safeStage.replace("=", "_");
+        publishStatus(absent);
+        Serial.printf("event=modem_error stage=%s\n", safeStage.c_str());
       }
+      if (!sendRunning_) {
+        const ModemStatus snapshot = readStatus();
+        if (shouldRunSms(snapshot)) {
+          runPollCycle(client);
+        }
+      }
+      modem_lock::give();
     }
     const unsigned long intervalMs = pollIntervalMs();
     for (unsigned long waited = 0; waited < intervalMs && !taskStopRequested_;
@@ -418,6 +435,7 @@ void ModemService::runSend() {
     vTaskDelete(nullptr);
     return;
   }
+  modem_lock::take(8000);
   ModemTransport transport;
   transport.begin();
   ModemClient client(transport, scratch, scratch == nullptr ? 0 : kModemScratchSize);
@@ -454,6 +472,7 @@ void ModemService::runSend() {
   }
   free(scratch);
   transport.end();
+  modem_lock::give();
   syncTask();
   Serial.printf("event=modem_send_complete result=%s stage=%s elapsed_ms=%lu heap=%u\n",
                 result == ModemResult::kSuccess

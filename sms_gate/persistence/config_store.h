@@ -18,6 +18,7 @@
 #define PERSISTENCE_CONFIG_STORE_H
 
 #include "persistence/config_store_common.h"
+#include "persistence/config_store_gps.h"
 #include "persistence/config_store_modem.h"
 #include "persistence/config_store_network.h"
 #include "persistence/config_store_smtp.h"

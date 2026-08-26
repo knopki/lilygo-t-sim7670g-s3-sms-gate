@@ -24,14 +24,16 @@ constexpr int kHttpUnavailable = 503;
 // #region METHOD_constructor
 // PURPOSE: Binds shared services by reference.
 HttpServer::HttpServer(WebServer& server, ConfigStore& store, RuntimeConfig& config,
-                       WifiManager& wifi, SmtpService& smtp, ZteService& zte, ModemService& modem)
+                       WifiManager& wifi, SmtpService& smtp, ZteService& zte, ModemService& modem,
+                       GpsService& gps)
     : server_(server),
       configStore_(store),
       config_(config),
       wifi_(wifi),
       smtp_(smtp),
       zte_(zte),
-      modem_(modem) {}
+      modem_(modem),
+      gps_(gps) {}
 // #endregion METHOD_constructor
 // #region METHOD_requireAuthentication
 // PURPOSE: Guards protected routes with Digest authentication.
@@ -591,6 +593,41 @@ void HttpServer::handleModemSendStatus() {
   sendJson(server_, kHttpOk, renderAsyncOpJson(modem_.sendStatus()));
 }
 // #endregion METHOD_handleModemSendStatus
+// #region METHOD_handleGpsConfigRequest
+// PURPOSE: Returns stored GNSS profile.
+void HttpServer::handleGpsConfigRequest() {
+  if (config_.ssid.length() > 0 && !requireAuthentication()) return;
+  sendJson(server_, kHttpOk, renderGpsConfigJson(gps_.webConfig()));
+}
+// #endregion METHOD_handleGpsConfigRequest
+// #region METHOD_handleGpsSaveSubmission
+// PURPOSE: Validates and persists GNSS profile.
+void HttpServer::handleGpsSaveSubmission() {
+  Serial.println("event=http_gps_submit");
+  if (config_.ssid.length() > 0 && !requireAuthentication()) return;
+  RuntimeGpsConfig candidate;
+  String error;
+  if (!gps_.readForm(server_, candidate, error)) {
+    sendJsonError(kHttpBadRequest, error);
+    return;
+  }
+  if (!gps_.save(candidate)) {
+    sendJsonError(kHttpInternalError, F("The GPS configuration could not be saved."));
+    return;
+  }
+  Serial.printf("event=gps_saved enabled=%s poll_interval=%u\n",
+                candidate.enabled ? "true" : "false",
+                static_cast<unsigned>(candidate.pollIntervalSec));
+  sendJson(server_, kHttpOk, renderMessageJson(F("GPS settings saved.")));
+}
+// #endregion METHOD_handleGpsSaveSubmission
+// #region METHOD_handleGpsStatusRequest
+// PURPOSE: Serves GET /api/gps/status.
+void HttpServer::handleGpsStatusRequest() {
+  if (config_.ssid.length() > 0 && !requireAuthentication()) return;
+  sendJson(server_, kHttpOk, renderGpsStatusJson(gps_.webStatus()));
+}
+// #endregion METHOD_handleGpsStatusRequest
 // #region METHOD_handleSmsSendStart
 // PURPOSE: Unified send entry point POST /api/sms/send.
 void HttpServer::handleSmsSendStart() {
@@ -657,6 +694,9 @@ void HttpServer::begin() {
   server_.on("/api/modem/status", HTTP_GET, [this]() { handleModemStatusRequest(); });
   server_.on("/api/modem/source", HTTP_GET, [this]() { handleModemSourceRequest(); });
   server_.on("/api/modem/source", HTTP_POST, [this]() { handleModemSourceSave(); });
+  server_.on("/api/gps", HTTP_GET, [this]() { handleGpsConfigRequest(); });
+  server_.on("/api/gps", HTTP_POST, [this]() { handleGpsSaveSubmission(); });
+  server_.on("/api/gps/status", HTTP_GET, [this]() { handleGpsStatusRequest(); });
   server_.onNotFound([this]() { handleNotFound(); });
   server_.begin();
   Serial.printf("event=http_server_started port=%u\n", kHttpPort);

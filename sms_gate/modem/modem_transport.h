@@ -37,21 +37,30 @@ class ModemTransport : public ModemChannel {
 
   bool begin() {
     if (started_) return true;
+    // Pins must be configured even when Serial1 already active (shared bus).
     pinMode(kModemPinDtr, OUTPUT);
     pinMode(kModemPinReset, OUTPUT);
     pinMode(kModemPinPwrKey, OUTPUT);
     digitalWrite(kModemPinDtr, LOW);
     digitalWrite(kModemPinReset, HIGH);
     digitalWrite(kModemPinPwrKey, LOW);
-    Serial1.begin(kModemBaud, SERIAL_8N1, kModemPinRx, kModemPinTx);
+    if (!s_serialActive) {
+      Serial1.begin(kModemBaud, SERIAL_8N1, kModemPinRx, kModemPinTx);
+      s_serialActive = true;
+    }
+    s_refCount++;
     started_ = true;
     return true;
   }
 
   void end() {
     if (!started_) return;
-    Serial1.end();
     started_ = false;
+    if (s_refCount > 0) s_refCount--;
+    if (s_refCount == 0 && s_serialActive) {
+      Serial1.end();
+      s_serialActive = false;
+    }
   }
 
   // Power-on pulse per LilyGO: PWRKEY LOW 100ms → HIGH 100ms → LOW.
@@ -121,6 +130,8 @@ class ModemTransport : public ModemChannel {
 
  private:
   bool started_ = false;
+  inline static int s_refCount = 0;
+  inline static bool s_serialActive = false;
 };
 // #endregion CLASS_ModemTransport
 #endif  // MODEM_MODEM_TRANSPORT_H
