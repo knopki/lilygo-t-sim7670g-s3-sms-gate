@@ -85,7 +85,10 @@ bool ZteService::save(const RuntimeZteConfig& candidate) {
 WebZteConfig ZteService::webConfig() const {
   WebZteConfig web;
   web.present = loaded_ && stored_.host.length() > 0;
-  web.enabled = web.present && stored_.enabled;
+  web.moduleEnabled = web.present && stored_.moduleEnabled;
+  web.forwardEnabled = web.present && stored_.forwardEnabled;
+  // compat: enabled = module && forward
+  web.enabled = web.present && stored_.moduleEnabled && stored_.forwardEnabled;
   web.host = web.present ? stored_.host : String();
   web.passwordSet = web.present && stored_.password.length() > 0;
   web.label = web.present ? stored_.label : String();
@@ -98,7 +101,17 @@ WebZteConfig ZteService::webConfig() const {
 // #region METHOD_ZteService_readForm
 // PURPOSE: Validates ZTE form into runtime profile.
 bool ZteService::readForm(WebServer& server, RuntimeZteConfig& out, String& error) {
-  out.enabled = server.arg("enabled") == F("1");
+  out.moduleEnabled = server.arg("module_enabled") == F("1");
+  out.forwardEnabled = server.arg("forward_enabled") == F("1");
+  // backward compat
+  if (!server.hasArg("module_enabled") && server.hasArg("enabled")) {
+    bool legacy = server.arg("enabled") == F("1");
+    out.moduleEnabled = legacy;
+    out.forwardEnabled = legacy;
+  }
+  if (!server.hasArg("forward_enabled") && server.hasArg("module_enabled")) {
+    out.forwardEnabled = out.moduleEnabled;
+  }
   out.host = server.arg("host");
   out.host.trim();
   if (out.host.length() == 0 || out.host.length() > kMaxZteHostLength ||
@@ -171,8 +184,12 @@ String ZteService::lastStatus() const { return statusCache_.readString(); }
 
 void ZteService::publishStatus(const char* status) { statusCache_.publish(status); }
 
+bool ZteService::shouldRunModule() const {
+  return loaded_ && stored_.moduleEnabled && stored_.host.length() > 0;
+}
+
 bool ZteService::shouldRunPoll(bool smtpReady) const {
-  return loaded_ && stored_.enabled && stored_.host.length() > 0 && smtpReady;
+  return shouldRunModule() && stored_.forwardEnabled && smtpReady;
 }
 
 // #region METHOD_ZteService_testStatus
@@ -236,6 +253,10 @@ bool ZteService::startTest(const RuntimeZteConfig& candidate, String& error) {
 // #region METHOD_ZteService_startSend
 // PURPOSE: Starts one outgoing send.
 bool ZteService::startSend(const String& to, const String& text, String& error) {
+  if (!shouldRunModule()) {
+    error = F("The ZTE modem module is disabled.");
+    return false;
+  }
   if (sendRunning_) {
     error = F("An SMS send is already in progress.");
     return false;
@@ -269,7 +290,7 @@ bool ZteService::startSend(const String& to, const String& text, String& error) 
 // #endregion METHOD_ZteService_startSend
 
 // #region METHOD_ZteService_syncPollTask
-// PURPOSE: Aligns poll task with shouldRun.
+// PURPOSE: Aligns poll task with shouldRun (moduleEnabled gate).
 void ZteService::syncPollTask(bool shouldRun) {
   if (pollHandle_ != nullptr) {
     if (!task_control::stopTask(pollHandle_, pollStopRequested_)) {
@@ -417,6 +438,14 @@ void ZteService::runPollTask() {
     waitingForStation = false;
     if (testRunning_ || sendRunning_) {
       vTaskDelay(pdMS_TO_TICKS(500));
+      continue;
+    }
+    // Only poll when forwarding enabled and smtp ready; otherwise idle.
+    bool smtpReady = smtp_ != nullptr && smtp_->isLoaded() && smtp_->config().host.length() > 0 &&
+                     smtp_->config().password.length() > 0;
+    if (!shouldRunPoll(smtpReady)) {
+      // idle wait without polling
+      vTaskDelay(pdMS_TO_TICKS(2000));
       continue;
     }
     pollCycleActive_ = true;

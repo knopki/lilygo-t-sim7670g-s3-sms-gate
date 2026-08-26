@@ -24,6 +24,8 @@ constexpr int64_t kQuarantineDiffMs = 300LL * 1000LL;
 constexpr uint32_t kQuarantineDurationMs = 15UL * 60UL * 1000UL;
 constexpr uint32_t kSntpFreshMs = 2UL * 60UL * 60UL * 1000UL;  // 2h
 constexpr uint32_t kNitzFreshMs = 5UL * 60UL * 1000UL;         // 5 min
+constexpr uint32_t kDisciplineIgnoreLogIntervalMs =
+    60UL * 1000UL;  // throttle time_discipline_ignored
 }  // namespace
 // #endregion CONST_timeSyncThresholds
 
@@ -41,6 +43,8 @@ void TimeSync::begin() {
   for (auto& s : samples_) s = TimeSample{};
   // cppcheck-suppress useStlAlgorithm
   for (auto& q : quarantineUntilMs_) q = 0;
+  // cppcheck-suppress useStlAlgorithm
+  for (auto& l : lastIgnoredLogMs_) l = 0;
   published_ = TimeState{};
   sntpRunning_ = false;
   gpsPollMs_ = 60UL * 1000UL;
@@ -175,25 +179,37 @@ TimeSource TimeSync::arbitrate() { return arbitrateAt(millis()); }
 // #endregion METHOD_TimeSync_arbitrateAt
 
 // #region METHOD_TimeSync_disciplineAt
-int64_t TimeSync::disciplineAt(const TimeSample& chosen, int64_t wallMs) {
-  int64_t diffMs = chosen.epochMs - wallMs;
+int64_t TimeSync::disciplineAt(const TimeSample& chosen, int64_t wallMs, uint32_t nowMs) {
+  uint32_t ageMs = nowMs - chosen.receivedMs;
+  int64_t expectedMs = chosen.epochMs + (int64_t)ageMs;
+  int64_t diffMs = expectedMs - wallMs;
   if (diffMs < -2000) {
 #ifdef ARDUINO
-    Serial.printf("event=time_discipline_ignored diff_ms=%lld source=%s\n", (long long)diffMs,
-                  sourceName(chosen.source));
+    uint8_t idx = static_cast<uint8_t>(chosen.source);
+    if (idx < 4) {
+      uint32_t last = lastIgnoredLogMs_[idx];
+      if (last == 0 || (uint32_t)(nowMs - last) >= kDisciplineIgnoreLogIntervalMs) {
+        lastIgnoredLogMs_[idx] = nowMs;
+        Serial.printf("event=time_discipline_ignored diff_ms=%lld source=%s\n", (long long)diffMs,
+                      sourceName(chosen.source));
+      }
+    }
+#else
+    (void)nowMs;
 #endif
     return diffMs;
   }
   if (diffMs > 2000) {
 #ifdef ARDUINO
     struct timeval tv{};
-    tv.tv_sec = (time_t)(chosen.epochMs / 1000);
-    tv.tv_usec = (suseconds_t)((chosen.epochMs % 1000) * 1000);
+    tv.tv_sec = (time_t)(expectedMs / 1000);
+    tv.tv_usec = (suseconds_t)((expectedMs % 1000) * 1000);
     settimeofday(&tv, nullptr);
     Serial.printf("event=time_sync source=%s diff_ms=%lld\n", sourceName(chosen.source),
                   (long long)diffMs);
 #else
     (void)chosen;
+    (void)nowMs;
 #endif
     return diffMs;
   }
@@ -201,6 +217,7 @@ int64_t TimeSync::disciplineAt(const TimeSample& chosen, int64_t wallMs) {
 #ifdef ARDUINO
     // Small forward slew: use adjtime if available; stub sleeps 0 for now.
     // Future: struct timeval delta{diffMs/1000, (diffMs%1000)*1000}; adjtime(&delta,nullptr);
+    (void)nowMs;
 #endif
   }
   return diffMs;
@@ -211,7 +228,8 @@ void TimeSync::discipline(const TimeSample& chosen) {
   struct timeval now{};
   gettimeofday(&now, nullptr);
   int64_t wallMs = (int64_t)now.tv_sec * 1000 + now.tv_usec / 1000;
-  disciplineAt(chosen, wallMs);
+  uint32_t nowMs = millis();
+  disciplineAt(chosen, wallMs, nowMs);
 #else
   (void)chosen;
 #endif
@@ -227,7 +245,7 @@ void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
     return;
   }
   const TimeSample& s = samples_[static_cast<uint8_t>(best)];
-  disciplineAt(s, wallMs);
+  disciplineAt(s, wallMs, nowMs);
   published_.source = best;
   published_.lastSyncMs = s.receivedMs;
   published_.epochMs = s.epochMs;

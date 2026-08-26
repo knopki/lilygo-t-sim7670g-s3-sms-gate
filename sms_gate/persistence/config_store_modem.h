@@ -16,10 +16,12 @@
 #include "modem/modem_record.h"
 
 struct RuntimeModemSourceConfig {
-  bool enabled = false;
+  bool moduleEnabled = false;
+  bool pollEnabled = false;
   uint16_t pollIntervalSec = kDefaultModemPollSec;
   String label;  // Phone number or alias shown in forwarded emails.
   bool nitzTimeSyncEnabled = true;
+  bool smsPollEnabled = false;
 };
 
 ModemSourceRecord buildModemSourceRecord(const RuntimeModemSourceConfig& config);
@@ -30,6 +32,6 @@ class ModemSourceStore {
   bool save(const RuntimeModemSourceConfig& config) const;
 
  private:
-  bool migrateV1Record(size_t readLength) const;
+  bool migrateV2Record(size_t readLength) const;
 };
 #endif  // PERSISTENCE_CONFIG_STORE_MODEM_H

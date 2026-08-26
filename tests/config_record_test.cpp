@@ -92,11 +92,12 @@ int main() {
   v1.version = 2;
   assert(!isConfigRecordV1Valid(v1));
 
-  // GpsRecord v2 + timeSyncEnabled
+  // GpsRecord v3: module + poll + timeSync
   GpsRecord g{};
   g.magic = kGpsMagic;
   g.version = kGpsVersion;
-  g.enabled = 1;
+  g.moduleEnabled = 1;
+  g.pollEnabled = 1;
   g.pollIntervalSec = kDefaultGpsPollSec;
   g.timeSyncEnabled = 1;
   g.checksum = calculateGpsChecksum(g);
@@ -107,24 +108,46 @@ int main() {
   g.timeSyncEnabled = 2;
   g.checksum = calculateGpsChecksum(g);
   assert(!isGpsRecordValid(g));
-  GpsRecordV1 gv1{};
-  gv1.magic = kGpsMagic;
-  gv1.version = 1;
-  gv1.enabled = 0;
-  gv1.pollIntervalSec = kDefaultGpsPollSec;
-  gv1.checksum = calculateGpsV1Checksum(gv1);
-  assert(isGpsRecordV1Valid(gv1));
+  g = GpsRecord{};
+  g.magic = kGpsMagic;
+  g.version = kGpsVersion;
+  g.moduleEnabled = 1;
+  g.pollEnabled = 0;
+  g.pollIntervalSec = kDefaultGpsPollSec;
+  g.timeSyncEnabled = 0;
+  g.checksum = calculateGpsChecksum(g);
+  assert(isGpsRecordValid(g));
+  g.pollEnabled = 2;
+  g.checksum = calculateGpsChecksum(g);
+  assert(!isGpsRecordValid(g));
+  GpsRecordV2 gv2{};
+  gv2.magic = kGpsMagic;
+  gv2.version = 2;
+  gv2.enabled = 0;
+  gv2.pollIntervalSec = kDefaultGpsPollSec;
+  gv2.timeSyncEnabled = 1;
+  gv2.checksum = calculateGpsV2Checksum(gv2);
+  assert(isGpsRecordV2Valid(gv2));
 
-  // Modem NITZ flag already covered in modem_client_test, smoke here
+  // Modem v3: module + poll + sms + nitz
   ModemSourceRecord m{};
   m.magic = kModemSourceMagic;
   m.version = kModemSourceVersion;
-  m.enabled = 1;
+  m.moduleEnabled = 1;
+  m.pollEnabled = 1;
   m.pollIntervalSec = kDefaultModemPollSec;
   strcpy(m.label, "test");
   m.nitzTimeSyncEnabled = 1;
+  m.smsPollEnabled = 1;
   m.checksum = calculateModemSourceChecksum(m);
   assert(isModemSourceRecordValid(m));
+  m.smsPollEnabled = 2;
+  m.checksum = calculateModemSourceChecksum(m);
+  assert(!isModemSourceRecordValid(m));
+  m.smsPollEnabled = 1;
+  m.moduleEnabled = 2;
+  m.checksum = calculateModemSourceChecksum(m);
+  assert(!isModemSourceRecordValid(m));
 
   return 0;
 }

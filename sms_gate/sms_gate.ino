@@ -103,8 +103,10 @@ void setupFirmware() {
     String zteBoot = String(F("event=boot_zte_config_loaded present=")) +
                      (zteLoaded ? String(F("true")) : String(F("false")));
     if (zteLoaded) {
-      zteBoot += F(" enabled=");
-      zteBoot += zteService.config().enabled ? F("true") : F("false");
+      zteBoot += F(" module=");
+      zteBoot += zteService.config().moduleEnabled ? F("true") : F("false");
+      zteBoot += F(" forward=");
+      zteBoot += zteService.config().forwardEnabled ? F("true") : F("false");
       zteBoot += F(" poll_interval=");
       zteBoot += String(zteService.config().pollIntervalSec);
     }
@@ -115,8 +117,12 @@ void setupFirmware() {
     String modemBoot = String(F("event=boot_modem_source_loaded present=")) +
                        (modemLoaded ? String(F("true")) : String(F("false")));
     if (modemLoaded) {
-      modemBoot += F(" enabled=");
-      modemBoot += modemService.config().enabled ? F("true") : F("false");
+      modemBoot += F(" module=");
+      modemBoot += modemService.config().moduleEnabled ? F("true") : F("false");
+      modemBoot += F(" poll=");
+      modemBoot += modemService.config().pollEnabled ? F("true") : F("false");
+      modemBoot += F(" sms_poll=");
+      modemBoot += modemService.config().smsPollEnabled ? F("true") : F("false");
       modemBoot += F(" poll_interval=");
       modemBoot += String(modemService.config().pollIntervalSec);
     }
@@ -127,8 +133,10 @@ void setupFirmware() {
     String gpsBoot = String(F("event=boot_gps_config_loaded present=")) +
                      (gpsLoaded ? String(F("true")) : String(F("false")));
     if (gpsLoaded) {
-      gpsBoot += F(" enabled=");
-      gpsBoot += gpsService.config().enabled ? F("true") : F("false");
+      gpsBoot += F(" module=");
+      gpsBoot += gpsService.config().moduleEnabled ? F("true") : F("false");
+      gpsBoot += F(" poll=");
+      gpsBoot += gpsService.config().pollEnabled ? F("true") : F("false");
       gpsBoot += F(" poll_interval=");
       gpsBoot += String(gpsService.config().pollIntervalSec);
     }
@@ -148,11 +156,7 @@ void setupFirmware() {
   modemService.setSmtpService(&smtpService);
   modemService.setWifiManager(&wifiManager);
   modemService.setZteService(&zteService);
-  {
-    const bool smtpReady = smtpService.isLoaded() && smtpService.config().host.length() > 0 &&
-                           smtpService.config().password.length() > 0;
-    zteService.syncPollTask(zteService.shouldRunPoll(smtpReady));
-  }
+  zteService.syncPollTask(zteService.shouldRunModule());
   recordBootStage(F("event=modem_init_begin variant=classic"));
   modemService.syncTask();
   gpsService.syncTask();

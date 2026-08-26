@@ -42,6 +42,9 @@ class GpsService {
   void publishStatus(const GpsStatus& status);
   GpsStatus readStatus() const;
   bool isPollActive() const { return pollActive_; }
+  bool shouldRunTask() const;
+  bool shouldPoll() const;
+  bool shouldTimeSync() const;
   void setTimeSync(TimeSync* timeSync) { timeSync_ = timeSync; }
   void syncTask();
   bool stopTask();

@@ -1,9 +1,9 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Persists ZTE MF79RU source profile with V1/V2->V3 migration
-// SCOPE: load/save of ZteConfigStore profile and buildZteConfigRecord helper with V1/V2->V3
-// migration. NOT: Wi-Fi, SMTP, and modem-source profiles, network connection attempts, and protocol
-// dialogs. INVARIANTS: Credentials are stored as a whole checksummed record. DEPENDENCIES:
-// Preferences partition appcfg. #endregion MODULE_CONTRACT
+// PURPOSE: Persists ZTE MF79RU source profile with V3->V4 migration sample
+// SCOPE: load/save of ZteConfigStore profile and buildZteConfigRecord helper with V3->V4
+// migration sample (older removed). NOT: Wi-Fi, SMTP, and modem-source profiles, network connection
+// attempts, and protocol dialogs. INVARIANTS: Credentials are stored as a whole checksummed record.
+// DEPENDENCIES: Preferences partition appcfg. #endregion MODULE_CONTRACT
 
 #pragma once
 #ifndef PERSISTENCE_CONFIG_STORE_ZTE_H
@@ -14,7 +14,8 @@
 #include "zte/zte_record.h"
 
 struct RuntimeZteConfig {
-  bool enabled = false;
+  bool moduleEnabled = false;
+  bool forwardEnabled = false;
   String host;
   String password;
   String label;  // Phone number or alias shown in forwarded emails.
@@ -29,7 +30,6 @@ class ZteConfigStore {
   bool save(const RuntimeZteConfig& config) const;
 
  private:
-  bool migrateV1Record(size_t readLength) const;
-  bool migrateV2Record(size_t readLength) const;
+  bool migrateV3Record(size_t readLength) const;
 };
 #endif  // PERSISTENCE_CONFIG_STORE_ZTE_H

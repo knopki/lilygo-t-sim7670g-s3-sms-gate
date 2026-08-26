@@ -54,6 +54,7 @@ class ZteService {
   void syncPollTask(bool shouldRun);
   void setSmtpService(SmtpService* smtp) { smtp_ = smtp; }
   void setWifiManager(WifiManager* wifi) { wifi_ = wifi; }
+  bool shouldRunModule() const;
   bool shouldRunPoll(bool smtpReady) const;
 
  private:

@@ -94,8 +94,9 @@ class TimeSync {
   TimeSource arbitrateAt(uint32_t nowMs) const;
   // cppcheck-suppress unusedPrivateFunction
   TimeSource arbitrate();
-  // Returns wall diff ms (chosen - wall) and performs forward-only discipline.
-  int64_t disciplineAt(const TimeSample& chosen, int64_t wallMs);
+  // Returns wall diff ms (expected - wall) and performs forward-only discipline.
+  // expected = chosen.epochMs + (nowMs - chosen.receivedMs) to avoid stale-sample drift.
+  int64_t disciplineAt(const TimeSample& chosen, int64_t wallMs, uint32_t nowMs);
   // cppcheck-suppress unusedPrivateFunction
   void discipline(const TimeSample& chosen);
   bool shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs);
@@ -105,6 +106,7 @@ class TimeSync {
   TimeSample samples_[4] = {};
   TimeState published_ = {};
   uint32_t quarantineUntilMs_[4] = {};
+  uint32_t lastIgnoredLogMs_[4] = {};
 
   uint32_t gpsPollMs_ = 60UL * 1000UL;
   uint32_t modemPollMs_ = 15UL * 1000UL;

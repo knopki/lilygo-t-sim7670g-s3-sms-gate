@@ -160,10 +160,12 @@ ModemSourceRecord makeModemRecord() {
   ModemSourceRecord record{};
   record.magic = kModemSourceMagic;
   record.version = kModemSourceVersion;
-  record.enabled = 1;
+  record.moduleEnabled = 1;
+  record.pollEnabled = 1;
   record.pollIntervalSec = kDefaultModemPollSec;
   strcpy(record.label, "+79990000001");
   record.nitzTimeSyncEnabled = 1;
+  record.smsPollEnabled = 1;
   record.checksum = calculateModemSourceChecksum(record);
   return record;
 }
@@ -216,12 +218,24 @@ void testModemRecordValidation() {
   assert(!isModemSourceRecordValid(record));
 
   record = makeModemRecord();
-  record.enabled = 7;
+  record.moduleEnabled = 7;
   record.checksum = calculateModemSourceChecksum(record);
   assert(!isModemSourceRecordValid(record));
 
   record = makeModemRecord();
-  record.enabled = 0;
+  record.pollEnabled = 7;
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(!isModemSourceRecordValid(record));
+
+  record = makeModemRecord();
+  record.smsPollEnabled = 7;
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(!isModemSourceRecordValid(record));
+
+  record = makeModemRecord();
+  record.moduleEnabled = 0;
+  record.pollEnabled = 0;
+  record.smsPollEnabled = 0;
   record.checksum = calculateModemSourceChecksum(record);
   assert(isModemSourceRecordValid(record));
 
@@ -264,17 +278,18 @@ void testModemRecordValidation() {
   record.checksum = calculateModemSourceChecksum(record);
   assert(!isModemSourceRecordValid(record));
 
-  // V1 happy + checksum
-  ModemSourceRecordV1 v1{};
-  v1.magic = kModemSourceMagic;
-  v1.version = 1;
-  v1.enabled = 1;
-  v1.pollIntervalSec = kDefaultModemPollSec;
-  strcpy(v1.label, "+79990000001");
-  v1.checksum = calculateModemSourceV1Checksum(v1);
-  assert(isModemSourceRecordV1Valid(v1));
-  v1.label[0] = 'X';
-  assert(v1.checksum != calculateModemSourceV1Checksum(v1));
+  // V2 migration sample
+  ModemSourceRecordV2 v2{};
+  v2.magic = kModemSourceMagic;
+  v2.version = 2;
+  v2.enabled = 1;
+  v2.pollIntervalSec = kDefaultModemPollSec;
+  strcpy(v2.label, "+79990000001");
+  v2.nitzTimeSyncEnabled = 1;
+  v2.checksum = calculateModemSourceV2Checksum(v2);
+  assert(isModemSourceRecordV2Valid(v2));
+  v2.label[0] = 'X';
+  assert(v2.checksum != calculateModemSourceV2Checksum(v2));
 
   puts("testModemRecordValidation ok");
 }

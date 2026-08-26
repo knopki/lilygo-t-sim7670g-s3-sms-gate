@@ -383,14 +383,20 @@
       <p id="gps-config-state" class="hint"></p>
       <form id="gps-form">
         <fieldset>
-          <legend>GNSS polling</legend>
-          <label class="checkbox">Enable GNSS polling
-            <input type="checkbox" name="enabled">
+          <legend>GNSS module</legend>
+          <label class="checkbox">Enable GNSS module (device &amp; task)
+            <input type="checkbox" name="module_enabled">
+          </label>
+          <label class="checkbox">Enable polling (requires module)
+            <input type="checkbox" name="poll_enabled">
+          </label>
+          <label class="checkbox">Enable time sync from GNSS (requires polling)
+            <input type="checkbox" name="time_sync">
           </label>
           <label>Poll interval (seconds)
             <input type="number" name="poll_interval" min="5" max="300" value="60">
           </label>
-          <p class="hint">Active antenna etecl25t6a needs sky view. Default 60 s, 5–300 s. When fix is available the device clock is synced to GPS UTC.</p>
+          <p class="hint">Module enables the GNSS hardware/task. Polling queries the fix. Time sync feeds TimeSync (GNSS stratum 1). Active antenna etecl25t6a needs sky view.</p>
         </fieldset>
         <button type="submit">Save GPS settings</button>
       </form>
@@ -398,9 +404,18 @@
       <p id="modem-source-state" class="hint"></p>
       <form id="modem-source-form">
         <fieldset>
-          <legend>Internal modem</legend>
-          <label class="checkbox">Forward SMS to e-mail
-            <input type="checkbox" name="enabled">
+          <legend>Internal modem (SIM7670G)</legend>
+          <label class="checkbox">Enable modem module (device &amp; task)
+            <input type="checkbox" name="module_enabled">
+          </label>
+          <label class="checkbox">Enable status polling (requires module)
+            <input type="checkbox" name="poll_enabled">
+          </label>
+          <label class="checkbox">Enable SMS polling &amp; forwarding (requires status polling)
+            <input type="checkbox" name="sms_poll">
+          </label>
+          <label class="checkbox">Enable NITZ time sync (requires polling)
+            <input type="checkbox" name="nitz_time_sync">
           </label>
           <label>Poll interval (seconds)
             <input type="number" name="poll_interval" min="5" max="300" value="15">
@@ -408,7 +423,7 @@
           <label>Phone number or alias
             <input maxlength="31" name="label" placeholder="For example, +79990000000 (modem)" autocomplete="off">
           </label>
-          <p class="hint">Shown in forwarded emails as the "Received on" line, optional. Poll interval 5–300 s, default 15 s. Storage ME (modem flash).</p>
+          <p class="hint">Module enables the modem/task &amp; sending. Polling queries status/clock. SMS poll forwards via SMTP. NITZ sync is modem-clock fallback.</p>
         </fieldset>
         <button type="submit">Save settings</button>
       </form>
@@ -469,8 +484,11 @@
       <form id="zte-form">
         <fieldset>
           <legend>ZTE MF79RU (HiLink)</legend>
-          <label class="checkbox">Enable polling
-            <input type="checkbox" name="enabled">
+          <label class="checkbox">Enable ZTE module (device &amp; task)
+            <input type="checkbox" name="module_enabled">
+          </label>
+          <label class="checkbox">Enable SMS polling &amp; forwarding (requires module)
+            <input type="checkbox" name="forward_enabled">
           </label>
           <label>Host
             <input required maxlength="63" name="host" placeholder="192.168.0.1" autocomplete="off">
@@ -934,7 +952,14 @@
 			const form = document.getElementById("zte-form");
 			if (response.ok && payload && form) {
 				form.elements.host.value = payload.host || "";
-				form.elements.enabled.checked = !!payload.enabled;
+				if (form.elements.module_enabled)
+					form.elements.module_enabled.checked = !!(
+						payload.module_enabled ?? payload.enabled
+					);
+				if (form.elements.forward_enabled)
+					form.elements.forward_enabled.checked = !!(
+						payload.forward_enabled ?? payload.enabled
+					);
 				form.elements.poll_interval.value =
 					payload.poll_interval != null ? String(payload.poll_interval) : "15";
 				form.elements.label.value = payload.label || "";
@@ -946,12 +971,18 @@
 				if (state) {
 					if (!payload.present) {
 						state.textContent = "The ZTE modem is not configured yet.";
-					} else if (payload.enabled) {
-						state.textContent =
-							"Polling is enabled." +
-							(payload.last_status ? ` Last poll: ${payload.last_status}` : "");
 					} else {
-						state.textContent = "Configured, polling disabled.";
+						const mod = payload.module_enabled ?? payload.enabled;
+						const fwd = payload.forward_enabled ?? payload.enabled;
+						if (!mod)
+							state.textContent = "Module disabled — no polling, no sending.";
+						else if (fwd)
+							state.textContent =
+								"Forwarding enabled." +
+								(payload.last_status
+									? ` Last poll: ${payload.last_status}`
+									: "");
+						else state.textContent = "Module enabled, forwarding disabled.";
 					}
 				}
 			}
@@ -993,7 +1024,20 @@
 
 	function zteFormFields(form) {
 		return {
-			enabled: form.elements.enabled.checked ? "1" : "0",
+			module_enabled: form.elements.module_enabled
+				? form.elements.module_enabled.checked
+					? "1"
+					: "0"
+				: form.elements.enabled.checked
+					? "1"
+					: "0",
+			forward_enabled: form.elements.forward_enabled
+				? form.elements.forward_enabled.checked
+					? "1"
+					: "0"
+				: form.elements.enabled.checked
+					? "1"
+					: "0",
 			host: form.elements.host.value.trim(),
 			password: form.elements.password.value,
 			poll_interval: form.elements.poll_interval.value.trim(),
@@ -1022,7 +1066,22 @@
 			}
 			const form = document.getElementById("modem-source-form");
 			if (response.ok && payload && form) {
-				form.elements.enabled.checked = !!payload.enabled;
+				if (form.elements.module_enabled)
+					form.elements.module_enabled.checked = !!(
+						payload.module_enabled ?? payload.enabled
+					);
+				if (form.elements.poll_enabled)
+					form.elements.poll_enabled.checked = !!(
+						payload.poll_enabled ?? payload.enabled
+					);
+				if (form.elements.sms_poll)
+					form.elements.sms_poll.checked = !!(
+						payload.sms_poll_enabled ?? payload.enabled
+					);
+				if (form.elements.nitz_time_sync)
+					form.elements.nitz_time_sync.checked = !!(
+						payload.nitz_time_sync_enabled ?? true
+					);
 				form.elements.poll_interval.value =
 					payload.poll_interval != null ? String(payload.poll_interval) : "15";
 				form.elements.label.value = payload.label || "";
@@ -1031,12 +1090,22 @@
 					if (!payload.present) {
 						state.textContent =
 							"The internal modem source is not configured yet.";
-					} else if (payload.enabled) {
-						state.textContent =
-							"Forwarding is enabled." +
-							(payload.last_status ? ` Last poll: ${payload.last_status}` : "");
 					} else {
-						state.textContent = "Configured, forwarding disabled.";
+						const mod = payload.module_enabled ?? payload.enabled;
+						const poll = payload.poll_enabled ?? payload.enabled;
+						const sms = payload.sms_poll_enabled ?? payload.enabled;
+						if (!mod)
+							state.textContent = "Module disabled — no polling, no sending.";
+						else if (!poll)
+							state.textContent = "Module enabled, polling disabled.";
+						else if (sms)
+							state.textContent =
+								"SMS forwarding enabled." +
+								(payload.last_status
+									? ` Last poll: ${payload.last_status}`
+									: "");
+						else
+							state.textContent = "Polling enabled, SMS forwarding disabled.";
 					}
 				}
 			}
@@ -1091,7 +1160,18 @@
 			}
 			const form = document.getElementById("gps-form");
 			if (response.ok && payload && form) {
-				form.elements.enabled.checked = !!payload.enabled;
+				if (form.elements.module_enabled)
+					form.elements.module_enabled.checked = !!(
+						payload.module_enabled ?? payload.enabled
+					);
+				if (form.elements.poll_enabled)
+					form.elements.poll_enabled.checked = !!(
+						payload.poll_enabled ?? payload.enabled
+					);
+				if (form.elements.time_sync)
+					form.elements.time_sync.checked = !!(
+						payload.time_sync_enabled ?? false
+					);
 				form.elements.poll_interval.value =
 					payload.poll_interval != null ? String(payload.poll_interval) : "60";
 				const state = document.getElementById("gps-config-state");
@@ -1099,11 +1179,17 @@
 					if (!payload.present)
 						state.textContent =
 							"GNSS is not configured yet (default disabled, 60 s).";
-					else if (payload.enabled)
-						state.textContent =
-							"Polling enabled." +
-							(payload.last_status ? ` ${payload.last_status}` : "");
-					else state.textContent = "Configured, polling disabled.";
+					else {
+						const mod = payload.module_enabled ?? payload.enabled;
+						const poll = payload.poll_enabled ?? payload.enabled;
+						if (!mod) state.textContent = "Module disabled — GPS not powered.";
+						else if (!poll)
+							state.textContent = "Module enabled, polling disabled.";
+						else
+							state.textContent =
+								"Polling enabled." +
+								(payload.last_status ? ` ${payload.last_status}` : "");
+					}
 				}
 			}
 		} catch (_error) {
@@ -1144,14 +1230,57 @@
 
 	function gpsFormFields(form) {
 		return {
-			enabled: form.elements.enabled.checked ? "1" : "0",
+			module_enabled: form.elements.module_enabled
+				? form.elements.module_enabled.checked
+					? "1"
+					: "0"
+				: form.elements.enabled.checked
+					? "1"
+					: "0",
+			poll_enabled: form.elements.poll_enabled
+				? form.elements.poll_enabled.checked
+					? "1"
+					: "0"
+				: form.elements.enabled.checked
+					? "1"
+					: "0",
+			time_sync: form.elements.time_sync
+				? form.elements.time_sync.checked
+					? "1"
+					: "0"
+				: "0",
 			poll_interval: form.elements.poll_interval.value.trim(),
 		};
 	}
 
 	function modemSourceFormFields(form) {
 		return {
-			enabled: form.elements.enabled.checked ? "1" : "0",
+			module_enabled: form.elements.module_enabled
+				? form.elements.module_enabled.checked
+					? "1"
+					: "0"
+				: form.elements.enabled.checked
+					? "1"
+					: "0",
+			poll_enabled: form.elements.poll_enabled
+				? form.elements.poll_enabled.checked
+					? "1"
+					: "0"
+				: form.elements.enabled.checked
+					? "1"
+					: "0",
+			sms_poll: form.elements.sms_poll
+				? form.elements.sms_poll.checked
+					? "1"
+					: "0"
+				: form.elements.enabled.checked
+					? "1"
+					: "0",
+			nitz_time_sync: form.elements.nitz_time_sync
+				? form.elements.nitz_time_sync.checked
+					? "1"
+					: "0"
+				: "0",
 			poll_interval: form.elements.poll_interval.value.trim(),
 			label: form.elements.label.value.trim(),
 		};

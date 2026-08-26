@@ -50,9 +50,12 @@ struct WebSmtpConfig {
 // PURPOSE: Snapshot for GET /api/zte without password; pollIntervalSec 5..300 s.
 struct WebZteConfig {
   bool present;
-  bool enabled;
+  bool moduleEnabled = false;
+  bool forwardEnabled = false;
+  // compat: enabled = module && forward
+  bool enabled = false;
   String host;
-  bool passwordSet;
+  bool passwordSet = false;
   String label;                   // Phone number or alias shown in forwarded emails.
   uint16_t pollIntervalSec = 15;  // per-source poll period 5..300 s
   String lastStatus;              // empty until the first poll or test completed
@@ -64,7 +67,11 @@ struct WebZteConfig {
 // pollIntervalSec is the per-source SMS poll period (5–300 s).
 struct WebModemSourceConfig {
   bool present = false;
-  bool enabled = false;
+  bool enabled = false;  // compat: module && smsPoll
+  bool moduleEnabled = false;
+  bool pollEnabled = false;
+  bool smsPollEnabled = false;
+  bool nitzTimeSyncEnabled = false;
   uint16_t pollIntervalSec = 15;
   String label;       // Phone number or alias shown in forwarded emails.
   String lastStatus;  // empty until the first poll completes
@@ -112,7 +119,10 @@ struct WebModemStatus {
 // pollIntervalSec 5..300 s, default 60 s.
 struct WebGpsConfig {
   bool present = false;
-  bool enabled = false;
+  bool enabled = false;  // compat: module && poll
+  bool moduleEnabled = false;
+  bool pollEnabled = false;
+  bool timeSyncEnabled = false;
   uint16_t pollIntervalSec = 60;
   String lastStatus;
 };

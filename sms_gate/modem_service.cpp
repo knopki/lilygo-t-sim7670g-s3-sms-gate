@@ -51,14 +51,27 @@ bool ModemService::save(const RuntimeModemSourceConfig& candidate) {
 }
 // #endregion METHOD_ModemService_save
 
+bool ModemService::shouldRunTask() const { return loaded_ && stored_.moduleEnabled; }
+
+bool ModemService::shouldPoll() const { return shouldRunTask() && stored_.pollEnabled; }
+
+bool ModemService::shouldTimeSync() const { return shouldPoll() && stored_.nitzTimeSyncEnabled; }
+
+bool ModemService::shouldRunSms() const { return shouldPoll() && stored_.smsPollEnabled; }
+
 // #region METHOD_ModemService_webSourceConfig
 // PURPOSE: Snapshots stored profile for JSON API without credentials.
 WebModemSourceConfig ModemService::webSourceConfig() const {
   WebModemSourceConfig web;
   web.present = loaded_;
-  web.enabled = web.present && stored_.enabled;
-  web.pollIntervalSec = web.present ? stored_.pollIntervalSec : kDefaultModemPollSec;
-  web.label = web.present ? stored_.label : String();
+  web.moduleEnabled = loaded_ ? stored_.moduleEnabled : false;
+  web.pollEnabled = loaded_ ? stored_.pollEnabled : false;
+  web.pollIntervalSec = loaded_ ? stored_.pollIntervalSec : kDefaultModemPollSec;
+  web.label = loaded_ ? stored_.label : String();
+  web.nitzTimeSyncEnabled = loaded_ ? stored_.nitzTimeSyncEnabled : true;
+  web.smsPollEnabled = loaded_ ? stored_.smsPollEnabled : false;
+  // compat: enabled = module && poll && sms ? For old clients treat as sms polling
+  web.enabled = loaded_ ? (stored_.moduleEnabled && stored_.smsPollEnabled) : false;
   web.lastStatus = String();
   return web;
 }
@@ -94,7 +107,27 @@ WebModemStatus ModemService::webStatus() const {
 // #region METHOD_ModemService_readSourceForm
 // PURPOSE: Validates modem-source form from current HTTP request.
 bool ModemService::readSourceForm(WebServer& server, RuntimeModemSourceConfig& out, String& error) {
-  out.enabled = server.arg("enabled") == F("1");
+  out.moduleEnabled = server.arg("module_enabled") == F("1");
+  out.pollEnabled = server.arg("poll_enabled") == F("1");
+  out.smsPollEnabled = server.arg("sms_poll") == F("1");
+  out.nitzTimeSyncEnabled = server.arg("nitz_time_sync") == F("1");
+  // backward compat: old enabled -> module+poll+sms
+  if (!server.hasArg("module_enabled") && server.hasArg("enabled")) {
+    bool legacy = server.arg("enabled") == F("1");
+    out.moduleEnabled = legacy;
+    out.pollEnabled = legacy;
+    out.smsPollEnabled = legacy;
+  }
+  // defaults when fields missing (old clients)
+  if (!server.hasArg("poll_enabled") && server.hasArg("module_enabled")) {
+    out.pollEnabled = out.moduleEnabled;
+  }
+  if (!server.hasArg("sms_poll") && server.hasArg("module_enabled")) {
+    out.smsPollEnabled = out.moduleEnabled;
+  }
+  if (!server.hasArg("nitz_time_sync")) {
+    out.nitzTimeSyncEnabled = true;
+  }
   if (!parsePollInterval(server.arg("poll_interval"), out.pollIntervalSec, kMinModemPollSec,
                          kMaxModemPollSec, error)) {
     return false;
@@ -104,6 +137,10 @@ bool ModemService::readSourceForm(WebServer& server, RuntimeModemSourceConfig& o
   if (out.label.length() > kMaxModemLabelLength || !isPrintableAscii(out.label)) {
     error = F("The phone number or alias must contain up to 31 printable ASCII characters.");
     return false;
+  }
+  // enforce dependencies: sms and nitz require poll && module
+  if ((out.smsPollEnabled || out.nitzTimeSyncEnabled) && (!out.pollEnabled || !out.moduleEnabled)) {
+    // allow but ineffective; don't reject to keep UI flexible
   }
   return true;
 }
@@ -145,7 +182,7 @@ WebAsyncOp ModemService::sendStatus() const {
 // #region METHOD_ModemService_shouldRunSms
 // PURPOSE: Returns whether poll should forward given SMTP, Wi-Fi and SIM state.
 bool ModemService::shouldRunSms(const ModemStatus& snapshot) const {
-  if (!loaded_ || !stored_.enabled) return false;
+  if (!shouldRunSms()) return false;
   if (smtp_ == nullptr || !smtp_->isLoaded() || smtp_->config().host.length() == 0 ||
       smtp_->config().password.length() == 0)
     return false;
@@ -227,7 +264,7 @@ void ModemService::runPollCycle(ModemClient& client) {
 // #endregion METHOD_ModemService_runPollCycle
 
 // #region METHOD_ModemService_runPollTask
-// PURPOSE: Always-on modem task: init, poll status and run poll cycles.
+// PURPOSE: Modem task: init when moduleEnabled, then poll status and SMS when pollEnabled.
 void ModemService::runPollTask() {
   char* scratch = static_cast<char*>(malloc(kModemScratchSize));
   if (scratch == nullptr) {
@@ -255,53 +292,61 @@ void ModemService::runPollTask() {
                   static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
   }
   while (!taskStopRequested_) {
-    // Serialize Serial1 with GNSS task — GNSS poll can hold 10-12s.
-    bool haveLock = modem_lock::take(15000);
-    ModemStatus status;
-    ModemResult result = ModemResult::kTimeout;
-    if (!haveLock) {
-      Serial.println("event=modem_poll_skipped reason=modem_busy");
-      status.present = false;
-      String safeStage = "modem_busy";
-      publishStatus(status);
-      Serial.printf("event=modem_error stage=%s\n", safeStage.c_str());
-    } else {
-      result = client.pollStatus(status);
-      if (result == ModemResult::kSuccess) {
-        status.updatedMs = millis();
+    if (shouldPoll()) {
+      // Serialize Serial1 with GNSS task — GNSS poll can hold 10-12s.
+      bool haveLock = modem_lock::take(15000);
+      ModemStatus status;
+      ModemResult result = ModemResult::kTimeout;
+      if (!haveLock) {
+        Serial.println("event=modem_poll_skipped reason=modem_busy");
+        status.present = false;
+        String safeStage = "modem_busy";
         publishStatus(status);
-        Serial.printf(
-            "event=modem_status present=%s cpin=%s cereg=%d creg=%d rssi=%d rsrp=%d rsrq=%d "
-            "cops=%s "
-            "act=%d used_me=%u total_me=%u used_sm=%u total_sm=%u cclk=%s stack_hwm=%u\n",
-            status.present ? "true" : "false", status.cpin, status.ceregStat, status.cregStat,
-            status.csqRssiDbm, status.cesqRsrpDbm, status.cesqRsrqDb, status.copsOp, status.copsAct,
-            static_cast<unsigned>(status.smsUsedMe), static_cast<unsigned>(status.smsTotalMe),
-            static_cast<unsigned>(status.smsUsedSm), static_cast<unsigned>(status.smsTotalSm),
-            status.cclk, static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
-        if (stored_.nitzTimeSyncEnabled && timeSync_ != nullptr && status.cclk[0] != '\0') {
-          int64_t epochMs = 0;
-          if (cclkToEpochMs(status.cclk, epochMs)) {
-            timeSync_->feedNitzSample(epochMs, 1500);
-            Serial.printf("event=nitz_time_feed cclk=%s epoch_ms=%lld\n", status.cclk,
-                          (long long)epochMs);
+        Serial.printf("event=modem_error stage=%s\n", safeStage.c_str());
+      } else {
+        result = client.pollStatus(status);
+        if (result == ModemResult::kSuccess) {
+          status.updatedMs = millis();
+          publishStatus(status);
+          Serial.printf(
+              "event=modem_status present=%s cpin=%s cereg=%d creg=%d rssi=%d rsrp=%d rsrq=%d "
+              "cops=%s "
+              "act=%d used_me=%u total_me=%u used_sm=%u total_sm=%u cclk=%s stack_hwm=%u\n",
+              status.present ? "true" : "false", status.cpin, status.ceregStat, status.cregStat,
+              status.csqRssiDbm, status.cesqRsrpDbm, status.cesqRsrqDb, status.copsOp,
+              status.copsAct, static_cast<unsigned>(status.smsUsedMe),
+              static_cast<unsigned>(status.smsTotalMe), static_cast<unsigned>(status.smsUsedSm),
+              static_cast<unsigned>(status.smsTotalSm), status.cclk,
+              static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+          if (shouldTimeSync() && timeSync_ != nullptr && status.cclk[0] != '\0') {
+            int64_t epochMs = 0;
+            if (cclkToEpochMs(status.cclk, epochMs)) {
+              timeSync_->feedNitzSample(epochMs, 1500);
+              Serial.printf("event=nitz_time_feed cclk=%s epoch_ms=%lld\n", status.cclk,
+                            (long long)epochMs);
+            }
+          }
+        } else {
+          ModemStatus absent;
+          absent.present = false;
+          String safeStage = String(client.failedStage());
+          safeStage.replace("=", "_");
+          publishStatus(absent);
+          Serial.printf("event=modem_error stage=%s\n", safeStage.c_str());
+        }
+        if (!sendRunning_) {
+          const ModemStatus snapshot = readStatus();
+          if (shouldRunSms(snapshot)) {
+            runPollCycle(client);
           }
         }
-      } else {
-        ModemStatus absent;
-        absent.present = false;
-        String safeStage = String(client.failedStage());
-        safeStage.replace("=", "_");
-        publishStatus(absent);
-        Serial.printf("event=modem_error stage=%s\n", safeStage.c_str());
+        modem_lock::give();
       }
-      if (!sendRunning_) {
-        const ModemStatus snapshot = readStatus();
-        if (shouldRunSms(snapshot)) {
-          runPollCycle(client);
-        }
+    } else {
+      // Module disabled or poll disabled: don't touch Serial1.
+      if (!shouldRunTask()) {
+        // If module disabled, task should have been stopped; but stay idle if still running.
       }
-      modem_lock::give();
     }
     const unsigned long intervalMs = pollIntervalMs();
     for (unsigned long waited = 0; waited < intervalMs && !taskStopRequested_;
@@ -326,13 +371,17 @@ void ModemService::pollTask(void* param) {
 // #endregion METHOD_ModemService_pollTask
 
 // #region METHOD_ModemService_syncTask
-// PURPOSE: Ensures exactly one always-on modem poll task is running.
+// PURPOSE: Ensures modem poll task runs only when moduleEnabled.
 void ModemService::syncTask() {
   if (taskHandle_ != nullptr) {
     if (!task_control::stopTask(taskHandle_, taskStopRequested_)) {
       Serial.println("event=modem_task_stop_timeout");
       return;
     }
+  }
+  if (!shouldRunTask()) {
+    Serial.println("event=modem_task_stopped reason=module_disabled");
+    return;
   }
   if (xTaskCreatePinnedToCore(pollTask, "modem_poll", kServiceTaskStack, this, 1, &taskHandle_,
                               0) != pdPASS) {
@@ -359,6 +408,10 @@ bool ModemService::stopTask() {
 // #region METHOD_ModemService_startSend
 // PURPOSE: Starts one AT send; fails when busy or SIM not ready.
 bool ModemService::startSend(const String& to, const String& text, String& error) {
+  if (!shouldRunTask()) {
+    error = F("The internal modem module is disabled.");
+    return false;
+  }
   if (sendRunning_) {
     error = F("An SMS send is already in progress.");
     return false;

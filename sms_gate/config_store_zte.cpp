@@ -23,7 +23,8 @@ ZteConfigRecord buildZteConfigRecord(const RuntimeZteConfig& config) {
   ZteConfigRecord record{};
   record.magic = kZteConfigMagic;
   record.version = kZteConfigVersion;
-  record.enabled = config.enabled ? 1 : 0;
+  record.moduleEnabled = config.moduleEnabled ? 1 : 0;
+  record.forwardEnabled = config.forwardEnabled ? 1 : 0;
   config.host.toCharArray(record.host, sizeof(record.host));
   config.password.toCharArray(record.password, sizeof(record.password));
   config.label.toCharArray(record.label, sizeof(record.label));
@@ -36,69 +37,28 @@ ZteConfigRecord buildZteConfigRecord(const RuntimeZteConfig& config) {
 }
 // #endregion FUNC_buildZteConfigRecord
 
-// #region FUNC_migrateV1Record
-// PURPOSE: Recognizes a stored pre-label v1 ZTE record and rewrites it as a
-// valid v3 record with an empty label and default poll interval.
-bool ZteConfigStore::migrateV1Record(size_t readLength) const {
-  if (readLength != sizeof(ZteConfigRecordV1)) {
+bool ZteConfigStore::migrateV3Record(size_t readLength) const {
+  if (readLength != sizeof(ZteConfigRecordV3)) {
     return false;
   }
   Preferences preferences;
   if (!preferences.begin(kZteNamespace, true, kAppCfgPartition)) {
     return false;
   }
-  ZteConfigRecordV1 legacy{};
+  ZteConfigRecordV3 legacy{};
   const size_t legacyLength = preferences.getBytes(kAppCfgKey, &legacy, sizeof(legacy));
   preferences.end();
-  if (legacyLength != sizeof(legacy) || !isZteConfigRecordV1Valid(legacy)) {
+  if (legacyLength != sizeof(legacy) || !isZteConfigRecordV3Valid(legacy)) {
     return false;
   }
 
   RuntimeZteConfig migrated;
-  migrated.enabled = legacy.enabled == 1;
-  migrated.host = legacy.host;
-  migrated.password = legacy.password;
-  migrated.label = "";
-  migrated.pollIntervalSec = kDefaultZtePollSec;
-  const ZteConfigRecord record = buildZteConfigRecord(migrated);
-  if (!isZteConfigRecordValid(record) ||
-      !preferences.begin(kZteNamespace, false, kAppCfgPartition)) {
-    Serial.println("event=zte_load_migrated persisted=false");
-    return false;
-  }
-  const size_t writtenLength = preferences.putBytes(kAppCfgKey, &record, sizeof(record));
-  preferences.end();
-  const bool persisted = writtenLength == sizeof(record);
-  Serial.printf("event=zte_load_migrated from_version=1 persisted=%s\n",
-                persisted ? "true" : "false");
-  return persisted;
-}
-// #endregion FUNC_migrateV1Record
-
-// #region FUNC_migrateV2Record
-// PURPOSE: Recognizes a stored v2 ZTE record (without poll interval) and
-// rewrites it as v3 with default 15 s interval.
-bool ZteConfigStore::migrateV2Record(size_t readLength) const {
-  if (readLength != sizeof(ZteConfigRecordV2)) {
-    return false;
-  }
-  Preferences preferences;
-  if (!preferences.begin(kZteNamespace, true, kAppCfgPartition)) {
-    return false;
-  }
-  ZteConfigRecordV2 legacy{};
-  const size_t legacyLength = preferences.getBytes(kAppCfgKey, &legacy, sizeof(legacy));
-  preferences.end();
-  if (legacyLength != sizeof(legacy) || !isZteConfigRecordV2Valid(legacy)) {
-    return false;
-  }
-
-  RuntimeZteConfig migrated;
-  migrated.enabled = legacy.enabled == 1;
+  migrated.moduleEnabled = legacy.enabled == 1;
+  migrated.forwardEnabled = legacy.enabled == 1;
   migrated.host = legacy.host;
   migrated.password = legacy.password;
   migrated.label = legacy.label;
-  migrated.pollIntervalSec = kDefaultZtePollSec;
+  migrated.pollIntervalSec = legacy.pollIntervalSec;
   const ZteConfigRecord record = buildZteConfigRecord(migrated);
   if (!isZteConfigRecordValid(record) ||
       !preferences.begin(kZteNamespace, false, kAppCfgPartition)) {
@@ -108,16 +68,15 @@ bool ZteConfigStore::migrateV2Record(size_t readLength) const {
   const size_t writtenLength = preferences.putBytes(kAppCfgKey, &record, sizeof(record));
   preferences.end();
   const bool persisted = writtenLength == sizeof(record);
-  Serial.printf("event=zte_load_migrated from_version=2 persisted=%s\n",
+  Serial.printf("event=zte_load_migrated from_version=3 persisted=%s\n",
                 persisted ? "true" : "false");
   return persisted;
 }
-// #endregion FUNC_migrateV2Record
 
 // #region FUNC_ZteConfigStore_load
 // PURPOSE: Restores the ZTE profile only as a whole validated record so a
-// corrupt or partial blob can never reach the modem dialog; stored v1/v2
-// records are migrated to v3 in place.
+// corrupt or partial blob can never reach the modem dialog; stored v3
+// records are migrated to v4 in place (sample kept, older removed).
 bool ZteConfigStore::load(RuntimeZteConfig& config) const {
   Serial.printf("event=zte_load_begin partition=%s\n", kAppCfgPartition);
   Preferences preferences;
@@ -131,8 +90,8 @@ bool ZteConfigStore::load(RuntimeZteConfig& config) const {
   preferences.end();
 
   if (readLength != sizeof(record)) {
-    if (migrateV1Record(readLength) || migrateV2Record(readLength)) {
-      return load(config);  // Re-read as the freshly written v3 record.
+    if (migrateV3Record(readLength)) {
+      return load(config);
     }
     Serial.printf("event=zte_load_empty_or_invalid bytes=%u\n", static_cast<unsigned>(readLength));
     return false;
@@ -142,13 +101,15 @@ bool ZteConfigStore::load(RuntimeZteConfig& config) const {
     return false;
   }
 
-  config.enabled = record.enabled == 1;
+  config.moduleEnabled = record.moduleEnabled == 1;
+  config.forwardEnabled = record.forwardEnabled == 1;
   config.host = record.host;
   config.password = record.password;
   config.label = record.label;
   config.pollIntervalSec = record.pollIntervalSec;
-  Serial.printf("event=zte_load_complete enabled=%s poll_interval=%u\n",
-                config.enabled ? "true" : "false", static_cast<unsigned>(config.pollIntervalSec));
+  Serial.printf("event=zte_load_complete module=%s forward=%s poll_interval=%u\n",
+                config.moduleEnabled ? "true" : "false", config.forwardEnabled ? "true" : "false",
+                static_cast<unsigned>(config.pollIntervalSec));
   return true;
 }
 // #endregion FUNC_ZteConfigStore_load

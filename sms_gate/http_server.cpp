@@ -337,11 +337,7 @@ void HttpServer::handleSmtpSaveSubmission() {
     sendJsonError(kHttpInternalError, F("The SMTP configuration could not be saved."));
     return;
   }
-  {
-    const bool smtpReady = smtp_.isLoaded() && smtp_.config().host.length() > 0 &&
-                           smtp_.config().password.length() > 0;
-    zte_.syncPollTask(zte_.shouldRunPoll(smtpReady));
-  }
+  zte_.syncPollTask(zte_.shouldRunModule());
   Serial.println("event=smtp_saved");
   sendJson(server_, kHttpOk,
            renderMessageJson(F("SMTP settings saved. Use the test button to verify delivery.")));
@@ -411,13 +407,10 @@ void HttpServer::handleZteSaveSubmission() {
     sendJsonError(kHttpInternalError, F("The ZTE configuration could not be saved."));
     return;
   }
-  {
-    const bool smtpReady = smtp_.isLoaded() && smtp_.config().host.length() > 0 &&
-                           smtp_.config().password.length() > 0;
-    zte_.syncPollTask(zte_.shouldRunPoll(smtpReady));
-  }
-  Serial.printf("event=zte_saved enabled=%s poll_interval=%u\n",
-                candidate.enabled ? "true" : "false",
+  zte_.syncPollTask(zte_.shouldRunModule());
+  Serial.printf("event=zte_saved module=%s forward=%s poll_interval=%u\n",
+                candidate.moduleEnabled ? "true" : "false",
+                candidate.forwardEnabled ? "true" : "false",
                 static_cast<unsigned>(candidate.pollIntervalSec));
   sendJson(server_, kHttpOk, renderMessageJson(F("ZTE settings saved.")));
 }
@@ -548,9 +541,12 @@ void HttpServer::handleModemSourceSave() {
     sendJsonError(kHttpInternalError, F("The modem source configuration could not be saved."));
     return;
   }
-  Serial.printf("event=modem_source_saved enabled=%s poll_interval=%u\n",
-                candidate.enabled ? "true" : "false",
-                static_cast<unsigned>(candidate.pollIntervalSec));
+  Serial.printf(
+      "event=modem_source_saved module=%s poll=%s sms_poll=%s nitz=%s poll_interval=%u\n",
+      candidate.moduleEnabled ? "true" : "false", candidate.pollEnabled ? "true" : "false",
+      candidate.smsPollEnabled ? "true" : "false", candidate.nitzTimeSyncEnabled ? "true" : "false",
+      static_cast<unsigned>(candidate.pollIntervalSec));
+  modem_.syncTask();
   timeSync_.setModemPollMs(modem_.pollIntervalMs());
   sendJson(server_, kHttpOk, renderMessageJson(F("Modem source settings saved.")));
 }
@@ -617,9 +613,12 @@ void HttpServer::handleGpsSaveSubmission() {
     sendJsonError(kHttpInternalError, F("The GPS configuration could not be saved."));
     return;
   }
-  Serial.printf("event=gps_saved enabled=%s poll_interval=%u\n",
-                candidate.enabled ? "true" : "false",
+  Serial.printf("event=gps_saved module=%s poll=%s time_sync=%s poll_interval=%u\n",
+                candidate.moduleEnabled ? "true" : "false",
+                candidate.pollEnabled ? "true" : "false",
+                candidate.timeSyncEnabled ? "true" : "false",
                 static_cast<unsigned>(candidate.pollIntervalSec));
+  gps_.syncTask();
   timeSync_.setGpsPollMs(gps_.pollIntervalMs());
   sendJson(server_, kHttpOk, renderMessageJson(F("GPS settings saved.")));
 }

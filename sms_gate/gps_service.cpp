@@ -37,12 +37,22 @@ bool GpsService::save(const RuntimeGpsConfig& candidate) {
 }
 // #endregion METHOD_GpsService_save
 
+bool GpsService::shouldRunTask() const { return loaded_ && stored_.moduleEnabled; }
+
+bool GpsService::shouldPoll() const { return shouldRunTask() && stored_.pollEnabled; }
+
+bool GpsService::shouldTimeSync() const { return shouldPoll() && stored_.timeSyncEnabled; }
+
 // #region METHOD_GpsService_webConfig
 WebGpsConfig GpsService::webConfig() const {
   WebGpsConfig web;
   web.present = loaded_;
-  web.enabled = loaded_ ? stored_.enabled : false;
+  web.moduleEnabled = loaded_ ? stored_.moduleEnabled : false;
+  web.pollEnabled = loaded_ ? stored_.pollEnabled : false;
+  // compat: enabled = module && poll
+  web.enabled = loaded_ ? (stored_.moduleEnabled && stored_.pollEnabled) : false;
   web.pollIntervalSec = loaded_ ? stored_.pollIntervalSec : kDefaultGpsPollSec;
+  web.timeSyncEnabled = loaded_ ? stored_.timeSyncEnabled : true;
   // lastStatus derived from current GpsStatus fix/power for quick UI hint
   GpsStatus raw = statusCache_.read();
   if (raw.present) {
@@ -83,10 +93,29 @@ WebGpsStatus GpsService::webStatus() const {
 
 // #region METHOD_GpsService_readForm
 bool GpsService::readForm(WebServer& server, RuntimeGpsConfig& out, String& error) {
-  out.enabled = server.arg("enabled") == F("1");
+  out.moduleEnabled = server.arg("module_enabled") == F("1");
+  // backward compat: if module_enabled missing but enabled present, map it
+  if (!server.hasArg("module_enabled") && server.hasArg("enabled")) {
+    out.moduleEnabled = server.arg("enabled") == F("1");
+  }
+  out.pollEnabled = server.arg("poll_enabled") == F("1");
+  if (!server.hasArg("poll_enabled")) {
+    // if only module flag given, default poll = module (migration friendliness)
+    // but for web form both are present; this fallback covers old clients
+    out.pollEnabled = out.moduleEnabled;
+  }
   if (!parsePollInterval(server.arg("poll_interval"), out.pollIntervalSec, kMinGpsPollSec,
                          kMaxGpsPollSec, error)) {
     return false;
+  }
+  out.timeSyncEnabled = server.arg("time_sync") == F("1");
+  if (!server.hasArg("time_sync")) {
+    // old form used timeSyncEnabled implicitly true; keep true if missing
+    out.timeSyncEnabled = true;
+  }
+  // enforce dependency: timeSync requires poll && module
+  if (out.timeSyncEnabled && (!out.pollEnabled || !out.moduleEnabled)) {
+    // allow but will be ineffective; don't reject, just log
   }
   return true;
 }
@@ -127,9 +156,7 @@ void GpsService::runPollTask() {
   }
 
   while (!taskStopRequested_) {
-    // Cheap check before taking mutex: if not loaded or disabled, skip AT.
-    bool shouldPoll = loaded_ && stored_.enabled;
-    if (shouldPoll) {
+    if (shouldPoll()) {
       pollActive_ = true;
       bool gotLock = modem_lock::take(12000);
       if (!gotLock) {
@@ -151,8 +178,7 @@ void GpsService::runPollTask() {
               status.lat, status.lon, status.alt, status.isoTime,
               static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
           // Time sync: feed GNSS sample to TimeSync (ms precision) when fix & timeSyncEnabled.
-          if (status.fix && stored_.timeSyncEnabled && timeSync_ != nullptr &&
-              status.isoTime[0] != '\0') {
+          if (status.fix && shouldTimeSync() && timeSync_ != nullptr && status.isoTime[0] != '\0') {
             GpsFixFields tmp{};
             snprintf(tmp.date, sizeof(tmp.date), "%s", status.date);
             snprintf(tmp.utcTime, sizeof(tmp.utcTime), "%s", status.utcTime);
@@ -177,9 +203,7 @@ void GpsService::runPollTask() {
       }
       pollActive_ = false;
     } else {
-      // Publish not-powered placeholder so UI shows disabled state if never polled
-      // Keep last status but ensure present flag reflects modem liveness via one AT per interval
-      // when disabled? When disabled we don't poll, so no Serial1 use.
+      // Module disabled or poll disabled: don't use Serial1.
     }
 
     const unsigned long intervalMs = pollIntervalMs();
@@ -209,6 +233,10 @@ void GpsService::syncTask() {
       Serial.println("event=gps_task_stop_timeout");
       return;
     }
+  }
+  if (!shouldRunTask()) {
+    Serial.println("event=gps_task_stopped reason=module_disabled");
+    return;
   }
   if (xTaskCreatePinnedToCore(pollTask, "gps_poll", kServiceTaskStack, this, 1, &taskHandle_, 0) !=
       pdPASS) {

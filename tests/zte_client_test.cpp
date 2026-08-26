@@ -168,9 +168,11 @@ ZteConfigRecord makeRecord() {
   ZteConfigRecord record{};
   record.magic = kZteConfigMagic;
   record.version = kZteConfigVersion;
-  record.enabled = 1;
+  record.moduleEnabled = 1;
+  record.forwardEnabled = 1;
   strcpy(record.host, "192.168.0.1");
   strcpy(record.password, "modem-pass");
+  strcpy(record.label, "");
   record.pollIntervalSec = kDefaultZtePollSec;
   record.checksum = calculateZteConfigChecksum(record);
   return record;
@@ -202,26 +204,27 @@ void testCodecVectors() {
 }
 // #endregion FUNC_testCodecVectors
 
-// #region FUNC_makeV1Record
-// PURPOSE: Builds one known-good pre-label v1 record as the baseline for
-// the migration-path assertions.
-ZteConfigRecordV1 makeV1Record() {
-  ZteConfigRecordV1 record{};
+// #region FUNC_makeV3Record
+// PURPOSE: Builds one known-good v3 record as migration sample (older removed).
+ZteConfigRecordV3 makeV3Record() {
+  ZteConfigRecordV3 record{};
   record.magic = kZteConfigMagic;
-  record.version = 1;
+  record.version = 3;
   record.enabled = 1;
   strcpy(record.host, "192.168.0.1");
   strcpy(record.password, "modem-pass");
+  strcpy(record.label, "+79990000000");
+  record.pollIntervalSec = kDefaultZtePollSec;
   const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
   uint32_t hash = 2166136261UL;
-  for (size_t index = 0; index < offsetof(ZteConfigRecordV1, checksum); ++index) {
+  for (size_t index = 0; index < offsetof(ZteConfigRecordV3, checksum); ++index) {
     hash ^= bytes[index];
     hash *= 16777619UL;
   }
   record.checksum = hash;
   return record;
 }
-// #endregion FUNC_makeV1Record
+// #endregion FUNC_makeV3Record
 
 // #region FUNC_testRecordValidation
 // PURPOSE: Gates load/save on the shared predicate: corrupt, foreign, and
@@ -252,7 +255,12 @@ void testRecordValidation() {
   assert(!isZteConfigRecordValid(record));
 
   record = makeRecord();
-  record.enabled = 7;
+  record.moduleEnabled = 7;
+  record.checksum = calculateZteConfigChecksum(record);
+  assert(!isZteConfigRecordValid(record));
+
+  record = makeRecord();
+  record.forwardEnabled = 7;
   record.checksum = calculateZteConfigChecksum(record);
   assert(!isZteConfigRecordValid(record));
 
@@ -272,7 +280,14 @@ void testRecordValidation() {
   assert(!isZteConfigRecordValid(record));
 
   record = makeRecord();
-  record.enabled = 0;  // Disabled still keeps complete credentials.
+  record.moduleEnabled = 0;  // Disabled module still keeps complete credentials.
+  record.forwardEnabled = 0;
+  record.checksum = calculateZteConfigChecksum(record);
+  assert(isZteConfigRecordValid(record));
+
+  record = makeRecord();
+  record.moduleEnabled = 0;
+  record.forwardEnabled = 1; // module off but forward on is still valid record
   record.checksum = calculateZteConfigChecksum(record);
   assert(isZteConfigRecordValid(record));
 
@@ -310,83 +325,32 @@ void testRecordValidation() {
 }
 // #endregion FUNC_testRecordValidation
 
-// #region FUNC_makeV2Record
-// PURPOSE: Builds one known-good v2 record (without poll interval).
-ZteConfigRecordV2 makeV2Record() {
-  ZteConfigRecordV2 record{};
-  record.magic = kZteConfigMagic;
-  record.version = 2;
-  record.enabled = 1;
-  strcpy(record.host, "192.168.0.1");
-  strcpy(record.password, "modem-pass");
-  strcpy(record.label, "+79990000000");
-  const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
-  uint32_t hash = 2166136261UL;
-  for (size_t index = 0; index < offsetof(ZteConfigRecordV2, checksum); ++index) {
-    hash ^= bytes[index];
-    hash *= 16777619UL;
-  }
-  record.checksum = hash;
-  return record;
-}
-// #endregion FUNC_makeV2Record
-
-// #region FUNC_testV2MigrationValidation
-// PURPOSE: Proves v2 recognition accepts an original record and rejects
-// corrupted blobs before migration to v3.
-void testV2MigrationValidation() {
-  assert(isZteConfigRecordV2Valid(makeV2Record()));
-  ZteConfigRecordV2 record = makeV2Record();
+// #region FUNC_testV3MigrationValidation
+// PURPOSE: Proves v3 recognition accepts an original record and rejects
+// corrupted blobs before migration to v4 (sample kept).
+void testV3MigrationValidation() {
+  assert(isZteConfigRecordV3Valid(makeV3Record()));
+  ZteConfigRecordV3 record = makeV3Record();
   record.checksum ^= 1;
-  assert(!isZteConfigRecordV2Valid(record));
-  record = makeV2Record();
-  record.version = 3;
-  assert(!isZteConfigRecordV2Valid(record));
-  record = makeV2Record();
+  assert(!isZteConfigRecordV3Valid(record));
+  record = makeV3Record();
+  record.version = 4;
+  assert(!isZteConfigRecordV3Valid(record));
+  record = makeV3Record();
   record.label[0] = '\x01';
   {
     const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
     uint32_t hash = 2166136261UL;
-    for (size_t index = 0; index < offsetof(ZteConfigRecordV2, checksum); ++index) {
+    for (size_t index = 0; index < offsetof(ZteConfigRecordV3, checksum); ++index) {
       hash ^= bytes[index];
       hash *= 16777619UL;
     }
     record.checksum = hash;
   }
-  assert(!isZteConfigRecordV2Valid(record));
-  puts("testV2MigrationValidation ok");
+  assert(!isZteConfigRecordV3Valid(record));
+  puts("testV3MigrationValidation ok");
 }
-// #endregion FUNC_testV2MigrationValidation
-
-// #region FUNC_testV1MigrationValidation
-// PURPOSE: Proves the load-time v1 recognition accepts an original record
-// and rejects corrupted or foreign blobs before any field is carried over.
-void testV1MigrationValidation() {
-  assert(isZteConfigRecordV1Valid(makeV1Record()));
-
-  ZteConfigRecordV1 record = makeV1Record();
-  record.checksum ^= 1;
-  assert(!isZteConfigRecordV1Valid(record));
-
-  record = makeV1Record();
-  record.version = 2;
-  assert(!isZteConfigRecordV1Valid(record));
-
-  record = makeV1Record();
-  record.password[0] = '\0';
-  {
-    const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
-    uint32_t hash = 2166136261UL;
-    for (size_t index = 0; index < offsetof(ZteConfigRecordV1, checksum); ++index) {
-      hash ^= bytes[index];
-      hash *= 16777619UL;
-    }
-    record.checksum = hash;
-  }
-  assert(!isZteConfigRecordV1Valid(record));
-  puts("testV1MigrationValidation ok");
-}
-// #endregion FUNC_testV1MigrationValidation
+// #endregion FUNC_testV3MigrationValidation
 
 // #region FUNC_testLoginSuccess
 // PURPOSE: Proves the LOGIN request contract (base64 password, Referer,
@@ -1060,8 +1024,7 @@ void testFormatZteDate() {
 int main() {
   testCodecVectors();
   testRecordValidation();
-  testV1MigrationValidation();
-  testV2MigrationValidation();
+  testV3MigrationValidation();
   testLoginSuccess();
   testLoginRejected();
   testFindOldestAscending();

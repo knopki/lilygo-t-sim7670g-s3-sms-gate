@@ -53,10 +53,10 @@ namespace {
 constexpr size_t kEscapeJsonReserveExtra = 8;
 constexpr size_t kStatusJsonReserve = 320;
 constexpr size_t kSmtpJsonReserve = 256;
-constexpr size_t kZteJsonReserve = 272;
-constexpr size_t kModemSourceReserve = 256;
+constexpr size_t kZteJsonReserve = 340;
+constexpr size_t kModemSourceReserve = 360;
 constexpr size_t kModemStatusReserve = 420;
-constexpr size_t kGpsConfigReserve = 128;
+constexpr size_t kGpsConfigReserve = 240;
 constexpr size_t kGpsStatusReserve = 320;
 constexpr size_t kAsyncOpReserveExtra = 64;
 constexpr size_t kTimeReserve = 160;
@@ -174,6 +174,10 @@ String renderZteConfigJson(const WebZteConfig& config) {
   String json;
   json.reserve(kZteJsonReserve);
   appendPresentEnabled(json, config.present, config.enabled);
+  json += F(",\"module_enabled\":");
+  json += config.moduleEnabled ? F("true") : F("false");
+  json += F(",\"forward_enabled\":");
+  json += config.forwardEnabled ? F("true") : F("false");
   json += F(",\"host\":");
   appendJsonString(json, config.host);
   json += F(",\"password_set\":");
@@ -192,6 +196,14 @@ String renderModemSourceJson(const WebModemSourceConfig& config) {
   String json;
   json.reserve(kModemSourceReserve);
   appendPresentEnabled(json, config.present, config.enabled);
+  json += F(",\"module_enabled\":");
+  json += config.moduleEnabled ? F("true") : F("false");
+  json += F(",\"poll_enabled\":");
+  json += config.pollEnabled ? F("true") : F("false");
+  json += F(",\"sms_poll_enabled\":");
+  json += config.smsPollEnabled ? F("true") : F("false");
+  json += F(",\"nitz_time_sync_enabled\":");
+  json += config.nitzTimeSyncEnabled ? F("true") : F("false");
   WebSourceConfigCommon common{config.present, config.enabled, config.pollIntervalSec, config.label,
                                config.lastStatus};
   appendSourceCommonFields(json, common, false);
@@ -257,6 +269,12 @@ String renderGpsConfigJson(const WebGpsConfig& config) {
   String json;
   json.reserve(kGpsConfigReserve);
   appendPresentEnabled(json, config.present, config.enabled);
+  json += F(",\"module_enabled\":");
+  json += config.moduleEnabled ? F("true") : F("false");
+  json += F(",\"poll_enabled\":");
+  json += config.pollEnabled ? F("true") : F("false");
+  json += F(",\"time_sync_enabled\":");
+  json += config.timeSyncEnabled ? F("true") : F("false");
   json += F(",\"poll_interval\":");
   json += String(config.pollIntervalSec);
   json += F(",\"last_status\":");

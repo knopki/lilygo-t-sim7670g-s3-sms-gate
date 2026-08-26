@@ -17,7 +17,8 @@
 #include "gps/gps_record.h"
 
 struct RuntimeGpsConfig {
-  bool enabled = false;
+  bool moduleEnabled = false;
+  bool pollEnabled = false;
   uint16_t pollIntervalSec = kDefaultGpsPollSec;
   bool timeSyncEnabled = true;
 };
@@ -30,7 +31,7 @@ class GpsConfigStore {
   bool save(const RuntimeGpsConfig& config) const;
 
  private:
-  bool migrateV1Record(size_t readLength) const;
+  bool migrateV2Record(size_t readLength) const;
 };
 
 #endif  // PERSISTENCE_CONFIG_STORE_GPS_H

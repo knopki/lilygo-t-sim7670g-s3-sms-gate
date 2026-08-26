@@ -43,6 +43,10 @@ class ModemService {
   ModemStatus readStatus() const;
   bool isPollCycleActive() const { return pollCycleActive_; }
   bool isSendRunning() const { return sendRunning_; }
+  bool shouldRunTask() const;
+  bool shouldPoll() const;
+  bool shouldTimeSync() const;
+  bool shouldRunSms() const;
   WebAsyncOp sendStatus() const;
   bool startSend(const String& to, const String& text, String& error);
   void syncTask();
