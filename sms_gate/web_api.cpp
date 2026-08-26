@@ -284,6 +284,25 @@ String renderGpsConfigJson(const WebGpsConfig& config) {
 }
 // #endregion FUNC_renderGpsConfigJson
 
+// #region FUNC_renderWatchdogStatusJson
+String renderWatchdogStatusJson(const WebWatchdogStatus& status) {
+  String json;
+  json.reserve(180);
+  json += F("{\"safe_mode\":");
+  json += status.safeMode ? F("true") : F("false");
+  json += F(",\"boot_count\":");
+  json += String(status.bootCount);
+  json += F(",\"timeout_sec\":");
+  json += String(status.timeoutSec);
+  json += F(",\"last_reset_reason\":");
+  json += String(status.lastResetReason);
+  json += F(",\"uptime_ms\":");
+  json += String(status.uptimeMs);
+  json += '}';
+  return json;
+}
+// #endregion FUNC_renderWatchdogStatusJson
+
 // #region FUNC_renderTimeStatusJson
 String renderTimeStatusJson(const WebTimeStatus& status) {
   String json;

@@ -12,6 +12,7 @@
 #include "system/modem_lock.h"
 #include "system/task_control.h"
 #include "system/time_sync.h"
+#include "system/watchdog.h"
 
 namespace {
 using task_control::kPollSliceMs;
@@ -139,9 +140,11 @@ GpsStatus GpsService::readStatus() const { return statusCache_.read(); }
 
 // #region METHOD_GpsService_runPollTask
 void GpsService::runPollTask() {
+  watchdog::addCurrentTask("gps_poll");
   char* scratch = static_cast<char*>(malloc(kGpsScratchSize));
   if (scratch == nullptr) {
     Serial.println("event=gps_error stage=no_scratch");
+    watchdog::removeCurrentTask();
     taskHandle_ = nullptr;
     vTaskDelete(nullptr);
     return;
@@ -152,6 +155,7 @@ void GpsService::runPollTask() {
 
   // Let the modem finish its power-on and initial AT init before first GNSS poll.
   for (unsigned long waited = 0; waited < 15000 && !taskStopRequested_; waited += kPollSliceMs) {
+    watchdog::reset();
     vTaskDelay(pdMS_TO_TICKS(kPollSliceMs));
   }
 
@@ -209,11 +213,13 @@ void GpsService::runPollTask() {
     const unsigned long intervalMs = pollIntervalMs();
     for (unsigned long waited = 0; waited < intervalMs && !taskStopRequested_;
          waited += kPollSliceMs) {
+      watchdog::reset();
       vTaskDelay(pdMS_TO_TICKS(kPollSliceMs));
     }
   }
   free(scratch);
   Serial.println("event=gps_task_stopped");
+  watchdog::removeCurrentTask();
   taskHandle_ = nullptr;
   vTaskDelete(nullptr);
 }

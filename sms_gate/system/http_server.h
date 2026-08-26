@@ -87,6 +87,8 @@ class HttpServer {
   void handleGpsSaveSubmission();
   void handleGpsStatusRequest();
   void handleTimeStatusRequest();
+  void handleWatchdogStatusRequest();
+  void handleWatchdogClearRequest();
   void handleNotFound();
 
   WebServer& server_;

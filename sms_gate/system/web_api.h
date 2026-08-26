@@ -140,6 +140,18 @@ struct WebTimeStatus {
 };
 // #endregion STRUCT_WebTimeStatus
 
+// #region STRUCT_WebWatchdogStatus
+// PURPOSE: Snapshot for GET /api/watchdog — WDT timeout, boot-loop count,
+// safe-mode and last reset reason.
+struct WebWatchdogStatus {
+  bool safeMode = false;
+  uint32_t bootCount = 0;
+  uint32_t timeoutSec = 60;
+  uint32_t lastResetReason = 0;
+  uint32_t uptimeMs = 0;
+};
+// #endregion STRUCT_WebWatchdogStatus
+
 // #region STRUCT_WebGpsStatus
 // PURPOSE: Snapshot for GET /api/gps/status — fix, coords, sats and UTC.
 struct WebGpsStatus {
@@ -179,6 +191,7 @@ String renderZteConfigJson(const WebZteConfig& config);
 // #region FUNC_renderModemStatusJson
 // PURPOSE: Serializes WebModemStatus into the /api/modem/status envelope.
 String renderTimeStatusJson(const WebTimeStatus& status);
+String renderWatchdogStatusJson(const WebWatchdogStatus& status);
 String renderModemStatusJson(const WebModemStatus& status);
 // #endregion FUNC_renderModemStatusJson
 // #region FUNC_renderModemSourceJson

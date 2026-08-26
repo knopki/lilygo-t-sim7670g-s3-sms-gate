@@ -14,6 +14,7 @@
 #include "smtp/smtp_service.h"
 #include "smtp/smtp_transport.h"
 #include "system/task_control.h"
+#include "system/watchdog.h"
 #include "system/wifi_manager.h"
 #include "zte/zte_transport.h"
 
@@ -421,6 +422,7 @@ void ZteService::pollTask(void* param) {
 // #endregion METHOD_ZteService_pollTask
 
 void ZteService::runPollTask() {
+  watchdog::addCurrentTask("zte_poll");
   char* scratch = static_cast<char*>(malloc(kZteScratchSize));
   NetworkZteChannel channel;
   ZteModem modem(channel, scratch, scratch == nullptr ? 0 : kZteScratchSize);
@@ -432,11 +434,13 @@ void ZteService::runPollTask() {
         Serial.printf("event=zte_poll_wait reason=%s\n",
                       scratch == nullptr ? "out_of_memory" : "sta_down");
       }
+      watchdog::reset();
       vTaskDelay(pdMS_TO_TICKS(1000));
       continue;
     }
     waitingForStation = false;
     if (testRunning_ || sendRunning_) {
+      watchdog::reset();
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
     }
@@ -445,6 +449,7 @@ void ZteService::runPollTask() {
                      smtp_->config().password.length() > 0;
     if (!shouldRunPoll(smtpReady)) {
       // idle wait without polling
+      watchdog::reset();
       vTaskDelay(pdMS_TO_TICKS(2000));
       continue;
     }
@@ -454,11 +459,13 @@ void ZteService::runPollTask() {
     const unsigned long intervalMs = pollIntervalMs();
     for (unsigned long waited = 0; waited < intervalMs && !pollStopRequested_;
          waited += kPollSliceMs) {
+      watchdog::reset();
       vTaskDelay(pdMS_TO_TICKS(kPollSliceMs));
     }
   }
   free(scratch);
   Serial.println("event=zte_poll_stopped");
+  watchdog::removeCurrentTask();
   pollHandle_ = nullptr;
 }
 

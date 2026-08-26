@@ -29,6 +29,7 @@
 #include "smtp/smtp_service.h"
 #include "system/ntp_server.h"
 #include "system/time_sync.h"
+#include "system/watchdog.h"
 #include "system/wifi_manager.h"
 #include "zte/zte_service.h"
 
@@ -75,8 +76,13 @@ void recordBootStage(const String& event) {
 void setupFirmware() {
   Serial.begin(115200);
   delay(kBootDelayMs);
+  watchdog::begin();
   recordBootStage(String(F("event=boot_started reset_reason=")) +
                   String(static_cast<int>(esp_reset_reason())));
+  if (watchdog::isSafeMode()) {
+    recordBootStage(String(F("event=watchdog_safe_mode boot_count=")) +
+                    String(watchdog::bootLoopCount()) + F(" action=poll_tasks_paused"));
+  }
 
   wifiManager.initIdentity();
   recordBootStage(String(F("event=boot_identity mac=")) + wifiManager.stationMacAddress() +
@@ -156,10 +162,16 @@ void setupFirmware() {
   modemService.setSmtpService(&smtpService);
   modemService.setWifiManager(&wifiManager);
   modemService.setZteService(&zteService);
-  zteService.syncPollTask(zteService.shouldRunModule());
+  if (!watchdog::isSafeMode()) {
+    zteService.syncPollTask(zteService.shouldRunModule());
+  } else {
+    recordBootStage(F("event=poll_tasks_skipped reason=safe_mode"));
+  }
   recordBootStage(F("event=modem_init_begin variant=classic"));
-  modemService.syncTask();
-  gpsService.syncTask();
+  if (!watchdog::isSafeMode()) {
+    modemService.syncTask();
+    gpsService.syncTask();
+  }
   ntpServer.begin();
   recordBootStage(F("event=boot_http_routes_complete"));
   bootTraceCollecting = false;
@@ -169,6 +181,8 @@ void setupFirmware() {
 // #region FUNC_loopFirmware
 // PURPOSE: Services HTTP/DNS and maintains the STA-to-fallback-AP lifecycle.
 void loopFirmware() {
+  watchdog::feedLoop();
+  watchdog::loop();
   httpServer.handleClient();
   wifiManager.handleDns();
 

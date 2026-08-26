@@ -13,6 +13,7 @@
 #include <time.h>
 
 #include "system/time_sync.h"
+#include "system/watchdog.h"
 
 namespace {
 TimeSync* gTimeSyncForSntp = nullptr;
@@ -264,6 +265,7 @@ bool WifiManager::testStationCandidate(const RuntimeConfig& candidate,
       Serial.println("event=sta_candidate_test_complete connected=true");
       return true;
     }
+    watchdog::feedLoop();
     delay(kWiFiTestStepMs);
   }
 

@@ -16,6 +16,7 @@
 #include "smtp/smtp_transport.h"
 #include "system/task_control.h"
 #include "system/time_sync.h"
+#include "system/watchdog.h"
 #include "system/wifi_manager.h"
 #include "zte/zte_service.h"
 
@@ -266,9 +267,11 @@ void ModemService::runPollCycle(ModemClient& client) {
 // #region METHOD_ModemService_runPollTask
 // PURPOSE: Modem task: init when moduleEnabled, then poll status and SMS when pollEnabled.
 void ModemService::runPollTask() {
+  watchdog::addCurrentTask("modem_poll");
   char* scratch = static_cast<char*>(malloc(kModemScratchSize));
   if (scratch == nullptr) {
     Serial.println("event=modem_error stage=no_scratch");
+    watchdog::removeCurrentTask();
     taskHandle_ = nullptr;
     vTaskDelete(nullptr);
     return;
@@ -351,12 +354,14 @@ void ModemService::runPollTask() {
     const unsigned long intervalMs = pollIntervalMs();
     for (unsigned long waited = 0; waited < intervalMs && !taskStopRequested_;
          waited += kPollSliceMs) {
+      watchdog::reset();
       vTaskDelay(pdMS_TO_TICKS(kPollSliceMs));
     }
   }
   transport.end();
   free(scratch);
   Serial.println("event=modem_task_stopped");
+  watchdog::removeCurrentTask();
   taskHandle_ = nullptr;
   vTaskDelete(nullptr);
 }

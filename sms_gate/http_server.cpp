@@ -7,6 +7,7 @@
 #include <WiFi.h>
 #include "persistence/config_store_common.h"
 #include "system/sms_validate.h"
+#include "system/watchdog.h"
 #include "system/web_api.h"
 namespace {
 constexpr char kAdminUser[] = "admin";
@@ -645,6 +646,29 @@ void HttpServer::handleTimeStatusRequest() {
   sendJson(server_, kHttpOk, renderTimeStatusJson(web));
 }
 // #endregion METHOD_handleTimeStatusRequest
+
+// #region METHOD_handleWatchdogStatusRequest
+// PURPOSE: Serves GET /api/watchdog (ADR-0006).
+void HttpServer::handleWatchdogStatusRequest() {
+  if (config_.ssid.length() > 0 && !requireAuthentication()) return;
+  WebWatchdogStatus web;
+  web.safeMode = watchdog::isSafeMode();
+  web.bootCount = watchdog::bootLoopCount();
+  web.timeoutSec = watchdog::kWatchdogTimeoutSec;
+  web.lastResetReason = watchdog::lastResetReasonCode();
+  web.uptimeMs = millis();
+  sendJson(server_, kHttpOk, renderWatchdogStatusJson(web));
+}
+// #endregion METHOD_handleWatchdogStatusRequest
+
+// #region METHOD_handleWatchdogClearRequest
+// PURPOSE: Clears safe-mode counter via POST /api/watchdog/clear.
+void HttpServer::handleWatchdogClearRequest() {
+  if (!requireAuthentication()) return;
+  watchdog::clearSafeMode();
+  sendJson(server_, kHttpOk, renderMessageJson(F("Watchdog safe-mode cleared.")));
+}
+// #endregion METHOD_handleWatchdogClearRequest
 // #region METHOD_handleSmsSendStart
 // PURPOSE: Unified send entry point POST /api/sms/send.
 void HttpServer::handleSmsSendStart() {
@@ -715,6 +739,8 @@ void HttpServer::begin() {
   server_.on("/api/gps", HTTP_POST, [this]() { handleGpsSaveSubmission(); });
   server_.on("/api/gps/status", HTTP_GET, [this]() { handleGpsStatusRequest(); });
   server_.on("/api/time", HTTP_GET, [this]() { handleTimeStatusRequest(); });
+  server_.on("/api/watchdog", HTTP_GET, [this]() { handleWatchdogStatusRequest(); });
+  server_.on("/api/watchdog/clear", HTTP_POST, [this]() { handleWatchdogClearRequest(); });
   server_.onNotFound([this]() { handleNotFound(); });
   server_.begin();
   Serial.printf("event=http_server_started port=%u\n", kHttpPort);
