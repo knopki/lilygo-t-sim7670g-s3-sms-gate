@@ -38,6 +38,7 @@
 #include "gps/gps_service.h"
 #include "modem/modem_service.h"
 #include "smtp/smtp_service.h"
+#include "system/time_sync.h"
 #include "system/wifi_manager.h"
 #include "zte/zte_service.h"
 
@@ -47,7 +48,8 @@
 class HttpServer {
  public:
   HttpServer(WebServer& server, ConfigStore& store, RuntimeConfig& config, WifiManager& wifi,
-             SmtpService& smtp, ZteService& zte, ModemService& modem, GpsService& gps);
+             SmtpService& smtp, ZteService& zte, ModemService& modem, GpsService& gps,
+             TimeSync& timeSync);
   void begin();
   void handleClient() { server_.handleClient(); }
 
@@ -84,6 +86,7 @@ class HttpServer {
   void handleGpsConfigRequest();
   void handleGpsSaveSubmission();
   void handleGpsStatusRequest();
+  void handleTimeStatusRequest();
   void handleNotFound();
 
   WebServer& server_;
@@ -94,6 +97,7 @@ class HttpServer {
   ZteService& zte_;
   ModemService& modem_;
   GpsService& gps_;
+  TimeSync& timeSync_;
 };
 // #endregion CLASS_HttpServer
 #endif  // SYSTEM_HTTP_SERVER_H

@@ -15,6 +15,7 @@
 #include "smtp/smtp_service.h"
 #include "smtp/smtp_transport.h"
 #include "system/task_control.h"
+#include "system/time_sync.h"
 #include "system/wifi_manager.h"
 #include "zte/zte_service.h"
 
@@ -278,6 +279,14 @@ void ModemService::runPollTask() {
             static_cast<unsigned>(status.smsUsedMe), static_cast<unsigned>(status.smsTotalMe),
             static_cast<unsigned>(status.smsUsedSm), static_cast<unsigned>(status.smsTotalSm),
             status.cclk, static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+        if (stored_.nitzTimeSyncEnabled && timeSync_ != nullptr && status.cclk[0] != '\0') {
+          int64_t epochMs = 0;
+          if (cclkToEpochMs(status.cclk, epochMs)) {
+            timeSync_->feedNitzSample(epochMs, 1500);
+            Serial.printf("event=nitz_time_feed cclk=%s epoch_ms=%lld\n", status.cclk,
+                          (long long)epochMs);
+          }
+        }
       } else {
         ModemStatus absent;
         absent.present = false;

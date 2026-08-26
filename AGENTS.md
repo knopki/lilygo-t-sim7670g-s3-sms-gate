@@ -106,19 +106,22 @@ Serial.println("event=config_save_begin");
 ## Project
 
 The project targets the LilyGO T-SIM7670G-S3 / ESP32-S3. Its implemented MVP is
-local network provisioning: a device joins one WPA2/WPA3-Personal network when a
-verified profile exists, otherwise exposes a captive portal. Configuration is
-stored in the dedicated `appcfg` NVS partition so USB bootloader recovery can
-clear it without removing future SMS, GNSS, or email settings.
+local network provisioning plus SMS forwarding/sending via the onboard SIM7670G (ADR-0004, primary)
+and ZTE MF79RU (ADR-0003, additional) with GNSS polling and unified time sync
+(ADR-0005: `GNSS > SNTP > NITZ`, forward-only, quorum quarantine, NTP stratum 1).
+Configuration is stored in the dedicated `appcfg` NVS partition (v2 records
+with `ntpServer1/2+ntpEnabled`, `timeSyncEnabled`, `nitzTimeSyncEnabled` and
+v1→v2 migration) so USB bootloader recovery can clear it without removing
+future SMS, GNSS, or email settings.
 
 ### Core Flow
 
 1. Build the stable station MAC, AP SSID, and mDNS hostname from eFuse data.
-2. Load the checksummed configuration record from `appcfg`.
+2. Load the checksummed v2 configuration records from `appcfg` (with v1→v2 migration).
 3. With no valid record, start the initial open AP and captive portal.
 4. With a record, try STA for 30 seconds; on failure start the password-protected
    fallback AP and retry STA every 60 seconds.
-5. Serve configuration through HTTP Digest authentication after initial setup.
+5. Serve configuration through HTTP Digest authentication after initial setup; `TimeSync` arbitrates `GNSS/SNTP/NITZ` and `NtpServer` serves stratum.
 6. Save replacement credentials only after they connect successfully.
 7. Recover forgotten/broken configuration through the documented USB bootloader
    erase of `appcfg`; do not use `erase-flash`.
@@ -127,13 +130,14 @@ clear it without removing future SMS, GNSS, or email settings.
 
 ```text
 sms_gate/
-├── sms_gate.ino      # thin setup/loop shell, boot trace, Serial events
+├── sms_gate.ino      # thin setup/loop shell, boot trace, Serial events (wires TimeSync/NtpServer)
 ├── codec/            # codec headers (codec_base64/md5/ucs2.h), codec.h re-export at root
-├── persistence/      # headers: config_record.h, config_store*.h (appcfg NVS, validated)
+├── persistence/      # headers: config_record.h (v2: ntpServer1/2+ntpEnabled), config_store*.h (appcfg NVS, validated)
 ├── smtp/             # headers: smtp_record/client/service/transport.h
 ├── zte/              # headers: zte_record/client/service/transport/json/form_codec.h
-├── modem/            # headers: modem_record/client/service/transport.h
-├── system/           # headers: wifi_manager/http_server/web_api/email_builder/task_control/sms_validate/plain_socket_reader.h
+├── modem/            # headers: modem_record.h (v2: nitzTimeSyncEnabled)/client/service/transport.h
+├── gps/              # headers: gps_record.h (v2: timeSyncEnabled)/client/service.h
+├── system/           # headers: wifi_manager/http_server/web_api/time_sync/ntp_server/email_builder/task_control/sms_validate/plain_socket_reader.h
 ├── *.cpp             # impl at sketch root (Arduino flat compile) — logically in same feature groups
 ├── web_assets.h      # generated gzip assets from www/ (not committed)
 ├── partitions.csv    # appcfg NVS partition and FFat layout
@@ -143,14 +147,15 @@ sms_gate/
 www/                  # client-rendered UI sources (index.html, app.js, style.css)
 tools/gen_assets.py   # generates sms_gate/web_assets.h from www/
 tests/
-├── config_record_test.cpp    # Host test for record integrity and field limits
+├── config_record_test.cpp    # Host test for record integrity and v1→v2 migration (Config/Gps/Modem, NTP, timeSync flags)
 ├── smtp_client_test.cpp      # Host test for SMTP record and dialog sequencing
 ├── zte_client_test.cpp       # Host test for the ZTE goform dialog and record
-├── modem_client_test.cpp     # Host test for SIM7670G AT dialog and parsers
+├── modem_client_test.cpp     # Host test for SIM7670G AT dialog, parsers and ModemSourceRecord v2
 ├── zte_form_codec_test.cpp   # Host test for form-urlencoding (ZTE goform)
 ├── sms_validate_test.cpp     # Host test for shared SMS validation (recipient/335 units)
 ├── email_builder_test.cpp    # Host test for subject/body rendering (INCOMPLETE, alias)
 ├── web_api_test.cpp          # Host test for JSON escaping and envelope rendering
+├── time_sync_test.cpp        # Host test for TimeSync and epoch helpers (gpsFixToEpochMs/cclkToEpochMs)
 └── host_stub/                # Minimal Arduino String/WebServer stubs for host tests
 README.md             # Build, provisioning, and USB recovery procedure
 ```

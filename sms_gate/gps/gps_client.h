@@ -51,6 +51,7 @@ struct GpsStatus {
   char date[16] = "";     // ddmmyy or yyyy-mm-dd
   char utcTime[16] = "";  // hhmmss
   char isoTime[32] = "";  // YYYY-MM-DDThh:mm:ssZ when fix has time
+  int timeMs = 0;         // 0..999 fractional part of hhmmss.s
   uint32_t updatedMs = 0;
   char lastNmeaLat[24] = "";
   char lastNmeaLon[24] = "";
@@ -94,6 +95,7 @@ struct GpsFixFields {
   char lonDir = '\0';
   char date[16] = "";
   char utcTime[16] = "";
+  int timeMs = 0;  // 0..999 fractional part of hhmmss.s
   float alt = 0.0f;
   float speed = 0.0f;
   float course = 0.0f;
@@ -104,6 +106,8 @@ struct GpsFixFields {
 bool parseCgpsInfoLine(const char* line, GpsFixFields& out);
 bool parseCgnssInfoLine(const char* line, int& mode, int& satsUsed, int& satsVisible);
 bool gpsFixToIso(const GpsFixFields& fix, char* out, size_t outSize);
+// Converts fix date+time (with ms) to UTC epoch milliseconds; false on malformed.
+bool gpsFixToEpochMs(const GpsFixFields& fix, int64_t& epochMsOut);
 double nmeaToDecimal(const char* nmea, char dir);
 
 #endif  // GPS_GPS_CLIENT_H

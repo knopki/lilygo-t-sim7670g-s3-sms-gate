@@ -10,8 +10,13 @@
 #include <string.h>
 
 #include "modem/modem_client.h"
+#ifdef ARDUINO
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#else
+inline void vTaskDelay(unsigned long) {}
+#define pdMS_TO_TICKS(x) (x)
+#endif
 
 namespace {
 constexpr unsigned long kGpsDefaultTimeoutMs = 1500;
@@ -69,6 +74,38 @@ double nmeaToDecimal(const char* nmea, char dir) {
 // #region FUNC_gpsFixToIso
 // PURPOSE: Converts fix date (ddmmyy) + time (hhmmss.s) to ISO8601 UTC.
 // Returns false when fields are empty or malformed.
+bool gpsFixToEpochMs(const GpsFixFields& fix, int64_t& epochMsOut) {
+  if (fix.date[0] == '\0' || fix.utcTime[0] == '\0') return false;
+  if (strlen(fix.date) != 6) return false;
+  char dd[3] = {fix.date[0], fix.date[1], '\0'};
+  char mm[3] = {fix.date[2], fix.date[3], '\0'};
+  char yy[3] = {fix.date[4], fix.date[5], '\0'};
+  int day = atoi(dd);
+  int mon = atoi(mm);
+  int year = atoi(yy);
+  if (day < 1 || day > 31 || mon < 1 || mon > 12) return false;
+  year += (year < 70 ? 2000 : 1900);
+  if (strlen(fix.utcTime) < 6) return false;
+  char hh[3] = {fix.utcTime[0], fix.utcTime[1], '\0'};
+  char mi[3] = {fix.utcTime[2], fix.utcTime[3], '\0'};
+  char ss[3] = {fix.utcTime[4], fix.utcTime[5], '\0'};
+  int h = atoi(hh), m = atoi(mi), s = atoi(ss);
+  if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 60) return false;
+  if (fix.timeMs < 0 || fix.timeMs > 999) return false;
+  auto daysFromCivil = [](int y, int mo, int d) -> int64_t {
+    y -= mo <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const int yoe = y - era * 400;
+    const int doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097LL + doe - 719468LL;
+  };
+  int64_t days = daysFromCivil(year, mon, day);
+  int64_t epochSec = days * 86400LL + h * 3600LL + m * 60LL + s;
+  epochMsOut = epochSec * 1000LL + fix.timeMs;
+  return true;
+}
+
 bool gpsFixToIso(const GpsFixFields& fix, char* out, size_t outSize) {
   if (fix.date[0] == '\0' || fix.utcTime[0] == '\0') return false;
   if (strlen(fix.date) != 6) return false;
@@ -171,11 +208,26 @@ bool parseCgpsInfoLine(const char* line, GpsFixFields& out) {
   out.lat = nmeaToDecimal(latStr, out.latDir);
   out.lon = nmeaToDecimal(lonStr, out.lonDir);
   snprintf(out.date, sizeof(out.date), "%s", dateStr);
-  // time may contain decimal part -> strip after '.'
   {
     char* dot = strchr(timeStr, '.');
-    if (dot) *dot = '\0';
+    int ms = 0;
+    if (dot) {
+      *dot = '\0';
+      const char* frac = dot + 1;
+      // Take up to 3 digits, pad/truncate to ms.
+      char msBuf[4] = "000";
+      size_t fl = strlen(frac);
+      if (fl > 0) {
+        size_t copy = fl < 3 ? fl : 3;
+        memcpy(msBuf, frac, copy);
+        // If only 1-2 digits, e.g. ".5" -> 500, ".12" -> 120; already padded.
+      }
+      ms = atoi(msBuf);
+      if (ms < 0) ms = 0;
+      if (ms > 999) ms = 999;
+    }
     snprintf(out.utcTime, sizeof(out.utcTime), "%s", timeStr);
+    out.timeMs = ms;
   }
   if (altStr[0]) out.alt = static_cast<float>(atof(altStr));
   if (speedStr[0]) out.speed = static_cast<float>(atof(speedStr));
@@ -409,6 +461,7 @@ GpsResult GpsClient::poll(GpsStatus& out) {
         tmp.course = fix.course;
         snprintf(tmp.date, sizeof(tmp.date), "%s", fix.date);
         snprintf(tmp.utcTime, sizeof(tmp.utcTime), "%s", fix.utcTime);
+        tmp.timeMs = fix.timeMs;
         snprintf(tmp.lastNmeaLat, sizeof(tmp.lastNmeaLat), "%s", fix.rawLat);
         snprintf(tmp.lastNmeaLon, sizeof(tmp.lastNmeaLon), "%s", fix.rawLon);
         gpsFixToIso(fix, tmp.isoTime, sizeof(tmp.isoTime));

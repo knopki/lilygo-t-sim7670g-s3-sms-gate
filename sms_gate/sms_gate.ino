@@ -27,6 +27,8 @@
 #include "system/http_server.h"
 #include "modem/modem_service.h"
 #include "smtp/smtp_service.h"
+#include "system/ntp_server.h"
+#include "system/time_sync.h"
 #include "system/wifi_manager.h"
 #include "zte/zte_service.h"
 
@@ -44,8 +46,10 @@ ZteService zteService;
 WifiManager wifiManager;
 ModemService modemService;
 GpsService gpsService;
+TimeSync timeSync;
+NtpServer ntpServer(timeSync);
 HttpServer httpServer(server, configStore, config, wifiManager, smtpService, zteService,
-                      modemService, gpsService);
+                      modemService, gpsService, timeSync);
 unsigned long lastSerialHeartbeatAt = 0;
 String bootTrace;
 bool bootTraceCollecting = true;
@@ -132,6 +136,12 @@ void setupFirmware() {
   }
 
   recordBootStage(F("event=boot_http_routes_begin"));
+  timeSync.begin();
+  timeSync.setGpsPollMs(gpsService.pollIntervalMs());
+  timeSync.setModemPollMs(modemService.pollIntervalMs());
+  wifiManager.setTimeSync(&timeSync);
+  gpsService.setTimeSync(&timeSync);
+  modemService.setTimeSync(&timeSync);
   httpServer.begin();
   zteService.setSmtpService(&smtpService);
   zteService.setWifiManager(&wifiManager);
@@ -146,6 +156,7 @@ void setupFirmware() {
   recordBootStage(F("event=modem_init_begin variant=classic"));
   modemService.syncTask();
   gpsService.syncTask();
+  ntpServer.begin();
   recordBootStage(F("event=boot_http_routes_complete"));
   bootTraceCollecting = false;
 }
@@ -188,6 +199,8 @@ void loopFirmware() {
   }
 
   wifiManager.loop(config);
+  timeSync.loop();
+  ntpServer.loop();
 }
 // #endregion FUNC_loopFirmware
 

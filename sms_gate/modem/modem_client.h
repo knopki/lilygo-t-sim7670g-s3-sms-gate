@@ -143,6 +143,8 @@ bool parseCregLine(const char* line, int& stat);
 bool parseCopsLine(const char* line, char* op, size_t opSize, int& act);
 bool parseCpmsLine(const char* line, uint16_t& used, uint16_t& total);
 bool parseCclkLine(const char* line, char* out, size_t outSize);
+// Parses +CCLK raw value "yy/MM/dd,hh:mm:ss+zz" to UTC epoch ms (tz quarters → UTC).
+bool cclkToEpochMs(const char* cclk, int64_t& epochMsOut);
 bool parseImeiLine(const char* line, char* out, size_t outSize);
 bool parseFwLine(const char* line, char* out, size_t outSize);
 struct ModemCmglInfo {

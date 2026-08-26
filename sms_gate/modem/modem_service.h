@@ -23,6 +23,7 @@
 #include "persistence/config_store.h"
 #include "modem/modem_client.h"
 #include "system/task_control.h"
+#include "system/time_sync.h"
 #include "system/web_api.h"
 
 // #region CLASS_ModemService
@@ -50,6 +51,7 @@ class ModemService {
   void setSmtpService(class SmtpService* smtp) { smtp_ = smtp; }
   void setWifiManager(class WifiManager* wifi) { wifi_ = wifi; }
   void setZteService(class ZteService* zte) { zte_ = zte; }
+  void setTimeSync(TimeSync* timeSync) { timeSync_ = timeSync; }
 
  private:
   ModemSourceStore store_;
@@ -72,6 +74,7 @@ class ModemService {
   class SmtpService* smtp_ = nullptr;
   class WifiManager* wifi_ = nullptr;
   class ZteService* zte_ = nullptr;
+  TimeSync* timeSync_ = nullptr;
 
   static void pollTask(void* param);
   static void sendTask(void* param);

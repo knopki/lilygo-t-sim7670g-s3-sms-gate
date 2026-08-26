@@ -5,13 +5,13 @@
 #include "gps/gps_service.h"
 
 #include <Arduino.h>
-#include <time.h>
-#include <sys/time.h>
 
+#include "gps/gps_client.h"
 #include "modem/modem_transport.h"
 #include "persistence/config_store_common.h"
 #include "system/modem_lock.h"
 #include "system/task_control.h"
+#include "system/time_sync.h"
 
 namespace {
 using task_control::kPollSliceMs;
@@ -150,32 +150,18 @@ void GpsService::runPollTask() {
               status.fix ? "true" : "false", status.mode, status.satsUsed, status.satsVisible,
               status.lat, status.lon, status.alt, status.isoTime,
               static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
-          // Time sync: when we have a fix with valid ISO time, set system clock if drift >2s
-          if (status.fix && status.isoTime[0] != '\0') {
-            int Y = 0, M = 0, D = 0, h = 0, mi = 0, s = 0;
-            if (sscanf(status.isoTime, "%4d-%2d-%2dT%2d:%2d:%2dZ", &Y, &M, &D, &h, &mi, &s) == 6) {
-              // civil to epoch (UTC) — Howard Hinnant days_from_civil
-              auto daysFromCivil = [](int y, int m, int d) -> int64_t {
-                y -= m <= 2;
-                const int era = (y >= 0 ? y : y - 399) / 400;
-                const int yoe = y - era * 400;
-                const int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-                const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-                return era * 146097LL + doe - 719468LL;
-              };
-              int64_t days = daysFromCivil(Y, M, D);
-              int64_t epoch = days * 86400LL + h * 3600LL + mi * 60LL + s;
-              struct timeval tv{};
-              tv.tv_sec = (time_t)epoch;
-              tv.tv_usec = 0;
-              struct timeval now{};
-              gettimeofday(&now, nullptr);
-              long diff = (long)(tv.tv_sec - now.tv_sec);
-              if (diff < -2 || diff > 2) {
-                settimeofday(&tv, nullptr);
-                Serial.printf("event=gps_time_sync iso=%s epoch=%ld diff=%ld\n", status.isoTime,
-                              (long)epoch, diff);
-              }
+          // Time sync: feed GNSS sample to TimeSync (ms precision) when fix & timeSyncEnabled.
+          if (status.fix && stored_.timeSyncEnabled && timeSync_ != nullptr &&
+              status.isoTime[0] != '\0') {
+            GpsFixFields tmp{};
+            snprintf(tmp.date, sizeof(tmp.date), "%s", status.date);
+            snprintf(tmp.utcTime, sizeof(tmp.utcTime), "%s", status.utcTime);
+            tmp.timeMs = status.timeMs;
+            int64_t epochMs = 0;
+            if (gpsFixToEpochMs(tmp, epochMs)) {
+              timeSync_->feedGnssSample(epochMs, 120);
+              Serial.printf("event=gps_time_feed epoch_ms=%lld iso=%s ms=%d\n", (long long)epochMs,
+                            status.isoTime, status.timeMs);
             }
           }
         } else {

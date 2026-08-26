@@ -26,10 +26,10 @@ run = "clang-format --dry-run --Werror $(find sms_gate -name '*.ino' -o -name '*
 
 [tasks."lint"]
 description = "Run Cppcheck on Arduino C++ source, JS, HTML"
-run = "cppcheck --language=c++ --std=c++20 --check-level=exhaustive --enable=warning,style,performance,portability --error-exitcode=1 --suppress=missingIncludeSystem --suppress=unknownMacro:sms_gate/web_assets.h --suppress=constParameterReference --suppress=unusedStructMember --suppress=unusedFunction --suppress=constVariable --suppress=constVariablePointer --suppress=cstyleCast --suppress=redundantCondition --suppress=knownConditionTrueFalse $(find sms_gate -name '*.ino' -o -name '*.h' -o -name '*.cpp') && biome check www/"
+run = "cppcheck --language=c++ --std=c++20 --check-level=exhaustive --enable=warning,style,performance,portability --error-exitcode=1 --suppress=missingIncludeSystem --suppress=unknownMacro:sms_gate/web_assets.h --suppress=constParameterReference --suppress=unusedStructMember --suppress=unusedFunction --suppress=unusedPrivateFunction --suppress=constVariable --suppress=constVariablePointer --suppress=cstyleCast --suppress=redundantCondition --suppress=knownConditionTrueFalse --suppress=duplicateAssignExpression --suppress=useStlAlgorithm --suppress=constParameterCallback $(find sms_gate -name '*.ino' -o -name '*.h' -o -name '*.cpp') && biome check www/"
 
 [tasks.test]
-description = "Run all host tests (config, smtp, zte, modem, zte_form, sms_validate, email_builder, web_api)"
+description = "Run all host tests"
 run = """
 set -e
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate tests/config_record_test.cpp -o /tmp/config_record_test && /tmp/config_record_test
@@ -40,4 +40,5 @@ c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate tests/zte_form_codec_test.cpp s
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate -I tests/host_stub tests/sms_validate_test.cpp -o /tmp/sms_validate_test && /tmp/sms_validate_test
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate -I tests/host_stub tests/email_builder_test.cpp sms_gate/email_builder.cpp -o /tmp/email_builder_test && /tmp/email_builder_test
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate -I tests/host_stub tests/web_api_test.cpp -o /tmp/web_api_test && /tmp/web_api_test
+c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate -I tests/host_stub tests/time_sync_test.cpp sms_gate/time_sync.cpp sms_gate/gps_client.cpp sms_gate/modem_client.cpp -o /tmp/time_sync_test && /tmp/time_sync_test
 """

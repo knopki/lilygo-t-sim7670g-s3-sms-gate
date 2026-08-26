@@ -26,10 +26,41 @@ ModemSourceRecord buildModemSourceRecord(const RuntimeModemSourceConfig& config)
   record.enabled = config.enabled ? 1 : 0;
   record.pollIntervalSec = config.pollIntervalSec;
   config.label.toCharArray(record.label, sizeof(record.label));
+  record.nitzTimeSyncEnabled = config.nitzTimeSyncEnabled ? 1 : 0;
   record.checksum = calculateModemSourceChecksum(record);
   return record;
 }
 // #endregion FUNC_buildModemSourceRecord
+
+// #region FUNC_ModemSourceStore_migrateV1Record
+bool ModemSourceStore::migrateV1Record(size_t readLength) const {
+  if (readLength != sizeof(ModemSourceRecordV1)) return false;
+  Preferences preferences;
+  if (!preferences.begin(kModemNamespace, true, kAppCfgPartition)) return false;
+  ModemSourceRecordV1 legacy{};
+  const size_t legacyLength = preferences.getBytes(kAppCfgKey, &legacy, sizeof(legacy));
+  preferences.end();
+  if (legacyLength != sizeof(legacy) || !isModemSourceRecordV1Valid(legacy)) return false;
+
+  RuntimeModemSourceConfig migrated;
+  migrated.enabled = legacy.enabled == 1;
+  migrated.pollIntervalSec = legacy.pollIntervalSec;
+  migrated.label = legacy.label;
+  migrated.nitzTimeSyncEnabled = true;
+  const ModemSourceRecord record = buildModemSourceRecord(migrated);
+  if (!isModemSourceRecordValid(record)) return false;
+  if (!preferences.begin(kModemNamespace, false, kAppCfgPartition)) {
+    Serial.println("event=modem_source_load_migrated persisted=false");
+    return false;
+  }
+  const size_t writtenLength = preferences.putBytes(kAppCfgKey, &record, sizeof(record));
+  preferences.end();
+  const bool persisted = writtenLength == sizeof(record);
+  Serial.printf("event=modem_source_load_migrated from_version=1 persisted=%s\n",
+                persisted ? "true" : "false");
+  return persisted;
+}
+// #endregion FUNC_ModemSourceStore_migrateV1Record
 
 // #region FUNC_ModemSourceStore_load
 // PURPOSE: Restores the modem-source profile only as a whole validated
@@ -45,7 +76,13 @@ bool ModemSourceStore::load(RuntimeModemSourceConfig& config) const {
   ModemSourceRecord record{};
   const size_t readLength = preferences.getBytes(kAppCfgKey, &record, sizeof(record));
   preferences.end();
-  if (readLength != sizeof(record) || !isModemSourceRecordValid(record)) {
+  if (readLength != sizeof(record)) {
+    if (migrateV1Record(readLength)) return load(config);
+    Serial.printf("event=modem_source_load_empty_or_invalid bytes=%u\n",
+                  static_cast<unsigned>(readLength));
+    return false;
+  }
+  if (!isModemSourceRecordValid(record)) {
     Serial.printf("event=modem_source_load_empty_or_invalid bytes=%u\n",
                   static_cast<unsigned>(readLength));
     return false;
@@ -54,8 +91,10 @@ bool ModemSourceStore::load(RuntimeModemSourceConfig& config) const {
   config.enabled = record.enabled == 1;
   config.pollIntervalSec = record.pollIntervalSec;
   config.label = record.label;
-  Serial.printf("event=modem_source_load_complete enabled=%s poll_interval=%u\n",
-                config.enabled ? "true" : "false", static_cast<unsigned>(config.pollIntervalSec));
+  config.nitzTimeSyncEnabled = record.nitzTimeSyncEnabled == 1;
+  Serial.printf("event=modem_source_load_complete enabled=%s poll_interval=%u nitz_time_sync=%s\n",
+                config.enabled ? "true" : "false", static_cast<unsigned>(config.pollIntervalSec),
+                config.nitzTimeSyncEnabled ? "true" : "false");
   return true;
 }
 // #endregion FUNC_ModemSourceStore_load

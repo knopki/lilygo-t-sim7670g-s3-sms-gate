@@ -118,6 +118,18 @@ struct WebGpsConfig {
 };
 // #endregion STRUCT_WebGpsConfig
 
+// #region STRUCT_WebTimeStatus
+// PURPOSE: Snapshot for GET /api/time — TimeSync arbitration result.
+struct WebTimeStatus {
+  String source;  // unsynced/sntp/nitz/gnss
+  uint8_t stratum = 0;
+  uint32_t dispersionMs = 0;
+  int64_t epochMs = 0;
+  uint32_t lastSyncMs = 0;
+  bool quarantined = false;
+};
+// #endregion STRUCT_WebTimeStatus
+
 // #region STRUCT_WebGpsStatus
 // PURPOSE: Snapshot for GET /api/gps/status — fix, coords, sats and UTC.
 struct WebGpsStatus {
@@ -156,6 +168,7 @@ String renderSmtpConfigJson(const WebSmtpConfig& config);
 String renderZteConfigJson(const WebZteConfig& config);
 // #region FUNC_renderModemStatusJson
 // PURPOSE: Serializes WebModemStatus into the /api/modem/status envelope.
+String renderTimeStatusJson(const WebTimeStatus& status);
 String renderModemStatusJson(const WebModemStatus& status);
 // #endregion FUNC_renderModemStatusJson
 // #region FUNC_renderModemSourceJson

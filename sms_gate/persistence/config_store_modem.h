@@ -19,6 +19,7 @@ struct RuntimeModemSourceConfig {
   bool enabled = false;
   uint16_t pollIntervalSec = kDefaultModemPollSec;
   String label;  // Phone number or alias shown in forwarded emails.
+  bool nitzTimeSyncEnabled = true;
 };
 
 ModemSourceRecord buildModemSourceRecord(const RuntimeModemSourceConfig& config);
@@ -27,5 +28,8 @@ class ModemSourceStore {
  public:
   bool load(RuntimeModemSourceConfig& config) const;
   bool save(const RuntimeModemSourceConfig& config) const;
+
+ private:
+  bool migrateV1Record(size_t readLength) const;
 };
 #endif  // PERSISTENCE_CONFIG_STORE_MODEM_H

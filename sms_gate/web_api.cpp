@@ -59,6 +59,7 @@ constexpr size_t kModemStatusReserve = 420;
 constexpr size_t kGpsConfigReserve = 128;
 constexpr size_t kGpsStatusReserve = 320;
 constexpr size_t kAsyncOpReserveExtra = 64;
+constexpr size_t kTimeReserve = 160;
 constexpr size_t kMessageReserveExtra = 32;
 }  // namespace
 
@@ -264,6 +265,27 @@ String renderGpsConfigJson(const WebGpsConfig& config) {
   return json;
 }
 // #endregion FUNC_renderGpsConfigJson
+
+// #region FUNC_renderTimeStatusJson
+String renderTimeStatusJson(const WebTimeStatus& status) {
+  String json;
+  json.reserve(kTimeReserve);
+  json += F("{\"source\":");
+  appendJsonString(json, status.source);
+  json += F(",\"stratum\":");
+  json += String(status.stratum);
+  json += F(",\"dispersion_ms\":");
+  json += String(status.dispersionMs);
+  json += F(",\"epoch_ms\":");
+  json += String((long long)status.epochMs);
+  json += F(",\"last_sync_ms\":");
+  json += String(status.lastSyncMs);
+  json += F(",\"quarantined\":");
+  json += status.quarantined ? F("true") : F("false");
+  json += '}';
+  return json;
+}
+// #endregion FUNC_renderTimeStatusJson
 
 // #region FUNC_renderGpsStatusJson
 // PURPOSE: Serializes WebGpsStatus into /api/gps/status envelope.

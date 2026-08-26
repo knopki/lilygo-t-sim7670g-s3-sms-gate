@@ -163,6 +163,7 @@ ModemSourceRecord makeModemRecord() {
   record.enabled = 1;
   record.pollIntervalSec = kDefaultModemPollSec;
   strcpy(record.label, "+79990000001");
+  record.nitzTimeSyncEnabled = 1;
   record.checksum = calculateModemSourceChecksum(record);
   return record;
 }
@@ -254,6 +255,26 @@ void testModemRecordValidation() {
   assert(!isValidModemPollInterval(kMinModemPollSec - 1));
   assert(!isValidModemPollInterval(kMaxModemPollSec + 1));
   assert(!isValidModemPollInterval(0));
+
+  record = makeModemRecord();
+  record.nitzTimeSyncEnabled = 0;
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(isModemSourceRecordValid(record));
+  record.nitzTimeSyncEnabled = 2;
+  record.checksum = calculateModemSourceChecksum(record);
+  assert(!isModemSourceRecordValid(record));
+
+  // V1 happy + checksum
+  ModemSourceRecordV1 v1{};
+  v1.magic = kModemSourceMagic;
+  v1.version = 1;
+  v1.enabled = 1;
+  v1.pollIntervalSec = kDefaultModemPollSec;
+  strcpy(v1.label, "+79990000001");
+  v1.checksum = calculateModemSourceV1Checksum(v1);
+  assert(isModemSourceRecordV1Valid(v1));
+  v1.label[0] = 'X';
+  assert(v1.checksum != calculateModemSourceV1Checksum(v1));
 
   puts("testModemRecordValidation ok");
 }

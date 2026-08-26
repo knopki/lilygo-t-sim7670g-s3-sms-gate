@@ -19,6 +19,7 @@
 struct RuntimeGpsConfig {
   bool enabled = false;
   uint16_t pollIntervalSec = kDefaultGpsPollSec;
+  bool timeSyncEnabled = true;
 };
 
 GpsRecord buildGpsRecord(const RuntimeGpsConfig& config);
@@ -27,6 +28,9 @@ class GpsConfigStore {
  public:
   bool load(RuntimeGpsConfig& config) const;
   bool save(const RuntimeGpsConfig& config) const;
+
+ private:
+  bool migrateV1Record(size_t readLength) const;
 };
 
 #endif  // PERSISTENCE_CONFIG_STORE_GPS_H

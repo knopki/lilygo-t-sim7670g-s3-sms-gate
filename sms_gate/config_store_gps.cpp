@@ -22,10 +22,40 @@ GpsRecord buildGpsRecord(const RuntimeGpsConfig& config) {
   if (!isValidGpsPollInterval(record.pollIntervalSec)) {
     record.pollIntervalSec = kDefaultGpsPollSec;
   }
+  record.timeSyncEnabled = config.timeSyncEnabled ? 1 : 0;
   record.checksum = calculateGpsChecksum(record);
   return record;
 }
 // #endregion FUNC_buildGpsRecord
+
+// #region FUNC_GpsConfigStore_migrateV1Record
+bool GpsConfigStore::migrateV1Record(size_t readLength) const {
+  if (readLength != sizeof(GpsRecordV1)) return false;
+  Preferences preferences;
+  if (!preferences.begin(kGpsNamespace, true, kAppCfgPartition)) return false;
+  GpsRecordV1 legacy{};
+  const size_t legacyLength = preferences.getBytes(kAppCfgKey, &legacy, sizeof(legacy));
+  preferences.end();
+  if (legacyLength != sizeof(legacy) || !isGpsRecordV1Valid(legacy)) return false;
+
+  RuntimeGpsConfig migrated;
+  migrated.enabled = legacy.enabled == 1;
+  migrated.pollIntervalSec = legacy.pollIntervalSec;
+  migrated.timeSyncEnabled = true;
+  const GpsRecord record = buildGpsRecord(migrated);
+  if (!isGpsRecordValid(record)) return false;
+  if (!preferences.begin(kGpsNamespace, false, kAppCfgPartition)) {
+    Serial.println("event=gps_load_migrated persisted=false");
+    return false;
+  }
+  const size_t writtenLength = preferences.putBytes(kAppCfgKey, &record, sizeof(record));
+  preferences.end();
+  const bool persisted = writtenLength == sizeof(record);
+  Serial.printf("event=gps_load_migrated from_version=1 persisted=%s\n",
+                persisted ? "true" : "false");
+  return persisted;
+}
+// #endregion FUNC_GpsConfigStore_migrateV1Record
 
 // #region FUNC_GpsConfigStore_load
 // PURPOSE: Restores GNSS profile only as whole validated record.
@@ -39,14 +69,21 @@ bool GpsConfigStore::load(RuntimeGpsConfig& config) const {
   GpsRecord record{};
   const size_t readLength = preferences.getBytes(kAppCfgKey, &record, sizeof(record));
   preferences.end();
-  if (readLength != sizeof(record) || !isGpsRecordValid(record)) {
+  if (readLength != sizeof(record)) {
+    if (migrateV1Record(readLength)) return load(config);
+    Serial.printf("event=gps_load_empty_or_invalid bytes=%u\n", static_cast<unsigned>(readLength));
+    return false;
+  }
+  if (!isGpsRecordValid(record)) {
     Serial.printf("event=gps_load_empty_or_invalid bytes=%u\n", static_cast<unsigned>(readLength));
     return false;
   }
   config.enabled = record.enabled == 1;
   config.pollIntervalSec = record.pollIntervalSec;
-  Serial.printf("event=gps_load_complete enabled=%s poll_interval=%u\n",
-                config.enabled ? "true" : "false", static_cast<unsigned>(config.pollIntervalSec));
+  config.timeSyncEnabled = record.timeSyncEnabled == 1;
+  Serial.printf("event=gps_load_complete enabled=%s poll_interval=%u time_sync=%s\n",
+                config.enabled ? "true" : "false", static_cast<unsigned>(config.pollIntervalSec),
+                config.timeSyncEnabled ? "true" : "false");
   return true;
 }
 // #endregion FUNC_GpsConfigStore_load

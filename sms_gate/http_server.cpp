@@ -25,7 +25,7 @@ constexpr int kHttpUnavailable = 503;
 // PURPOSE: Binds shared services by reference.
 HttpServer::HttpServer(WebServer& server, ConfigStore& store, RuntimeConfig& config,
                        WifiManager& wifi, SmtpService& smtp, ZteService& zte, ModemService& modem,
-                       GpsService& gps)
+                       GpsService& gps, TimeSync& timeSync)
     : server_(server),
       configStore_(store),
       config_(config),
@@ -33,7 +33,8 @@ HttpServer::HttpServer(WebServer& server, ConfigStore& store, RuntimeConfig& con
       smtp_(smtp),
       zte_(zte),
       modem_(modem),
-      gps_(gps) {}
+      gps_(gps),
+      timeSync_(timeSync) {}
 // #endregion METHOD_constructor
 // #region METHOD_requireAuthentication
 // PURPOSE: Guards protected routes with Digest authentication.
@@ -236,7 +237,7 @@ void HttpServer::handleSetupSubmission() {
     return;
   }
   config_ = candidate;
-  wifi_.onStationConnected(true);
+  wifi_.onStationConnected(config_, true);
   String message = F("Configuration saved. The access point will close shortly. Open http://");
   message += wifi_.mdnsHostname();
   message += F(".local on the configured network.");
@@ -270,7 +271,7 @@ void HttpServer::handleNetworkSubmission() {
     return;
   }
   config_ = candidate;
-  wifi_.onStationConnected(true);
+  wifi_.onStationConnected(config_, true);
   String message = F("Configuration saved. The interface is now available at http://");
   message += wifi_.mdnsHostname();
   message += F(".local.");
@@ -550,6 +551,7 @@ void HttpServer::handleModemSourceSave() {
   Serial.printf("event=modem_source_saved enabled=%s poll_interval=%u\n",
                 candidate.enabled ? "true" : "false",
                 static_cast<unsigned>(candidate.pollIntervalSec));
+  timeSync_.setModemPollMs(modem_.pollIntervalMs());
   sendJson(server_, kHttpOk, renderMessageJson(F("Modem source settings saved.")));
 }
 // #endregion METHOD_handleModemSourceSave
@@ -618,6 +620,7 @@ void HttpServer::handleGpsSaveSubmission() {
   Serial.printf("event=gps_saved enabled=%s poll_interval=%u\n",
                 candidate.enabled ? "true" : "false",
                 static_cast<unsigned>(candidate.pollIntervalSec));
+  timeSync_.setGpsPollMs(gps_.pollIntervalMs());
   sendJson(server_, kHttpOk, renderMessageJson(F("GPS settings saved.")));
 }
 // #endregion METHOD_handleGpsSaveSubmission
@@ -628,6 +631,21 @@ void HttpServer::handleGpsStatusRequest() {
   sendJson(server_, kHttpOk, renderGpsStatusJson(gps_.webStatus()));
 }
 // #endregion METHOD_handleGpsStatusRequest
+// #region METHOD_handleTimeStatusRequest
+// PURPOSE: Serves GET /api/time (ADR-0005).
+void HttpServer::handleTimeStatusRequest() {
+  if (config_.ssid.length() > 0 && !requireAuthentication()) return;
+  const TimeState st = timeSync_.state();
+  WebTimeStatus web;
+  web.source = String(timeSync_.sourceName(st.source));
+  web.stratum = st.stratum;
+  web.dispersionMs = st.dispersionMs;
+  web.epochMs = st.epochMs;
+  web.lastSyncMs = st.lastSyncMs;
+  web.quarantined = st.quarantined;
+  sendJson(server_, kHttpOk, renderTimeStatusJson(web));
+}
+// #endregion METHOD_handleTimeStatusRequest
 // #region METHOD_handleSmsSendStart
 // PURPOSE: Unified send entry point POST /api/sms/send.
 void HttpServer::handleSmsSendStart() {
@@ -697,6 +715,7 @@ void HttpServer::begin() {
   server_.on("/api/gps", HTTP_GET, [this]() { handleGpsConfigRequest(); });
   server_.on("/api/gps", HTTP_POST, [this]() { handleGpsSaveSubmission(); });
   server_.on("/api/gps/status", HTTP_GET, [this]() { handleGpsStatusRequest(); });
+  server_.on("/api/time", HTTP_GET, [this]() { handleTimeStatusRequest(); });
   server_.onNotFound([this]() { handleNotFound(); });
   server_.begin();
   Serial.printf("event=http_server_started port=%u\n", kHttpPort);

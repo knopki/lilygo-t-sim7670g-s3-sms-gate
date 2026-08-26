@@ -23,6 +23,7 @@
 #include "gps/gps_client.h"
 #include "persistence/config_store_gps.h"
 #include "system/task_control.h"
+#include "system/time_sync.h"
 #include "system/web_api.h"
 
 // #region CLASS_GpsService
@@ -41,6 +42,7 @@ class GpsService {
   void publishStatus(const GpsStatus& status);
   GpsStatus readStatus() const;
   bool isPollActive() const { return pollActive_; }
+  void setTimeSync(TimeSync* timeSync) { timeSync_ = timeSync; }
   void syncTask();
   bool stopTask();
 
@@ -51,6 +53,7 @@ class GpsService {
 
   task_control::StatusCache<GpsStatus> statusCache_;
 
+  TimeSync* timeSync_ = nullptr;
   TaskHandle_t taskHandle_ = nullptr;
   volatile bool taskStopRequested_ = false;
   volatile bool pollActive_ = false;

@@ -25,6 +25,7 @@
 #include <DNSServer.h>
 
 #include "persistence/config_store.h"
+#include "system/time_sync.h"
 #include "system/web_api.h"
 
 constexpr unsigned long kConnectTimeoutMs = 30UL * 1000UL;
@@ -44,9 +45,10 @@ class WifiManager {
   void startAccessPoint(const RuntimeConfig& config);
   void stopAccessPoint();
   void beginStationAttempt(const RuntimeConfig& config);
-  void startWallClock();
-  void onStationConnected(bool deferAccessPointShutdown);
+  void startWallClock(const RuntimeConfig& config);
+  void onStationConnected(const RuntimeConfig& config, bool deferAccessPointShutdown);
   void onStationFailed(const RuntimeConfig& config);
+  void setTimeSync(TimeSync* timeSync) { timeSync_ = timeSync; }
   WebStatus buildStatus(const RuntimeConfig& config) const;
   String buildScanNetworksJson();
   bool testStationCandidate(const RuntimeConfig& candidate, const RuntimeConfig& previous);
@@ -78,6 +80,7 @@ class WifiManager {
   String buildDeviceSuffix() const;
   // #endregion METHOD_buildDeviceSuffix
 
+  TimeSync* timeSync_ = nullptr;
   String stationMacAddress_;
   String accessPointSsid_;
   String mdnsHostname_;

@@ -140,6 +140,42 @@ bool parseCclkLine(const char* line, char* out, size_t outSize) {
   out[len] = '\0';
   return true;
 }
+bool cclkToEpochMs(const char* cclk, int64_t& epochMsOut) {
+  if (cclk == nullptr) return false;
+  // Expected "yy/MM/dd,hh:mm:ss+zz" or "-zz", zz quarters 15 min.
+  int yy = 0, mm = 0, dd = 0, hh = 0, mi = 0, ss = 0;
+  int tzQuarters = 0;
+  char tzSign = '+';
+  int scanned =
+      sscanf(cclk, "%d/%d/%d,%d:%d:%d%c%d", &yy, &mm, &dd, &hh, &mi, &ss, &tzSign, &tzQuarters);
+  if (scanned < 6) return false;
+  if (scanned == 6) {
+    tzQuarters = 0;
+  } else {
+    if (tzSign == '-')
+      tzQuarters = -tzQuarters;
+    else if (tzSign != '+')
+      return false;
+  }
+  if (yy < 0 || yy > 99 || mm < 1 || mm > 12 || dd < 1 || dd > 31 || hh < 0 || hh > 23 || mi < 0 ||
+      mi > 59 || ss < 0 || ss > 59 || tzQuarters < -48 || tzQuarters > 48)
+    return false;
+  int fullYear = yy + (yy < 70 ? 2000 : 1900);
+  auto daysFromCivil = [](int y, int m, int d) -> int64_t {
+    y -= m <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const int yoe = y - era * 400;
+    const int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097LL + doe - 719468LL;
+  };
+  int64_t days = daysFromCivil(fullYear, mm, dd);
+  int64_t localSec = days * 86400LL + hh * 3600LL + mi * 60LL + ss;
+  int64_t tzOffsetSec = (int64_t)tzQuarters * 15 * 60;
+  int64_t utcSec = localSec - tzOffsetSec;
+  epochMsOut = utcSec * 1000LL;
+  return true;
+}
 // #endregion FUNC_parseCclkLine
 
 // #region FUNC_parseImeiLine
