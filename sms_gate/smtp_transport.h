@@ -25,6 +25,7 @@
 #include <NetworkClientSecure.h>
 #include <lwip/sockets.h>
 
+#include "plain_socket_reader.h"
 #include "smtp_client.h"
 
 extern "C" {
@@ -131,13 +132,7 @@ class SecureSmtpChannel : public SmtpChannel {
   void stop() override { client_.stop(); }
 
  private:
-  // Plain-phase line reader: raw recv() on the socket's file descriptor.
-  // The core sets the socket O_NONBLOCK for its connect and never clears
-  // the flag (ssl_client.cpp), and its zero-timeout lwIP select returns
-  // spurious -1/EINTR under concurrent selects (core 3.x, confirmed on
-  // hardware) — so plain reads must not use select OR treat EAGAIN as an
-  // error: EAGAIN/EWOULDBLOCK/EINTR mean "no data yet" and the loop waits
-  // until the line deadline.
+  // Plain-phase line reader delegates to plain_socket_reader.h (ADR-0002).
   int readPlainLine(char* buffer, size_t size, unsigned long deadline) {
     if (!recvTimeoutSet_) {
       struct timeval tv = {};
@@ -147,48 +142,7 @@ class SecureSmtpChannel : public SmtpChannel {
         recvTimeoutSet_ = true;
       }
     }
-    size_t used = 0;
-    for (;;) {
-      uint8_t byte = 0;
-      const int got = ::recv(client_.fd(), &byte, 1, 0);
-      if (got == 0) {
-        readDetail_ = 'F';  // Peer closed the connection.
-        lastErrno_ = 0;
-        return -1;
-      }
-      if (got < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-          if (millis() > deadline) {
-            readDetail_ = 'T';
-            lastErrno_ = errno;
-            return -1;
-          }
-          delay(1);
-          continue;
-        }
-        readDetail_ = 'R';
-        lastErrno_ = errno;
-        return -1;
-      }
-      if (byte == '\n') {
-        if (used > 0 && buffer[used - 1] == '\r') {
-          --used;
-        }
-        buffer[used] = '\0';
-        return static_cast<int>(used);
-      }
-      if (used + 1 >= size) {
-        readDetail_ = 'L';
-        lastErrno_ = 0;
-        return -1;  // Line does not fit; treated as a protocol failure.
-      }
-      buffer[used++] = static_cast<char>(byte);
-      if (millis() > deadline) {
-        readDetail_ = 'T';
-        lastErrno_ = 0;
-        return -1;
-      }
-    }
+    return plainReadLineDetailed(client_.fd(), buffer, size, deadline, readDetail_, lastErrno_);
   }
 
   NetworkClientSecure client_;

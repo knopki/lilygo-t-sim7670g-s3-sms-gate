@@ -15,6 +15,13 @@
 #include "codec.h"
 #include "sms_validate.h"
 
+namespace {
+constexpr unsigned long kModemDefaultTimeoutMs = 1000;
+constexpr unsigned long kModemSendTimeoutMs = 60000;
+constexpr int kModemInitRetries = 10;
+constexpr int kModemMaxLines = 30;
+}  // namespace
+
 // #region FUNC_parseCpinLine
 // PURPOSE: Parses +CPIN: <code> line into out (READY, SIM PIN, NOT INSERTED…).
 bool parseCpinLine(const char* line, char* out, size_t outSize) {
@@ -564,8 +571,8 @@ ModemResult ModemClient::readResponse() {
   scratch_[0] = '\0';
   replyLen_ = 0;
   char line[160];
-  for (int i = 0; i < 30; ++i) {
-    int len = channel_.readLine(line, sizeof(line), 1000);
+  for (int i = 0; i < kModemMaxLines; ++i) {
+    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
     if (len < 0) {
       fail("timeout");
       return ModemResult::kTimeout;
@@ -596,8 +603,8 @@ ModemResult ModemClient::readResponse() {
 // "SMS DONE" URC (research §1/§8). Each step is best-effort but reported
 // via failedStage on hard AT absence.
 ModemResult ModemClient::init() {
-  for (int attempt = 0; attempt < 10; ++attempt) {
-    if (sendCommand("AT", 1000) != ModemResult::kSuccess) continue;
+  for (int attempt = 0; attempt < kModemInitRetries; ++attempt) {
+    if (sendCommand("AT", kModemDefaultTimeoutMs) != ModemResult::kSuccess) continue;
     ModemResult r = readResponse();
     if (r == ModemResult::kSuccess) break;
     if (attempt == 9) {
@@ -605,18 +612,18 @@ ModemResult ModemClient::init() {
       return ModemResult::kNotPresent;
     }
   }
-  if (sendCommand("ATE0", 1000) == ModemResult::kSuccess) readResponse();
-  if (sendCommand("ATV1", 1000) == ModemResult::kSuccess) readResponse();
-  if (sendCommand("AT+CMEE=2", 1000) == ModemResult::kSuccess) readResponse();
-  if (sendCommand("AT+CMGF=1", 1000) == ModemResult::kSuccess) {
+  if (sendCommand("ATE0", kModemDefaultTimeoutMs) == ModemResult::kSuccess) readResponse();
+  if (sendCommand("ATV1", kModemDefaultTimeoutMs) == ModemResult::kSuccess) readResponse();
+  if (sendCommand("AT+CMEE=2", kModemDefaultTimeoutMs) == ModemResult::kSuccess) readResponse();
+  if (sendCommand("AT+CMGF=1", kModemDefaultTimeoutMs) == ModemResult::kSuccess) {
     if (readResponse() != ModemResult::kSuccess) fail("cmgf");
   } else
     fail("cmgf");
-  if (sendCommand("AT+CSCS=\"UCS2\"", 1000) == ModemResult::kSuccess) {
+  if (sendCommand("AT+CSCS=\"UCS2\"", kModemDefaultTimeoutMs) == ModemResult::kSuccess) {
     if (readResponse() != ModemResult::kSuccess) fail("cscs");
   } else
     fail("cscs");
-  if (sendCommand("AT+CSDH=1", 1000) == ModemResult::kSuccess) {
+  if (sendCommand("AT+CSDH=1", kModemDefaultTimeoutMs) == ModemResult::kSuccess) {
     if (readResponse() != ModemResult::kSuccess) fail("csdh");
   } else
     fail("csdh");
@@ -624,7 +631,7 @@ ModemResult ModemClient::init() {
     if (readResponse() != ModemResult::kSuccess) fail("cpms");
   } else
     fail("cpms");
-  if (sendCommand("AT+CNMI=2,1,0,0,0", 1000) == ModemResult::kSuccess) {
+  if (sendCommand("AT+CNMI=2,1,0,0,0", kModemDefaultTimeoutMs) == ModemResult::kSuccess) {
     if (readResponse() != ModemResult::kSuccess) fail("cnmi");
   } else
     fail("cnmi");
@@ -632,8 +639,8 @@ ModemResult ModemClient::init() {
   // modem emits it asynchronously once SIM/phonebook are ready. Poll
   // without failing init if it does not appear within the status window.
   char line[64];
-  for (int i = 0; i < 10; ++i) {
-    int len = channel_.readLine(line, sizeof(line), 1000);
+  for (int i = 0; i < kModemInitRetries; ++i) {
+    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
     if (len < 0) continue;
     if (len == 0) continue;
     if (strstr(line, "SMS DONE") != nullptr) break;
@@ -650,7 +657,7 @@ ModemResult ModemClient::init() {
 ModemResult ModemClient::pollStatus(ModemStatus& out) {
   ModemStatus tmp;
   tmp.present = false;
-  if (sendCommand("AT", 1000) != ModemResult::kSuccess) {
+  if (sendCommand("AT", kModemDefaultTimeoutMs) != ModemResult::kSuccess) {
     out = tmp;
     fail("at");
     return ModemResult::kNotPresent;
@@ -791,7 +798,7 @@ ModemResult ModemClient::findOldestUnread(ModemSms& out, bool& found) {
   uint16_t bestIdx = 0xFFFF;
   bool haveBest = false;
   for (int i = 0; i < 60; ++i) {
-    int len = channel_.readLine(line, sizeof(line), 1000);
+    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
     if (len < 0) {
       fail("timeout");
       return ModemResult::kTimeout;
@@ -878,8 +885,8 @@ ModemResult ModemClient::readSms(const char* id, ModemSms& out) {
   bool haveHeader = false;
   char body[1024] = "";
   bool haveBody = false;
-  for (int i = 0; i < 10; ++i) {
-    int len = channel_.readLine(line, sizeof(line), 1000);
+  for (int i = 0; i < kModemInitRetries; ++i) {
+    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
     if (len < 0) {
       fail("timeout");
       return ModemResult::kTimeout;
@@ -931,7 +938,7 @@ ModemResult ModemClient::deleteSms(const char* id) {
   if (sendCommand(cmd, 3000) != ModemResult::kSuccess) return ModemResult::kTimeout;
   char line[64];
   for (int i = 0; i < 5; ++i) {
-    int len = channel_.readLine(line, sizeof(line), 1000);
+    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
     if (len < 0) {
       fail("timeout");
       return ModemResult::kTimeout;
@@ -1014,7 +1021,7 @@ ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
   char line[192] = "";
   bool promptSeen = false;
   for (int attempt = 0; attempt < 6; ++attempt) {
-    int len = channel_.readLine(line, sizeof(line), 1000);
+    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
     if (len < 0) {
       // Timeout waiting for prompt
       fail("cmgs_prompt");
@@ -1050,7 +1057,7 @@ ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
   // Step 5: wait for +CMGS: and OK (30-60s)
   bool haveCmgs = false;
   for (int attempt = 0; attempt < 60; ++attempt) {
-    int len = channel_.readLine(line, sizeof(line), 1000);
+    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
     if (len < 0) {
       fail("timeout");
       return ModemResult::kTimeout;

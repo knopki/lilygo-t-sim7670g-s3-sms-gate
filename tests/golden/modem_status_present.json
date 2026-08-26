@@ -1,0 +1,1 @@
+{"present":true,"cpin":"READY","signal":{"rssi_dbm":-71,"ber":99,"rsrp_dbm":-95,"rsrq_db":-10},"registration":{"cereg":1,"creg":1,"attached":true},"operator":{"name":"MTS RUS","act":7},"clock":"25/08/26,12:00:00+12","sms_storage":{"mem":"ME","used":1,"total":50,"mem2":"SM","used2":2,"total2":20},"identity":{"imei":"860123456789012","fw":"SIM7670G_V1.0"}}

@@ -113,14 +113,7 @@ class ModemClient {
   ModemResult findOldestUnread(ModemSms& out, bool& found);
   ModemResult readSms(const char* id, ModemSms& out);
   ModemResult deleteSms(const char* id);
-  // #region METHOD_ModemClient_sendSms
-  // PURPOSE: Sends one SMS via AT+CMGS in UCS2 (CMGF=1, CSCS="UCS2");
-  // success only on +CMGS:<mr> followed by OK; CMS ERROR maps to
-  // kSendRejected, missing +CMGS to kProtocolError.
-  // REQUIRES: isValidSmsRecipient(number) && 1<=smsUtf16Units(textUtf8)<=335 && valid UTF-8
-  // ENSURES: channel idle, failedStage stable, lastReply in scratch.
   ModemResult sendSms(const char* number, const char* textUtf8);
-  // #endregion METHOD_ModemClient_sendSms
 
   const char* failedStage() const { return failedStage_; }
   const char* lastReply() const { return scratch_ ? scratch_ : ""; }
@@ -150,8 +143,6 @@ bool parseCpmsLine(const char* line, uint16_t& used, uint16_t& total);
 bool parseCclkLine(const char* line, char* out, size_t outSize);
 bool parseImeiLine(const char* line, char* out, size_t outSize);
 bool parseFwLine(const char* line, char* out, size_t outSize);
-// #region STRUCT_ModemCmglInfo
-// PURPOSE: Decoded fields of one +CMGL header (CSDH=0 or 1) for host tests.
 struct ModemCmglInfo {
   uint16_t idx = 0;
   char stat[16] = "";
@@ -161,9 +152,6 @@ struct ModemCmglInfo {
   int tooa = -1;
   int msgLen = -1;
 };
-// #endregion STRUCT_ModemCmglInfo
-// #region STRUCT_ModemCmgrInfo
-// PURPOSE: Decoded fields of one +CMGR header (CSDH=0 or 1).
 struct ModemCmgrInfo {
   char stat[16] = "";
   char oa[64] = "";
@@ -177,7 +165,6 @@ struct ModemCmgrInfo {
   int tosca = -1;
   int msgLen = -1;
 };
-// #endregion STRUCT_ModemCmgrInfo
 bool parseCmglHeader(const char* line, ModemCmglInfo& out);
 bool parseCmgrHeader(const char* line, ModemCmgrInfo& out);
 bool parseCmglEntry(const char* headerLine, const char* bodyLine, ModemSms& out);

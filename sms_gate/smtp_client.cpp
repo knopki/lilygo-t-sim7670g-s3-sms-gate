@@ -11,7 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "codec.h"
+#include "codec/codec_base64.h"
 
 namespace {
 
@@ -20,8 +20,6 @@ constexpr size_t kExtensionsBufferLength = 512;
 constexpr size_t kBase64LineLength = 76;
 constexpr size_t kBase64ChunkBytes = (kBase64LineLength / 4) * 3;  // 57 bytes -> 76 chars
 
-// #region FUNC_writeLine
-// PURPOSE: Sends one SMTP command terminated with CRLF.
 bool writeLine(SmtpChannel& channel, const char* line) {
   const size_t length = strlen(line);
   if (!channel.write(line, length)) {
@@ -29,7 +27,6 @@ bool writeLine(SmtpChannel& channel, const char* line) {
   }
   return channel.write("\r\n", 2);
 }
-// #endregion FUNC_writeLine
 
 // #region FUNC_readReplyLine
 // PURPOSE: Reads one reply line and returns its three-digit code, or -1 when
@@ -181,29 +178,18 @@ bool writeAuthCredential(SmtpChannel& channel, const char* credential) {
 
 }  // namespace
 
-// #region FUNC_SmtpClient_SmtpClient
-// PURPOSE: Binds one dialog instance to one channel for its lifetime.
 SmtpClient::SmtpClient(SmtpChannel& channel) : channel_(channel) {}
-// #endregion FUNC_SmtpClient_SmtpClient
 
-// #region FUNC_SmtpClient_fail
-// PURPOSE: Records the failing stage and the reply code received there (0
-// when the failure preceded any reply, e.g. a write error or timeout).
 void SmtpClient::fail(const char* stage, int code) {
   failedStage_ = stage;
   lastReplyCode_ = code;
 }
-// #endregion FUNC_SmtpClient_fail
 
-// #region FUNC_SmtpClient_reportStage
-// PURPOSE: Forwards every completed protocol step to the optional trace
-// listener so the caller sees the dialog without its content.
 void SmtpClient::reportStage(const char* stage, int code) {
   if (stageListener_ != nullptr) {
     stageListener_(stage, code);
   }
 }
-// #endregion FUNC_SmtpClient_reportStage
 
 // #region FUNC_SmtpClient_runDialog
 // PURPOSE: Executes the full submission sequence; every failure is classified

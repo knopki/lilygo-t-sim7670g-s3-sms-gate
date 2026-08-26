@@ -51,12 +51,30 @@ enum class SmtpSendResult {
 };
 // #endregion ENUM_SmtpSendResult
 
-// #region FUNC_SmtpStageListener
-// PURPOSE: Reports every completed protocol step (stage name and SMTP reply
-// code, 0 when the step failed before any reply) so the device can trace a
-// dialog without logging credentials or message content.
+// #region FUNC_smtpSendResultName
+// PURPOSE: Maps SmtpSendResult onto the stable JSON/log token so smtp_service,
+// zte_service and modem_service share one mapping (P1 dedup).
+inline const char* smtpSendResultName(SmtpSendResult result) {
+  switch (result) {
+    case SmtpSendResult::kSuccess:
+      return "success";
+    case SmtpSendResult::kConnectFailed:
+      return "connect_failed";
+    case SmtpSendResult::kTlsUnavailable:
+      return "tls_unavailable";
+    case SmtpSendResult::kTlsFailed:
+      return "tls_failed";
+    case SmtpSendResult::kAuthRejected:
+      return "auth_rejected";
+    case SmtpSendResult::kMessageRejected:
+      return "message_rejected";
+    default:
+      return "dialog_failed";
+  }
+}
+// #endregion FUNC_smtpSendResultName
+
 using SmtpStageListener = void (*)(const char* stage, int code);
-// #endregion FUNC_SmtpStageListener
 
 // #region CLASS_SmtpClient
 // PURPOSE: Owns the protocol sequencing for one submission so callers only

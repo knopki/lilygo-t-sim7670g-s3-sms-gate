@@ -10,6 +10,9 @@
 
 #include "web_assets.h"
 
+String escapeJson(const String& value);
+void appendJsonString(String& out, const String& value);
+
 namespace {
 
 void appendJsonNullableString(String& out, bool present, const String& value) {
@@ -20,11 +23,48 @@ void appendJsonNullableString(String& out, bool present, const String& value) {
   appendJsonString(out, value);
 }
 
+void appendPresentEnabled(String& out, bool present, bool enabled) {
+  out += F("{\"present\":");
+  out += present ? F("true") : F("false");
+  out += F(",\"enabled\":");
+  out += enabled ? F("true") : F("false");
+}
+
+void appendSourceCommonFields(String& out, const WebSourceConfigCommon& common,
+                              bool labelBeforePoll) {
+  if (labelBeforePoll) {
+    out += F(",\"label\":");
+    appendJsonString(out, common.label);
+    out += F(",\"poll_interval\":");
+    out += String(common.pollIntervalSec);
+  } else {
+    out += F(",\"poll_interval\":");
+    out += String(common.pollIntervalSec);
+    out += F(",\"label\":");
+    appendJsonString(out, common.label);
+  }
+  out += F(",\"last_status\":");
+  appendJsonNullableString(out, common.lastStatus.length() > 0, common.lastStatus);
+}
+
 }  // namespace
 
+namespace {
+constexpr size_t kEscapeJsonReserveExtra = 8;
+constexpr size_t kStatusJsonReserve = 320;
+constexpr size_t kSmtpJsonReserve = 256;
+constexpr size_t kZteJsonReserve = 272;
+constexpr size_t kModemSourceReserve = 256;
+constexpr size_t kModemStatusReserve = 420;
+constexpr size_t kAsyncOpReserveExtra = 64;
+constexpr size_t kMessageReserveExtra = 32;
+}  // namespace
+
+// #region FUNC_escapeJson
+// PURPOSE: Escapes control characters and quotes for safe JSON embedding.
 String escapeJson(const String& value) {
   String escaped;
-  escaped.reserve(value.length() + 8);
+  escaped.reserve(value.length() + kEscapeJsonReserveExtra);
   char buffer[8];
   for (size_t index = 0; index < value.length(); ++index) {
     const unsigned char ch = static_cast<unsigned char>(value[index]);
@@ -62,16 +102,22 @@ String escapeJson(const String& value) {
   }
   return escaped;
 }
+// #endregion FUNC_escapeJson
 
+// #region FUNC_appendJsonString
+// PURPOSE: Appends a JSON-quoted string with escaping to the output buffer.
 void appendJsonString(String& out, const String& value) {
   out += '"';
   out += escapeJson(value);
   out += '"';
 }
+// #endregion FUNC_appendJsonString
 
+// #region FUNC_renderStatusJson
+// PURPOSE: Serializes WebStatus into the /api/status envelope.
 String renderStatusJson(const WebStatus& status) {
   String json;
-  json.reserve(320);
+  json.reserve(kStatusJsonReserve);
   json += F("{\"setup_required\":");
   json += status.setupRequired ? F("true") : F("false");
   json += F(",\"mode\":");
@@ -91,10 +137,13 @@ String renderStatusJson(const WebStatus& status) {
   json += '}';
   return json;
 }
+// #endregion FUNC_renderStatusJson
 
+// #region FUNC_renderSmtpConfigJson
+// PURPOSE: Serializes WebSmtpConfig into the /api/smtp envelope without exposing the password.
 String renderSmtpConfigJson(const WebSmtpConfig& config) {
   String json;
-  json.reserve(256);
+  json.reserve(kSmtpJsonReserve);
   json += F("{\"present\":");
   json += config.present ? F("true") : F("false");
   json += F(",\"host\":");
@@ -114,43 +163,35 @@ String renderSmtpConfigJson(const WebSmtpConfig& config) {
   json += '}';
   return json;
 }
+// #endregion FUNC_renderSmtpConfigJson
 
+// #region FUNC_renderZteConfigJson
+// PURPOSE: Serializes WebZteConfig into the /api/zte envelope without exposing the password.
 String renderZteConfigJson(const WebZteConfig& config) {
   String json;
-  json.reserve(272);
-  json += F("{\"present\":");
-  json += config.present ? F("true") : F("false");
-  json += F(",\"enabled\":");
-  json += config.enabled ? F("true") : F("false");
+  json.reserve(kZteJsonReserve);
+  appendPresentEnabled(json, config.present, config.enabled);
   json += F(",\"host\":");
   appendJsonString(json, config.host);
   json += F(",\"password_set\":");
   json += config.passwordSet ? F("true") : F("false");
-  json += F(",\"label\":");
-  appendJsonString(json, config.label);
-  json += F(",\"poll_interval\":");
-  json += String(config.pollIntervalSec);
-  json += F(",\"last_status\":");
-  appendJsonNullableString(json, config.lastStatus.length() > 0, config.lastStatus);
+  WebSourceConfigCommon common{config.present, config.enabled, config.pollIntervalSec, config.label,
+                               config.lastStatus};
+  appendSourceCommonFields(json, common, true);
   json += '}';
   return json;
 }
+// #endregion FUNC_renderZteConfigJson
 
 // #region FUNC_renderModemSourceJson
 // PURPOSE: Serializes WebModemSourceConfig into the /api/modem/source envelope.
 String renderModemSourceJson(const WebModemSourceConfig& config) {
   String json;
-  json.reserve(256);
-  json += F("{\"present\":");
-  json += config.present ? F("true") : F("false");
-  json += F(",\"enabled\":");
-  json += config.enabled ? F("true") : F("false");
-  json += F(",\"poll_interval\":");
-  json += String(config.pollIntervalSec);
-  json += F(",\"label\":");
-  appendJsonString(json, config.label);
-  json += F(",\"last_status\":");
-  appendJsonNullableString(json, config.lastStatus.length() > 0, config.lastStatus);
+  json.reserve(kModemSourceReserve);
+  appendPresentEnabled(json, config.present, config.enabled);
+  WebSourceConfigCommon common{config.present, config.enabled, config.pollIntervalSec, config.label,
+                               config.lastStatus};
+  appendSourceCommonFields(json, common, false);
   json += '}';
   return json;
 }
@@ -160,7 +201,7 @@ String renderModemSourceJson(const WebModemSourceConfig& config) {
 // PURPOSE: Serializes WebModemStatus into the /api/modem/status envelope.
 String renderModemStatusJson(const WebModemStatus& status) {
   String json;
-  json.reserve(420);
+  json.reserve(kModemStatusReserve);
   json += F("{\"present\":");
   json += status.present ? F("true") : F("false");
   json += F(",\"cpin\":");
@@ -207,9 +248,11 @@ String renderModemStatusJson(const WebModemStatus& status) {
 }
 // #endregion FUNC_renderModemStatusJson
 
+// #region FUNC_renderAsyncOpJson
+// PURPOSE: Serializes WebAsyncOp (running/done/result/message) for polling test/send routes.
 String renderAsyncOpJson(const WebAsyncOp& op) {
   String json;
-  json.reserve(op.message.length() + 64);
+  json.reserve(op.message.length() + kAsyncOpReserveExtra);
   json += F("{\"running\":");
   json += op.running ? F("true") : F("false");
   json += F(",\"done\":");
@@ -221,29 +264,41 @@ String renderAsyncOpJson(const WebAsyncOp& op) {
   json += '}';
   return json;
 }
+// #endregion FUNC_renderAsyncOpJson
 
+// #region FUNC_renderMessageJson
+// PURPOSE: Serializes a success envelope {ok:true,message}.
 String renderMessageJson(const String& message) {
   String json;
-  json.reserve(message.length() + 32);
+  json.reserve(message.length() + kMessageReserveExtra);
   json += F("{\"ok\":true,\"message\":");
   appendJsonString(json, message);
   json += '}';
   return json;
 }
+// #endregion FUNC_renderMessageJson
 
+// #region FUNC_renderErrorJson
+// PURPOSE: Serializes an error envelope {ok:false,error}.
 String renderErrorJson(const String& error) {
   String json;
-  json.reserve(error.length() + 32);
+  json.reserve(error.length() + kMessageReserveExtra);
   json += F("{\"ok\":false,\"error\":");
   appendJsonString(json, error);
   json += '}';
   return json;
 }
+// #endregion FUNC_renderErrorJson
 
+// #region FUNC_sendJson
+// PURPOSE: Sends a JSON response with the correct content type.
 void sendJson(WebServer& server, int code, const String& json) {
   server.send(code, "application/json; charset=utf-8", json);
 }
+// #endregion FUNC_sendJson
 
+// #region FUNC_sendAsset
+// PURPOSE: Serves a gzipped asset from PROGMEM with long-term caching headers; falls back to 404.
 void sendAsset(WebServer& server, const String& path) {
   for (const web_assets::Asset& asset : web_assets::kAssets) {
     if (path != asset.path) {
@@ -256,3 +311,4 @@ void sendAsset(WebServer& server, const String& path) {
   }
   server.send(404, "text/plain", "Not found.");
 }
+// #endregion FUNC_sendAsset

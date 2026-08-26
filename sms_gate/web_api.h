@@ -15,6 +15,8 @@
 #include <Arduino.h>
 #include <WebServer.h>
 
+// #region STRUCT_WebStatus
+// PURPOSE: Snapshot for GET /api/status; stationIp null when disconnected.
 struct WebStatus {
   bool setupRequired;
   String mode;
@@ -26,7 +28,10 @@ struct WebStatus {
   String mdnsHostname;
   String lastError;
 };
+// #endregion STRUCT_WebStatus
 
+// #region STRUCT_WebSmtpConfig
+// PURPOSE: Snapshot for GET /api/smtp without password; security is starttls/implicit.
 struct WebSmtpConfig {
   bool present;
   String host;
@@ -37,7 +42,10 @@ struct WebSmtpConfig {
   String fromAddress;
   String recipientAddress;
 };
+// #endregion STRUCT_WebSmtpConfig
 
+// #region STRUCT_WebZteConfig
+// PURPOSE: Snapshot for GET /api/zte without password; pollIntervalSec 5..300 s.
 struct WebZteConfig {
   bool present;
   bool enabled;
@@ -47,6 +55,7 @@ struct WebZteConfig {
   uint16_t pollIntervalSec = 15;  // per-source poll period 5..300 s
   String lastStatus;              // empty until the first poll or test completed
 };
+// #endregion STRUCT_WebZteConfig
 
 // #region STRUCT_WebModemSourceConfig
 // PURPOSE: Snapshot for GET /api/modem/source without exposing credentials;
@@ -59,6 +68,17 @@ struct WebModemSourceConfig {
   String lastStatus;  // empty until the first poll completes
 };
 // #endregion STRUCT_WebModemSourceConfig
+
+// #region STRUCT_WebSourceConfigCommon
+// PURPOSE: Common poll/label/status slice shared by ZTE and modem-source JSON.
+struct WebSourceConfigCommon {
+  bool present = false;
+  bool enabled = false;
+  uint16_t pollIntervalSec = 15;
+  String label;
+  String lastStatus;
+};
+// #endregion STRUCT_WebSourceConfigCommon
 
 // #region STRUCT_WebModemStatus
 // PURPOSE: Snapshot for GET /api/modem/status without exposing credentials;
@@ -85,13 +105,15 @@ struct WebModemStatus {
 };
 // #endregion STRUCT_WebModemStatus
 
-// Shape shared by every one-shot asynchronous test route (SMTP, ZTE).
+// #region STRUCT_WebAsyncOp
+// PURPOSE: Snapshot for one-shot async routes (SMTP/ZTE/modem test/send).
 struct WebAsyncOp {
   bool running;
   bool done;
   String result;  // empty until finished
   String message;
 };
+// #endregion STRUCT_WebAsyncOp
 
 String escapeJson(const String& value);
 void appendJsonString(String& out, const String& value);

@@ -23,6 +23,7 @@
 #include <NetworkClient.h>
 #include <lwip/sockets.h>
 
+#include "plain_socket_reader.h"
 #include "zte_client.h"
 
 // #region CLASS_NetworkZteChannel
@@ -61,62 +62,13 @@ class NetworkZteChannel : public ZteChannel {
     }
     const unsigned long deadline = millis() + timeoutMs_;
     ensureRecvTimeout();
-    size_t used = 0;
-    for (;;) {
-      uint8_t byte = 0;
-      const int got = ::recv(client_.fd(), &byte, 1, 0);
-      if (got == 0) {
-        return -1;  // Peer closed the connection.
-      }
-      if (got < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-          if (millis() > deadline) {
-            return -1;
-          }
-          delay(1);
-          continue;
-        }
-        return -1;
-      }
-      if (byte == '\n') {
-        if (used > 0 && buffer[used - 1] == '\r') {
-          --used;
-        }
-        buffer[used] = '\0';
-        return static_cast<int>(used);
-      }
-      if (used + 1 >= size) {
-        return -1;  // Line does not fit; treated as a protocol failure.
-      }
-      buffer[used++] = static_cast<char>(byte);
-      if (millis() > deadline) {
-        return -1;
-      }
-    }
+    return plainReadLine(client_.fd(), buffer, size, deadline);
   }
 
   int read(char* buffer, size_t size) override {
     ensureRecvTimeout();
     const unsigned long deadline = millis() + timeoutMs_;
-    size_t used = 0;
-    while (used < size) {
-      const int got = ::recv(client_.fd(), buffer + used, size - used, 0);
-      if (got == 0) {
-        break;  // Clean end of stream: return what was read so far.
-      }
-      if (got < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-          if (millis() > deadline) {
-            break;
-          }
-          delay(1);
-          continue;
-        }
-        break;
-      }
-      used += static_cast<size_t>(got);
-    }
-    return used > 0 ? static_cast<int>(used) : -1;
+    return plainReadBytes(client_.fd(), buffer, size, deadline);
   }
 
   void stop() override { client_.stop(); }

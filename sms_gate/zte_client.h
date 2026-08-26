@@ -98,21 +98,12 @@ bool formatZteDate(const char* raw, char* out, size_t outSize);
 // UTF-8 so both the web form and sendSms share one length rule.
 size_t zteSmsUtf16Units(const char* utf8);
 
-// #region CLASS_ZteInboxStatus
-// PURPOSE: Reports the device-storage occupancy the test route shows the
-// operator before polling is enabled.
 struct ZteInboxStatus {
   uint16_t used;
   uint16_t total;
 };
-// #endregion CLASS_ZteInboxStatus
 
-// #region ENUM_ZteSendStatus
-// PURPOSE: Reports one sampled outcome of the modem's asynchronous send
-// command (sms_cmd_status_info, sms_cmd=4): 1 keeps running, 3 completed,
-// 2 failed; anything else counts as still in progress.
 enum class ZteSendStatus { kInProgress, kDone, kFailed };
-// #endregion ENUM_ZteSendStatus
 
 // #region CLASS_ZteModem
 // PURPOSE: Owns one modem session (login, cookie, and firmware version) and

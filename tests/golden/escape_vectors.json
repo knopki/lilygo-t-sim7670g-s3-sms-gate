@@ -1,0 +1,12 @@
+{
+  "quote": "\"",
+  "escaped_quote": "\\\"",
+  "backslash": "\\",
+  "escaped_backslash": "\\\\",
+  "newline": "\n",
+  "escaped_newline": "\\n",
+  "control_0x01": "\\u0001",
+  "control_0x1f": "\\u001f",
+  "unicode_sample": "Hello",
+  "raw_json": "{\"key\":\"value with \\\"quotes\\\" and \\n newline\"}"
+}

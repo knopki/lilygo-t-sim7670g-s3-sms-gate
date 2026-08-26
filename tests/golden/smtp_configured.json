@@ -1,0 +1,1 @@
+{"present":true,"host":"smtp.example.com","port":587,"security":"starttls","username":"user@example.com","password_set":true,"from":"gate@example.com","recipient":"owner@example.com"}
