@@ -78,6 +78,10 @@
 	}
 
 	function statusHtml(status) {
+		const ntpLine =
+			status.ntp_enabled === false
+				? "NTP disabled"
+				: `${status.ntp_server1 || "pool.ntp.org"}${status.ntp_server2 ? ", " + status.ntp_server2 : ""} (enabled)`;
 		const rows = [
 			["Mode", MODE_LABELS[status.mode] || status.mode],
 			["Configured network", status.ssid || "—"],
@@ -88,6 +92,7 @@
 				"Address",
 				status.mdns_hostname ? `http://${status.mdns_hostname}.local` : "—",
 			],
+			["NTP", esc(ntpLine)],
 		];
 		const rowsHtml = rows
 			.map(([label, value]) => `<dt>${label}</dt><dd>${esc(value)}</dd>`)
@@ -440,8 +445,23 @@
             <input required minlength="8" maxlength="63" name="wifi_password" type="password" autocomplete="new-password">
           </label>
         </fieldset>
+        <fieldset>
+          <legend>Time / SNTP</legend>
+          <label class="checkbox">Enable NTP (SNTP) — GNSS > SNTP > NITZ
+            <input type="checkbox" name="ntp_enabled">
+          </label>
+          <label>NTP server 1 (empty = disabled)
+            <input maxlength="64" name="ntp_server1" placeholder="pool.ntp.org" autocomplete="off">
+          </label>
+          <label>NTP server 2 (optional)
+            <input maxlength="64" name="ntp_server2" placeholder="time.nist.gov" autocomplete="off">
+          </label>
+          <p class="hint">Operator-configurable per ADR-0005. SNTP stops when GNSS is fresh.</p>
+        </fieldset>
         <button type="submit">Test and save</button>
       </form>
+      <h2>Time sync status</h2>
+      <div id="time-status" class="hint">Loading time status…</div>
       <h2>Email delivery (SMTP)</h2>
       <p id="smtp-config-state" class="hint"></p>
       <form id="smtp-form">
@@ -567,6 +587,16 @@
 	function renderConfig(status) {
 		appRoot.innerHTML = configHtml();
 		document.getElementById("status").innerHTML = statusHtml(status);
+		// Prefill NTP fields from status
+		const nf = document.getElementById("network-form");
+		if (nf) {
+			if (nf.elements.ntp_enabled)
+				nf.elements.ntp_enabled.checked = status.ntp_enabled !== false;
+			if (nf.elements.ntp_server1)
+				nf.elements.ntp_server1.value = status.ntp_server1 || "";
+			if (nf.elements.ntp_server2)
+				nf.elements.ntp_server2.value = status.ntp_server2 || "";
+		}
 		renderNetworkPicker();
 		document
 			.getElementById("network-form")
@@ -607,6 +637,7 @@
 		loadModemStatus();
 		loadGpsSettings();
 		loadGpsStatus();
+		loadTimeStatus();
 		startStatusTimer();
 		startModemTimer();
 		startGpsTimer();
@@ -689,6 +720,17 @@
 		const fields = {
 			ssid: form.elements.ssid.value.trim(),
 			wifi_password: form.elements.wifi_password.value,
+			ntp_enabled: form.elements.ntp_enabled
+				? form.elements.ntp_enabled.checked
+					? "1"
+					: "0"
+				: "1",
+			ntp_server1: form.elements.ntp_server1
+				? form.elements.ntp_server1.value.trim()
+				: "",
+			ntp_server2: form.elements.ntp_server2
+				? form.elements.ntp_server2.value.trim()
+				: "",
 		};
 		if (fields.ssid.length === 0) {
 			setBanner("error", "Enter an SSID.");
@@ -1403,6 +1445,36 @@
 		}
 	}
 
+	function renderTimeStatus(data) {
+		if (!data) return '<p class="hint">Time unavailable.</p>';
+		const stratum = data.stratum ?? 0;
+		const disp = data.dispersion_ms ?? 0;
+		const src = data.source || "unsynced";
+		const q = data.quarantined
+			? `yes (until ${data.quarantined_until_ms})`
+			: "no";
+		const rows = [
+			["Source", esc(src)],
+			["Stratum", esc(String(stratum))],
+			["Dispersion", `${esc(String(disp))} ms`],
+			["Epoch ms", esc(String(data.epoch_ms ?? 0))],
+			["Last sync ms", esc(String(data.last_sync_ms ?? 0))],
+			["Quarantined", esc(q)],
+		];
+		return `<dl class="status">${rows.map(([l, v]) => `<dt>${l}</dt><dd>${v}</dd>`).join("")}</dl>`;
+	}
+	async function loadTimeStatus() {
+		const el = document.getElementById("time-status");
+		if (!el) return;
+		try {
+			const { response, payload } = await api("/api/time");
+			if (response.status === 401) {
+				renderAuthRequired();
+				return;
+			}
+			if (response.ok && payload) el.innerHTML = renderTimeStatus(payload);
+		} catch (_e) {}
+	}
 	async function refreshStatusBlock() {
 		if (busy || document.hidden) {
 			return;
@@ -1416,10 +1488,21 @@
 			const statusBlock = document.getElementById("status");
 			if (response.ok && payload && statusBlock) {
 				statusBlock.innerHTML = statusHtml(payload);
+				const nf = document.getElementById("network-form");
+				if (nf) {
+					const ae = document.activeElement;
+					if (nf.elements.ntp_enabled && ae !== nf.elements.ntp_enabled)
+						nf.elements.ntp_enabled.checked = payload.ntp_enabled !== false;
+					if (nf.elements.ntp_server1 && ae !== nf.elements.ntp_server1)
+						nf.elements.ntp_server1.value = payload.ntp_server1 || "";
+					if (nf.elements.ntp_server2 && ae !== nf.elements.ntp_server2)
+						nf.elements.ntp_server2.value = payload.ntp_server2 || "";
+				}
 			}
 		} catch (_error) {
 			// Transient reachability loss; the next interval retries.
 		}
+		loadTimeStatus();
 	}
 
 	async function loadApp() {

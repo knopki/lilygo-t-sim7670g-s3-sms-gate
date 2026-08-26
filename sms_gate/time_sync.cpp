@@ -22,8 +22,9 @@ namespace {
 constexpr uint32_t kQuorumAgreeMs = 10UL * 1000UL;
 constexpr int64_t kQuarantineDiffMs = 300LL * 1000LL;
 constexpr uint32_t kQuarantineDurationMs = 15UL * 60UL * 1000UL;
-constexpr uint32_t kSntpFreshMs = 2UL * 60UL * 60UL * 1000UL;  // 2h
-constexpr uint32_t kNitzFreshMs = 5UL * 60UL * 1000UL;         // 5 min
+constexpr uint32_t kQuarantineMaxMs = 2UL * 60UL * 60UL * 1000UL;  // 2h cap for backoff
+constexpr uint32_t kSntpFreshMs = 2UL * 60UL * 60UL * 1000UL;      // 2h
+constexpr uint32_t kNitzFreshMs = 5UL * 60UL * 1000UL;             // 5 min
 constexpr uint32_t kDisciplineIgnoreLogIntervalMs =
     60UL * 1000UL;  // throttle time_discipline_ignored
 }  // namespace
@@ -43,6 +44,7 @@ void TimeSync::begin() {
   for (auto& s : samples_) s = TimeSample{};
   // cppcheck-suppress useStlAlgorithm
   for (auto& q : quarantineUntilMs_) q = 0;
+  for (auto& d : quarantineDurationMs_) d = kQuarantineDurationMs;
   // cppcheck-suppress useStlAlgorithm
   for (auto& l : lastIgnoredLogMs_) l = 0;
   published_ = TimeState{};
@@ -94,10 +96,19 @@ bool TimeSync::shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs) {
   int64_t quorum = sum / (int64_t)peerCount;
   int64_t diff = sample.epochMs > quorum ? sample.epochMs - quorum : quorum - sample.epochMs;
   if (diff > kQuarantineDiffMs) {
-    quarantineUntilMs_[idx] = nowMs + kQuarantineDurationMs;
+    uint32_t dur = quarantineDurationMs_[idx];
+    if (dur == 0) dur = kQuarantineDurationMs;
+    quarantineUntilMs_[idx] = nowMs + dur;
+    // exponential backoff on repeat (capped at 2h)
+    uint32_t next = dur * 2;
+    if (next > kQuarantineMaxMs) next = kQuarantineMaxMs;
+    quarantineDurationMs_[idx] = next;
 #ifdef ARDUINO
-    Serial.printf("event=time_quarantine source=%s diff_ms=%lld quorum_ms=%lld\n",
-                  sourceName(sample.source), (long long)diff, (long long)quorum);
+    Serial.printf(
+        "event=time_quarantine source=%s diff_ms=%lld quorum_ms=%lld reason=quorum_mismatch "
+        "quarantined_until_ms=%u\n",
+        sourceName(sample.source), (long long)diff, (long long)quorum,
+        (unsigned)quarantineUntilMs_[idx]);
 #else
     (void)quorum;
 #endif
@@ -215,8 +226,24 @@ int64_t TimeSync::disciplineAt(const TimeSample& chosen, int64_t wallMs, uint32_
   }
   if (diffMs > 0) {
 #ifdef ARDUINO
-    // Small forward slew: use adjtime if available; stub sleeps 0 for now.
-    // Future: struct timeval delta{diffMs/1000, (diffMs%1000)*1000}; adjtime(&delta,nullptr);
+    struct timeval delta{};
+    delta.tv_sec = (time_t)(diffMs / 1000);
+    delta.tv_usec = (suseconds_t)((diffMs % 1000) * 1000);
+    struct timeval old{};
+    if (adjtime(&delta, &old) == 0) {
+      Serial.printf("event=time_slew source=%s diff_ms=%lld\n", sourceName(chosen.source),
+                    (long long)diffMs);
+    } else {
+      struct timeval tv{};
+      tv.tv_sec = (time_t)(expectedMs / 1000);
+      tv.tv_usec = (suseconds_t)((expectedMs % 1000) * 1000);
+      settimeofday(&tv, nullptr);
+      Serial.printf("event=time_sync source=%s diff_ms=%lld fallback=adjtime_failed\n",
+                    sourceName(chosen.source), (long long)diffMs);
+    }
+    (void)nowMs;
+#else
+    (void)chosen;
     (void)nowMs;
 #endif
   }
@@ -237,11 +264,20 @@ void TimeSync::discipline(const TimeSample& chosen) {
 // #endregion METHOD_TimeSync_disciplineAt
 
 void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
+  // Clear expired quarantines and reset backoff once quarantine lifts.
+  for (uint8_t i = 1; i < 4; ++i) {
+    if (quarantineUntilMs_[i] != 0 && nowMs >= quarantineUntilMs_[i]) {
+      quarantineUntilMs_[i] = 0;
+      quarantineDurationMs_[i] = kQuarantineDurationMs;
+    }
+  }
   TimeSource best = arbitrateAt(nowMs);
   if (best == TimeSource::kUnsynced) {
     published_.source = TimeSource::kUnsynced;
     published_.stratum = 0;
     published_.dispersionMs = 0;
+    published_.quarantined = false;
+    published_.quarantinedUntilMs = 0;
     return;
   }
   const TimeSample& s = samples_[static_cast<uint8_t>(best)];
@@ -258,6 +294,24 @@ void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
   } else {
     published_.stratum = 3;
     published_.dispersionMs = 1500;
+  }
+  // Publish quarantine state for current best source.
+  uint8_t bidx = static_cast<uint8_t>(best);
+  if (quarantineUntilMs_[bidx] != 0 && nowMs < quarantineUntilMs_[bidx]) {
+    published_.quarantined = true;
+    published_.quarantinedUntilMs = quarantineUntilMs_[bidx];
+  } else {
+    // If best is not quarantined but any source is, still report max quarantine for observability.
+    uint32_t maxQ = 0;
+    bool any = false;
+    for (uint8_t i = 1; i < 4; ++i) {
+      if (quarantineUntilMs_[i] != 0 && nowMs < quarantineUntilMs_[i]) {
+        any = true;
+        if (quarantineUntilMs_[i] > maxQ) maxQ = quarantineUntilMs_[i];
+      }
+    }
+    published_.quarantined = any;
+    published_.quarantinedUntilMs = maxQ;
   }
 }
 

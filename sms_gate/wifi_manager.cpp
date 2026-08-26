@@ -187,6 +187,9 @@ void WifiManager::onStationFailed(const RuntimeConfig& config) {
 WebStatus WifiManager::buildStatus(const RuntimeConfig& config) const {
   WebStatus status;
   status.setupRequired = config.ssid.length() == 0;
+  status.ntpEnabled = config.ntpEnabled;
+  status.ntpServer1 = config.ntpServer1;
+  status.ntpServer2 = config.ntpServer2;
   switch (connectionState_) {
     case ConnectionState::kOnline:
       status.mode = F("sta");

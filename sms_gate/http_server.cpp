@@ -67,6 +67,28 @@ bool HttpServer::readCandidateConfig(RuntimeConfig& candidate, String& error) {
     error = F("Wi-Fi password must contain 8–63 printable ASCII characters.");
     return false;
   }
+  // NTP fields (ADR-0005): optional, 0..64 printable, empty = disabled slot.
+  candidate.ntpEnabled = server_.arg("ntp_enabled") == F("1");
+  if (!server_.hasArg("ntp_enabled")) candidate.ntpEnabled = true;
+  candidate.ntpServer1 = server_.arg("ntp_server1");
+  candidate.ntpServer2 = server_.arg("ntp_server2");
+  candidate.ntpServer1.trim();
+  candidate.ntpServer2.trim();
+  if (candidate.ntpServer1.length() > kMaxNtpServerLength ||
+      candidate.ntpServer2.length() > kMaxNtpServerLength) {
+    error = F("NTP server must contain up to 64 printable characters.");
+    return false;
+  }
+  if (!isPrintableAscii(candidate.ntpServer1) || !isPrintableAscii(candidate.ntpServer2)) {
+    error = F("NTP server must contain printable ASCII.");
+    return false;
+  }
+  // Apply defaults when enabled but both empty (fresh setup without NTP fields).
+  if (candidate.ntpEnabled && candidate.ntpServer1.length() == 0 &&
+      candidate.ntpServer2.length() == 0) {
+    candidate.ntpServer1 = kDefaultNtpServer1;
+    candidate.ntpServer2 = kDefaultNtpServer2;
+  }
   return true;
 }
 // #endregion METHOD_readCandidateConfig
@@ -225,6 +247,7 @@ void HttpServer::handleSetupSubmission() {
         F("Administrator passwords must match and contain 8–63 printable ASCII characters."));
     return;
   }
+  // Preserve NTP defaults already validated in readCandidateConfig.
   const RuntimeConfig previousSetupConfig = config_;
   if (!wifi_.testStationCandidate(candidate, previousSetupConfig)) {
     wifi_.setLastConnectionError(
@@ -643,6 +666,7 @@ void HttpServer::handleTimeStatusRequest() {
   web.epochMs = st.epochMs;
   web.lastSyncMs = st.lastSyncMs;
   web.quarantined = st.quarantined;
+  web.quarantinedUntilMs = st.quarantinedUntilMs;
   sendJson(server_, kHttpOk, renderTimeStatusJson(web));
 }
 // #endregion METHOD_handleTimeStatusRequest

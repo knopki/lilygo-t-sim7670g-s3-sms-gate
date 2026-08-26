@@ -120,7 +120,7 @@ void appendJsonString(String& out, const String& value) {
 // PURPOSE: Serializes WebStatus into the /api/status envelope.
 String renderStatusJson(const WebStatus& status) {
   String json;
-  json.reserve(kStatusJsonReserve);
+  json.reserve(kStatusJsonReserve + 128);
   json += F("{\"setup_required\":");
   json += status.setupRequired ? F("true") : F("false");
   json += F(",\"mode\":");
@@ -137,6 +137,12 @@ String renderStatusJson(const WebStatus& status) {
   appendJsonString(json, status.mdnsHostname);
   json += F(",\"last_error\":");
   appendJsonNullableString(json, status.lastError.length() > 0, status.lastError);
+  json += F(",\"ntp_enabled\":");
+  json += status.ntpEnabled ? F("true") : F("false");
+  json += F(",\"ntp_server1\":");
+  appendJsonString(json, status.ntpServer1);
+  json += F(",\"ntp_server2\":");
+  appendJsonString(json, status.ntpServer2);
   json += '}';
   return json;
 }
@@ -306,7 +312,7 @@ String renderWatchdogStatusJson(const WebWatchdogStatus& status) {
 // #region FUNC_renderTimeStatusJson
 String renderTimeStatusJson(const WebTimeStatus& status) {
   String json;
-  json.reserve(kTimeReserve);
+  json.reserve(kTimeReserve + 32);
   json += F("{\"source\":");
   appendJsonString(json, status.source);
   json += F(",\"stratum\":");
@@ -319,6 +325,8 @@ String renderTimeStatusJson(const WebTimeStatus& status) {
   json += String(status.lastSyncMs);
   json += F(",\"quarantined\":");
   json += status.quarantined ? F("true") : F("false");
+  json += F(",\"quarantined_until_ms\":");
+  json += String(status.quarantinedUntilMs);
   json += '}';
   return json;
 }

@@ -29,6 +29,9 @@ struct WebStatus {
   int rssiDbm;
   String mdnsHostname;
   String lastError;
+  String ntpServer1;
+  String ntpServer2;
+  bool ntpEnabled = true;
 };
 // #endregion STRUCT_WebStatus
 
@@ -137,6 +140,7 @@ struct WebTimeStatus {
   int64_t epochMs = 0;
   uint32_t lastSyncMs = 0;
   bool quarantined = false;
+  uint32_t quarantinedUntilMs = 0;
 };
 // #endregion STRUCT_WebTimeStatus
 
