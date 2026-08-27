@@ -171,8 +171,9 @@ void NtpServer::loop() {
     // ref timestamp: lastSync or t2 if no ref
     uint32_t refSec = t2Sec;
     uint32_t refFrac = t2Frac;
-    if (st.epochMs > 0) {
-      addMsToNtp((uint32_t)(st.epochMs / 1000), (uint32_t)(st.epochMs % 1000), refSec, refFrac);
+    if (st.lastSyncEpochMs > 0) {
+      addMsToNtp((uint32_t)(st.lastSyncEpochMs / 1000), (uint32_t)(st.lastSyncEpochMs % 1000),
+                 refSec, refFrac);
     }
     writeU32BE(resp + 16, refSec);
     writeU32BE(resp + 20, refFrac);

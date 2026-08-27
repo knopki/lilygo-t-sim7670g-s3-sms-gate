@@ -329,12 +329,12 @@ String renderTimeStatusJson(const WebTimeStatus& status) {
   json += String(status.dispersionMs);
   json += F(",\"epoch_ms\":");
   json += String((long long)status.epochMs);
-  json += F(",\"last_sync_ms\":");
-  json += String(status.lastSyncMs);
+  json += F(",\"last_sync_epoch_ms\":");
+  json += String((long long)status.lastSyncEpochMs);
   json += F(",\"quarantined\":");
   json += status.quarantined ? F("true") : F("false");
-  json += F(",\"quarantined_until_ms\":");
-  json += String(status.quarantinedUntilMs);
+  json += F(",\"quarantined_until_epoch_ms\":");
+  json += String((long long)status.quarantinedUntilEpochMs);
   json += '}';
   return json;
 }

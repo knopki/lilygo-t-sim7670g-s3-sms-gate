@@ -34,9 +34,9 @@ async function loadTime() {
 		stratum: String(payload.stratum ?? "—"),
 		dispersion: `${payload.dispersion_ms} ms`,
 		now: formatUtc(payload.epoch_ms),
-		last_sync: formatUtc(payload.last_sync_ms),
+		last_sync: formatUtc(payload.last_sync_epoch_ms),
 		quarantine: payload.quarantined
-			? `active until ${formatUtc(payload.quarantined_until_ms)}`
+			? `active until ${formatUtc(payload.quarantined_until_epoch_ms)}`
 			: "inactive",
 	});
 }

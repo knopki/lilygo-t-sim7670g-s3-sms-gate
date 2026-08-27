@@ -140,9 +140,9 @@ struct WebTimeStatus {
   uint8_t stratum = 0;
   uint32_t dispersionMs = 0;
   int64_t epochMs = 0;
-  uint32_t lastSyncMs = 0;
+  int64_t lastSyncEpochMs = 0;
   bool quarantined = false;
-  uint32_t quarantinedUntilMs = 0;
+  int64_t quarantinedUntilEpochMs = 0;
 };
 // #endregion STRUCT_WebTimeStatus
 

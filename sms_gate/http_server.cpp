@@ -628,9 +628,9 @@ void HttpServer::handleTimeStatusRequest() {
   web.stratum = st.stratum;
   web.dispersionMs = st.dispersionMs;
   web.epochMs = st.epochMs;
-  web.lastSyncMs = st.lastSyncMs;
+  web.lastSyncEpochMs = st.lastSyncEpochMs;
   web.quarantined = st.quarantined;
-  web.quarantinedUntilMs = st.quarantinedUntilMs;
+  web.quarantinedUntilEpochMs = st.quarantinedUntilEpochMs;
   sendJson(server_, kHttpOk, renderTimeStatusJson(web));
 }
 // #endregion METHOD_handleTimeStatusRequest

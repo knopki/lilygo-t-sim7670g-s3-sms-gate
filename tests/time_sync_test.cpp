@@ -23,7 +23,7 @@ static int64_t makeEpochMs(int y, int mo, int d, int h, int mi, int s, int ms = 
 
 void testFreshness() {
   assert(TimeSync::isGnssFresh(0, 60000));
-  assert(TimeSync::isGnssFresh(129000, 60000));   // 2*60+10 =130s window, 129 <130
+  assert(TimeSync::isGnssFresh(129000, 60000));  // 2*60+10 =130s window, 129 <130
   assert(!TimeSync::isGnssFresh(130000, 60000));
   assert(!TimeSync::isGnssFresh(130001, 60000));
   // Custom poll 5s -> window 20s
@@ -90,6 +90,9 @@ void testQuarantineGnssOutlier() {
   ts.loopAt(5000, base);
   assert(ts.state().source == TimeSource::kSntp);
   assert(ts.isQuarantined(TimeSource::kGnss, 5000));
+  // Quarantine end is published as wall-clock epoch: now (base+4s) + remaining
+  // (904000-5000 ms) = base + 903000 ms.
+  assert(ts.state().quarantinedUntilEpochMs == base + 903000);
   // After 15min quarantine expires, GNSS outlier would be considered again; test expiry
   ts.loopAt(5000 + 15UL * 60 * 1000 + 1, base);
   // Peers are now stale (SNTP age >2h? No, still fresh at 15min, NITZ stale at 5min)
@@ -109,7 +112,8 @@ void testQuorumNoQuarantineWhenPeersDisagree() {
   TimeSync ts;
   ts.begin();
   int64_t base = makeEpochMs(2025, 8, 26, 12, 0, 0);
-  // SNTP at base, NITZ 1h away -> peers disagree >10s, no quorum, GNSS outlier should NOT be quarantined
+  // SNTP at base, NITZ 1h away -> peers disagree >10s, no quorum, GNSS outlier should NOT be
+  // quarantined
   ts.feedSntpSyncAt(base, 1000);
   ts.feedNitzSampleAt(base + 3600LL * 1000, 1500, 2000);
   ts.feedGnssSampleAt(base + 3600LL * 1000 + 10000, 100, 3000);
@@ -133,9 +137,35 @@ void testCclkToEpoch() {
   puts("testCclkToEpoch ok");
 }
 
+// #region TEST_testPublishedSyncTimes
+// Last sync / now must be wall-clock epochs (UI formats them as UTC dates),
+// never millis() uptime (regression: "1970-01-01 00:00:11 UTC").
+void testPublishedSyncTimes() {
+  TimeSync ts;
+  ts.begin();
+  ts.setGpsPollMs(60000);
+  // Before any sync: zero fields so the UI renders "\u2014".
+  ts.loopAt(100, 0);
+  assert(ts.state().source == TimeSource::kUnsynced);
+  assert(ts.state().lastSyncEpochMs == 0);
+  assert(ts.state().epochMs == 0);
+  assert(ts.state().quarantinedUntilEpochMs == 0);
+
+  int64_t e = makeEpochMs(2025, 8, 26, 12, 0, 0);
+  ts.feedGnssSampleAt(e, 100, 1000);
+  ts.loopAt(31000, e + 30000);
+  assert(ts.state().source == TimeSource::kGnss);
+  // Last sync is the sample's wall-clock epoch, not millis() uptime.
+  assert(ts.state().lastSyncEpochMs == e);
+  // "Now" is the sample extrapolated by its age (sample + 30 s).
+  assert(ts.state().epochMs == e + 30000);
+  puts("testPublishedSyncTimes ok");
+}
+
 void testGpsFixMs() {
   GpsFixFields f{};
-  assert(parseCgpsInfoLine("+CGPSINFO: 5544.1234,N,03736.5678,E,250826,123456.789,100.0,0.0,0.0", f));
+  assert(
+      parseCgpsInfoLine("+CGPSINFO: 5544.1234,N,03736.5678,E,250826,123456.789,100.0,0.0,0.0", f));
   assert(f.hasFix);
   assert(f.timeMs == 789);
   assert(strcmp(f.utcTime, "123456") == 0);
@@ -159,6 +189,7 @@ int main() {
   testQuarantineGnssOutlier();
   testQuorumNoQuarantineWhenPeersDisagree();
   testCclkToEpoch();
+  testPublishedSyncTimes();
   testGpsFixMs();
   puts("all time_sync tests passed");
   return 0;

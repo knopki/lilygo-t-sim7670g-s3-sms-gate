@@ -41,12 +41,12 @@ struct TimeSample {
 
 struct TimeState {
   TimeSource source = TimeSource::kUnsynced;
-  int64_t epochMs = 0;
-  uint32_t lastSyncMs = 0;    // millis() of last accepted sync
-  uint8_t stratum = 0;        // 0 unsynced, 1 GNSS, 2-3 SNTP, 3-4 NITZ
-  uint32_t dispersionMs = 0;  // root dispersion for NTP
+  int64_t epochMs = 0;          // extrapolated UTC now (sample epoch + age)
+  int64_t lastSyncEpochMs = 0;  // UTC epoch of the last accepted sync sample
+  uint8_t stratum = 0;          // 0 unsynced, 1 GNSS, 2-3 SNTP, 3-4 NITZ
+  uint32_t dispersionMs = 0;    // root dispersion for NTP
   bool quarantined = false;
-  uint32_t quarantinedUntilMs = 0;
+  int64_t quarantinedUntilEpochMs = 0;  // UTC epoch when quarantine lifts
 };
 
 // #region CLASS_TimeSync

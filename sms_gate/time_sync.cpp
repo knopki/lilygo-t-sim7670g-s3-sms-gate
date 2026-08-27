@@ -277,14 +277,16 @@ void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
     published_.stratum = 0;
     published_.dispersionMs = 0;
     published_.quarantined = false;
-    published_.quarantinedUntilMs = 0;
+    published_.quarantinedUntilEpochMs = 0;
     return;
   }
   const TimeSample& s = samples_[static_cast<uint8_t>(best)];
   disciplineAt(s, wallMs, nowMs);
   published_.source = best;
-  published_.lastSyncMs = s.receivedMs;
-  published_.epochMs = s.epochMs;
+  published_.lastSyncEpochMs = s.epochMs;
+  // Live "now": sample epoch extrapolated by its age (same formula as
+  // disciplineAt) so consumers see a ticking clock between polls.
+  published_.epochMs = s.epochMs + (int64_t)(nowMs - s.receivedMs);
   if (best == TimeSource::kGnss) {
     published_.stratum = 1;
     published_.dispersionMs = 150;
@@ -299,7 +301,8 @@ void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
   uint8_t bidx = static_cast<uint8_t>(best);
   if (quarantineUntilMs_[bidx] != 0 && nowMs < quarantineUntilMs_[bidx]) {
     published_.quarantined = true;
-    published_.quarantinedUntilMs = quarantineUntilMs_[bidx];
+    published_.quarantinedUntilEpochMs =
+        published_.epochMs + (int64_t)(quarantineUntilMs_[bidx] - nowMs);
   } else {
     // If best is not quarantined but any source is, still report max quarantine for observability.
     uint32_t maxQ = 0;
@@ -311,7 +314,7 @@ void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
       }
     }
     published_.quarantined = any;
-    published_.quarantinedUntilMs = maxQ;
+    published_.quarantinedUntilEpochMs = any ? published_.epochMs + (int64_t)(maxQ - nowMs) : 0;
   }
 }
 
