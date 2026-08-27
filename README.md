@@ -332,6 +332,16 @@ All host tests are part of the minimum local verification. Run the full suite:
 mise run test
 ```
 
+### NTP server conformance probe
+
+With the device on the LAN, verify the UDP/123 reply form against the
+acceptance rules chrony and ntpd apply (normal reply, VN clamp, mode
+filter, KoD RATE above 20 req/s):
+
+```bash
+python3 tools/ntp_probe.py sms-gate-<MAC>.local
+```
+
 
 ## Next steps
 
