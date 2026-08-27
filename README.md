@@ -249,7 +249,11 @@ Re-run the generator after editing anything under `www/`.
 
 Board and port settings are versioned in `sms_gate/sketch.yaml`. The sketch-local `sms_gate/partitions.csv` is part of the firmware contract: it adds the dedicated `appcfg` partition and must be built and flashed with the sketch.
 
-If the bootloader is not detected, hold `BOOT`, press and release `RST`, release `BOOT`, then retry the upload.
+Uploads use the hardware USB-Serial/JTAG peripheral, so `arduino-cli
+upload` resets the board into download mode automatically; no `BOOT`/`RST`
+key sequence is required in normal operation. If the bootloader is still not
+detected, hold `BOOT`, press and release `RST`, release `BOOT`, then retry the
+upload.
 
 ### Arduino IDE
 
@@ -257,9 +261,9 @@ If the bootloader is not detected, hold `BOOT`, press and release `RST`, release
    tools/gen_assets.py`.
 2. Open `sms_gate/sms_gate.ino`. 3. Select **ESP32S3 Dev Module** and
    `/dev/ttyACM0`.
-4. Under `Tools`, set: `USB CDC On Boot: Enabled`, `Flash Mode: QIO 80MHz`,
-   `Flash Size: 16MB (128Mb)`, `PSRAM: QSPI PSRAM`, and `Partition Scheme: 16M
-   Flash (3MB APP/9.9MB FATFS)`.
+4. Under `Tools`, set: `USB Mode: Hardware CDC and JTAG`, `USB CDC On Boot:
+   Enabled`, `Flash Mode: QIO 80MHz`, `Flash Size: 16MB (128Mb)`, `PSRAM: QSPI
+   PSRAM`, and `Partition Scheme: 16M Flash (3MB APP/9.9MB FATFS)`.
 5. Upload the sketch and open Serial Monitor at `115200` baud.
 
 The sketch-local `partitions.csv` overrides the selected partition CSV during
