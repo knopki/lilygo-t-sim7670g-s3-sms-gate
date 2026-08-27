@@ -46,10 +46,10 @@
 
 		<h2>Settings</h2>
 		<form id="gps-form">
-			<label class="checkbox"><input type="checkbox" name="module_enabled">Enable GNSS module (device &amp; task)</label>
-			<label class="checkbox"><input type="checkbox" name="poll_enabled">Enable polling (requires module)</label>
-			<label class="checkbox"><input type="checkbox" name="time_sync">Enable time sync from GNSS (requires polling)</label>
-			<label>Poll interval, seconds<input type="number" name="poll_interval" min="5" max="300" value="60" required></label>
+			<label class="checkbox"><input type="checkbox" name="module_enabled" data-field="module_enabled">Enable GNSS module (device &amp; task)</label>
+			<label class="checkbox"><input type="checkbox" name="poll_enabled" data-field="poll_enabled">Enable polling (requires module)</label>
+			<label class="checkbox"><input type="checkbox" name="time_sync" data-field="time_sync">Enable time sync from GNSS (requires polling)</label>
+			<label>Poll interval, seconds<input type="number" name="poll_interval" data-field="poll_interval" min="5" max="300" value="60" required></label>
 			<p class="hint">The active antenna needs a clear sky view for a fix.</p>
 			<div class="controls">
 				<button type="submit">Save</button>

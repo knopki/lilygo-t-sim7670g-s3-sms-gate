@@ -41,9 +41,9 @@
 
 		<h2>NTP servers</h2>
 		<form id="ntp-form">
-			<label class="checkbox"><input type="checkbox" name="ntp_enabled">Enable SNTP time sync</label>
-			<label>Primary NTP server<input name="ntp_server1" maxlength="64" autocomplete="off" class="mono"></label>
-			<label>Secondary NTP server<input name="ntp_server2" maxlength="64" autocomplete="off" class="mono"></label>
+			<label class="checkbox"><input type="checkbox" name="ntp_enabled" data-field="ntp_enabled">Enable SNTP time sync</label>
+			<label>Primary NTP server<input name="ntp_server1" data-field="ntp_server1" maxlength="64" autocomplete="off" class="mono"></label>
+			<label>Secondary NTP server<input name="ntp_server2" data-field="ntp_server2" maxlength="64" autocomplete="off" class="mono"></label>
 			<p class="hint">Leave both fields empty to use the built-in defaults. Changes apply immediately.</p>
 			<div class="controls">
 				<button type="submit">Save</button>
