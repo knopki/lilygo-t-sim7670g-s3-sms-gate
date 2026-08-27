@@ -32,6 +32,34 @@ function formatDuration(ms) {
 	return days > 0 ? `${days} d ${hhmmss}` : hhmmss;
 }
 
+// Mirrors esp_reset_reason_t (esp_system.h, Arduino-ESP32 3.3.11), 0-based.
+const RESET_REASONS = [
+	"Unknown",
+	"Power-on reset",
+	"External pin reset",
+	"Software restart",
+	"Exception/panic reset",
+	"Interrupt watchdog reset",
+	"Task watchdog reset",
+	"Watchdog reset",
+	"Deep sleep wake",
+	"Brownout reset",
+	"SDIO reset",
+	"USB reset",
+	"JTAG reset",
+	"eFuse error reset",
+	"Power glitch reset",
+	"CPU lockup reset",
+];
+
+function describeResetReason(code) {
+	if (!Number.isFinite(code)) {
+		return "—";
+	}
+	const reason = RESET_REASONS[code];
+	return reason ? `${reason} (${code})` : `Unknown (${code})`;
+}
+
 async function loadWatchdog() {
 	const { response, payload } = await apiFetch("/api/watchdog");
 	if (!response.ok || !payload) {
@@ -41,7 +69,7 @@ async function loadWatchdog() {
 		safe_mode: payload.safe_mode ? "active" : "inactive",
 		boot_count: String(payload.boot_count ?? "—"),
 		timeout: `${payload.timeout_sec} s`,
-		last_reset_reason: payload.last_reset_reason ?? "—",
+		last_reset_reason: describeResetReason(payload.last_reset_reason),
 		uptime: formatDuration(payload.uptime_ms),
 	});
 	clearButton.hidden = payload.safe_mode !== true;
