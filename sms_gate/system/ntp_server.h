@@ -11,9 +11,10 @@
 //   buckets, interleaved mode (RFC 9769), hardware timestamping.
 // INVARIANTS: Only serves when WiFi connected and stratum>0; never steps
 // clock; stratum/dispersion from TimeSync::state(); answers mode-3 requests
-// only (anti-reflection); KoD echoes the client transmit timestamp in
-// org/rec/xmt (ntpd requirement) and zeroes root delay/dispersion;
-// per-request logs throttled to 1/s.
+// only (anti-reflection); drains every received datagram (short or
+// oversized) so a stray packet cannot wedge reception; KoD echoes the
+// client transmit timestamp in org/rec/xmt (ntpd requirement) and zeroes
+// root delay/dispersion; per-request logs throttled to 1/s.
 // DEPENDENCIES: WiFiUDP, TimeSync, gettimeofday.
 // #endregion MODULE_CONTRACT
 

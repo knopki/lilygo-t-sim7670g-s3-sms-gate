@@ -129,6 +129,15 @@ def main():
         _, resp = cli.query(mode=mode)
         check(f"mode {mode} request ignored", resp is None)
 
+    # --- stray-datagram recovery ----------------------------------------
+    # A short (<48 B) or oversized (>48 B) datagram used to wedge reception
+    # forever: NetworkUDP::parsePacket() returns 0 while the previous packet
+    # stays unread. After both junk datagrams the server must still answer.
+    cli.sock.sendto(bytes([0x1B]) + 19 * b"\0", cli.addr)   # 20 B short
+    cli.sock.sendto(bytes([0x1F]) + 79 * b"\0", cli.addr)  # 80 B oversized
+    _, resp = cli.query()
+    check("server survives stray short/oversized datagrams", resp is not None)
+
     # --- KoD RATE burst (last: drains the per-second budget) ------------
     kod_ok = False
     kod_detail = "no RATE reply in burst"

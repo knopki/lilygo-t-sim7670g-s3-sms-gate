@@ -80,13 +80,19 @@ void NtpServer::loop() {
     if (!started_) return;
   }
   int packetSize = udp.parsePacket();
-  if (packetSize < (int)kNtpPacketSize) return;
+  if (packetSize <= 0) return;
 
   const uint32_t nowMs = millis();
   uint8_t req[kNtpPacketSize] = {};
-  udp.read(req, kNtpPacketSize);
+  const int got = udp.read(req, kNtpPacketSize);
+  // Drain any remainder NOW: NetworkUDP::parsePacket() returns 0 forever
+  // while the previous datagram is unread (rx_buffer check), so a stray
+  // short (<48 B) or oversized (>48 B) datagram would otherwise deafen the
+  // server until reset (observed: HTTP alive, NTP silent).
+  udp.flush();
   IPAddress remoteIp = udp.remoteIP();
   uint16_t remotePort = udp.remotePort();
+  if (packetSize < (int)kNtpPacketSize || got < (int)kNtpPacketSize) return;
 
   const TimeState st = timeSync_.state();
   if (st.stratum == 0) {
