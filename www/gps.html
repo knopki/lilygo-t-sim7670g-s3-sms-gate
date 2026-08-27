@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<meta name="color-scheme" content="light dark">
+	<title>GPS · SMS Gate</title>
+	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header class="site-header">
+		<h1>SMS Gate</h1>
+		<p id="banner" class="banner" hidden></p>
+	</header>
+	<nav class="site-nav" aria-label="Configuration pages">
+		<ul>
+			<li><a href="/wifi">Wi-Fi</a></li>
+			<li><a href="/admin">Admin</a></li>
+			<li><a href="/email">E-mail</a></li>
+			<li><a href="/time">Time Sync</a></li>
+			<li><a href="/modem">Modem</a></li>
+			<li><a href="/zte">ZTE MF79RU</a></li>
+			<li><a href="/gps" aria-current="page">GPS</a></li>
+			<li><a href="/sms">SMS</a></li>
+		</ul>
+	</nav>
+	<main id="content">
+		<noscript>
+			<p class="error">This page requires a JavaScript-capable browser.</p>
+		</noscript>
+		<h2>Status</h2>
+		<dl class="status" id="gps-status">
+			<dt>Module</dt><dd data-field="present"></dd>
+			<dt>Power</dt><dd data-field="powered"></dd>
+			<dt>Fix</dt><dd data-field="fix"></dd>
+			<dt>Mode</dt><dd data-field="mode"></dd>
+			<dt>Satellites</dt><dd data-field="satellites"></dd>
+			<dt>Latitude</dt><dd data-field="latitude" class="mono"></dd>
+			<dt>Longitude</dt><dd data-field="longitude" class="mono"></dd>
+			<dt>Altitude, m</dt><dd data-field="altitude" class="mono"></dd>
+			<dt>Speed</dt><dd data-field="speed" class="mono"></dd>
+			<dt>Course</dt><dd data-field="course" class="mono"></dd>
+			<dt>Fix time (UTC)</dt><dd data-field="time" class="mono"></dd>
+		</dl>
+
+		<h2>Settings</h2>
+		<form id="gps-form">
+			<label class="checkbox"><input type="checkbox" name="module_enabled">Enable GNSS module (device &amp; task)</label>
+			<label class="checkbox"><input type="checkbox" name="poll_enabled">Enable polling (requires module)</label>
+			<label class="checkbox"><input type="checkbox" name="time_sync">Enable time sync from GNSS (requires polling)</label>
+			<label>Poll interval, seconds<input type="number" name="poll_interval" min="5" max="300" value="60" required></label>
+			<p class="hint">The active antenna needs a clear sky view for a fix.</p>
+			<div class="controls">
+				<button type="submit">Save</button>
+			</div>
+		</form>
+	</main>
+	<script type="module" src="/js/gps.js"></script>
+</body>
+</html>

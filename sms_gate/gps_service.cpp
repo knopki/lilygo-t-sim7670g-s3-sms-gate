@@ -50,8 +50,6 @@ WebGpsConfig GpsService::webConfig() const {
   web.present = loaded_;
   web.moduleEnabled = loaded_ ? stored_.moduleEnabled : false;
   web.pollEnabled = loaded_ ? stored_.pollEnabled : false;
-  // compat: enabled = module && poll
-  web.enabled = loaded_ ? (stored_.moduleEnabled && stored_.pollEnabled) : false;
   web.pollIntervalSec = loaded_ ? stored_.pollIntervalSec : kDefaultGpsPollSec;
   web.timeSyncEnabled = loaded_ ? stored_.timeSyncEnabled : true;
   // lastStatus derived from current GpsStatus fix/power for quick UI hint
@@ -95,10 +93,6 @@ WebGpsStatus GpsService::webStatus() const {
 // #region METHOD_GpsService_readForm
 bool GpsService::readForm(WebServer& server, RuntimeGpsConfig& out, String& error) {
   out.moduleEnabled = server.arg("module_enabled") == F("1");
-  // backward compat: if module_enabled missing but enabled present, map it
-  if (!server.hasArg("module_enabled") && server.hasArg("enabled")) {
-    out.moduleEnabled = server.arg("enabled") == F("1");
-  }
   out.pollEnabled = server.arg("poll_enabled") == F("1");
   if (!server.hasArg("poll_enabled")) {
     // if only module flag given, default poll = module (migration friendliness)

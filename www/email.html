@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<meta name="color-scheme" content="light dark">
+	<title>E-mail · SMS Gate</title>
+	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header class="site-header">
+		<h1>SMS Gate</h1>
+		<p id="banner" class="banner" hidden></p>
+	</header>
+	<nav class="site-nav" aria-label="Configuration pages">
+		<ul>
+			<li><a href="/wifi">Wi-Fi</a></li>
+			<li><a href="/admin">Admin</a></li>
+			<li><a href="/email" aria-current="page">E-mail</a></li>
+			<li><a href="/time">Time Sync</a></li>
+			<li><a href="/modem">Modem</a></li>
+			<li><a href="/zte">ZTE MF79RU</a></li>
+			<li><a href="/gps">GPS</a></li>
+			<li><a href="/sms">SMS</a></li>
+		</ul>
+	</nav>
+	<main id="content">
+		<noscript>
+			<p class="error">This page requires a JavaScript-capable browser.</p>
+		</noscript>
+		<h2>SMTP settings</h2>
+		<p class="hint">Forwarded SMS messages and test emails are sent through this SMTP account. An empty password keeps the stored one.</p>
+		<form id="smtp-form">
+			<label>Host<input name="host" required maxlength="127" autocomplete="off" class="mono"></label>
+			<label>Port<input type="number" name="port" required min="1" max="65535" value="587"></label>
+			<label>Security
+				<select name="security">
+					<option value="starttls">STARTTLS (port 587)</option>
+					<option value="implicit">Implicit TLS (port 465)</option>
+				</select>
+			</label>
+			<label>Username<input name="username" required maxlength="127" autocomplete="off"></label>
+			<label>SMTP password<input type="password" name="password" maxlength="95" autocomplete="new-password" placeholder="Enter password"></label>
+			<label>From address<input type="email" name="from" required maxlength="127" autocomplete="off"></label>
+			<label>Recipient address<input type="email" name="recipient" required maxlength="127" autocomplete="off"></label>
+			<div class="controls">
+				<button type="submit">Save</button>
+			</div>
+		</form>
+
+		<h2>Test</h2>
+		<p class="hint">Sends a test email using the values currently entered in the form above.</p>
+		<div class="controls">
+			<button type="button" id="smtp-test">Send test email</button>
+		</div>
+	</main>
+	<script type="module" src="/js/email.js"></script>
+</body>
+</html>

@@ -88,8 +88,6 @@ WebZteConfig ZteService::webConfig() const {
   web.present = loaded_ && stored_.host.length() > 0;
   web.moduleEnabled = web.present && stored_.moduleEnabled;
   web.forwardEnabled = web.present && stored_.forwardEnabled;
-  // compat: enabled = module && forward
-  web.enabled = web.present && stored_.moduleEnabled && stored_.forwardEnabled;
   web.host = web.present ? stored_.host : String();
   web.passwordSet = web.present && stored_.password.length() > 0;
   web.label = web.present ? stored_.label : String();
@@ -104,12 +102,6 @@ WebZteConfig ZteService::webConfig() const {
 bool ZteService::readForm(WebServer& server, RuntimeZteConfig& out, String& error) {
   out.moduleEnabled = server.arg("module_enabled") == F("1");
   out.forwardEnabled = server.arg("forward_enabled") == F("1");
-  // backward compat
-  if (!server.hasArg("module_enabled") && server.hasArg("enabled")) {
-    bool legacy = server.arg("enabled") == F("1");
-    out.moduleEnabled = legacy;
-    out.forwardEnabled = legacy;
-  }
   if (!server.hasArg("forward_enabled") && server.hasArg("module_enabled")) {
     out.forwardEnabled = out.moduleEnabled;
   }

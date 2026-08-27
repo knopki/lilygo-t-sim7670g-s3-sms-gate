@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<meta name="color-scheme" content="light dark">
+	<title>SMS · SMS Gate</title>
+	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header class="site-header">
+		<h1>SMS Gate</h1>
+		<p id="banner" class="banner" hidden></p>
+	</header>
+	<nav class="site-nav" aria-label="Configuration pages">
+		<ul>
+			<li><a href="/wifi">Wi-Fi</a></li>
+			<li><a href="/admin">Admin</a></li>
+			<li><a href="/email">E-mail</a></li>
+			<li><a href="/time">Time Sync</a></li>
+			<li><a href="/modem">Modem</a></li>
+			<li><a href="/zte">ZTE MF79RU</a></li>
+			<li><a href="/gps">GPS</a></li>
+			<li><a href="/sms" aria-current="page">SMS</a></li>
+		</ul>
+	</nav>
+	<main id="content">
+		<noscript>
+			<p class="error">This page requires a JavaScript-capable browser.</p>
+		</noscript>
+		<h2>Send SMS</h2>
+		<form id="sms-form" hidden>
+			<label>Send via<select name="via" id="via-select"></select></label>
+			<label>Recipient<input name="to" maxlength="20" autocomplete="off" class="mono" placeholder="+79990001122"></label>
+			<label>Message<textarea name="text" rows="6" maxlength="670" id="sms-text"></textarea></label>
+			<p class="hint" id="sms-counter">0 units · 0 segments · UCS-2 · limit 335 units</p>
+			<div class="controls">
+				<button type="submit">Send</button>
+			</div>
+		</form>
+		<p id="sms-disabled-hint" class="hint" hidden>No enabled modem was found. Enable the <a href="/modem">internal modem</a> or the <a href="/zte">ZTE MF79RU</a>, then reload this page.</p>
+		<template id="via-option">
+			<option></option>
+		</template>
+	</main>
+	<script type="module" src="/js/sms.js"></script>
+</body>
+</html>

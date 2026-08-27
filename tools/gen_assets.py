@@ -16,9 +16,24 @@ OUT_PATH = ROOT / "sms_gate" / "web_assets.h"
 
 # (file name, HTTP route, content type, array identifier)
 ASSETS = [
-    ("index.html", "/", "text/html; charset=utf-8", "kIndexHtml"),
-    ("app.js", "/app.js", "text/javascript; charset=utf-8", "kAppJs"),
     ("style.css", "/style.css", "text/css; charset=utf-8", "kStyleCss"),
+    ("wifi.html", "/wifi", "text/html; charset=utf-8", "kWifiHtml"),
+    ("admin.html", "/admin", "text/html; charset=utf-8", "kAdminHtml"),
+    ("email.html", "/email", "text/html; charset=utf-8", "kEmailHtml"),
+    ("time.html", "/time", "text/html; charset=utf-8", "kTimeHtml"),
+    ("modem.html", "/modem", "text/html; charset=utf-8", "kModemHtml"),
+    ("zte.html", "/zte", "text/html; charset=utf-8", "kZteHtml"),
+    ("gps.html", "/gps", "text/html; charset=utf-8", "kGpsHtml"),
+    ("sms.html", "/sms", "text/html; charset=utf-8", "kSmsHtml"),
+    ("js/main.js", "/js/main.js", "text/javascript; charset=utf-8", "kMainJs"),
+    ("js/wifi.js", "/js/wifi.js", "text/javascript; charset=utf-8", "kWifiJs"),
+    ("js/admin.js", "/js/admin.js", "text/javascript; charset=utf-8", "kAdminJs"),
+    ("js/email.js", "/js/email.js", "text/javascript; charset=utf-8", "kEmailJs"),
+    ("js/time.js", "/js/time.js", "text/javascript; charset=utf-8", "kTimeJs"),
+    ("js/modem.js", "/js/modem.js", "text/javascript; charset=utf-8", "kModemJs"),
+    ("js/zte.js", "/js/zte.js", "text/javascript; charset=utf-8", "kZteJs"),
+    ("js/gps.js", "/js/gps.js", "text/javascript; charset=utf-8", "kGpsJs"),
+    ("js/sms.js", "/js/sms.js", "text/javascript; charset=utf-8", "kSmsJs"),
 ]
 
 

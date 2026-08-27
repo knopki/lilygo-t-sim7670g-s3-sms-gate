@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<meta name="color-scheme" content="light dark">
+	<title>Wi-Fi · SMS Gate</title>
+	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header class="site-header">
+		<h1>SMS Gate</h1>
+		<p id="banner" class="banner" hidden></p>
+	</header>
+	<nav class="site-nav" aria-label="Configuration pages">
+		<ul>
+			<li><a href="/wifi" aria-current="page">Wi-Fi</a></li>
+			<li><a href="/admin">Admin</a></li>
+			<li><a href="/email">E-mail</a></li>
+			<li><a href="/time">Time Sync</a></li>
+			<li><a href="/modem">Modem</a></li>
+			<li><a href="/zte">ZTE MF79RU</a></li>
+			<li><a href="/gps">GPS</a></li>
+			<li><a href="/sms">SMS</a></li>
+		</ul>
+	</nav>
+	<main id="content">
+		<noscript>
+			<p class="error">This page requires a JavaScript-capable browser.</p>
+		</noscript>
+		<section id="setup-section" hidden>
+			<h2>Initial setup</h2>
+			<p class="hint">Connect the device to your Wi-Fi network and set the administrator password. The password protects the web interface and the fallback access point used when Wi-Fi is unreachable.</p>
+			<form id="setup-form">
+				<label>Network name (SSID)<input name="ssid" required maxlength="32" autocomplete="off"></label>
+				<label>Wi-Fi password<input type="password" name="wifi_password" required minlength="8" maxlength="63" autocomplete="new-password"></label>
+				<label>Administrator password<input type="password" name="admin_password" required minlength="8" maxlength="63" autocomplete="new-password"></label>
+				<label>Confirm administrator password<input type="password" name="admin_password_confirm" required minlength="8" maxlength="63" autocomplete="new-password"></label>
+				<div class="controls">
+					<button type="submit">Save and connect</button>
+					<button type="button" id="setup-scan-button">Scan networks</button>
+				</div>
+			</form>
+			<div id="setup-picker" class="picker" hidden></div>
+		</section>
+
+		<section id="wifi-section" hidden>
+			<h2>Status</h2>
+			<dl class="status" id="wifi-status">
+				<dt>Mode</dt><dd data-field="mode"></dd>
+				<dt>Network (SSID)</dt><dd data-field="ssid"></dd>
+				<dt>IP address</dt><dd data-field="station_ip" class="mono"></dd>
+				<dt>Signal</dt><dd data-field="rssi"></dd>
+				<dt>Station MAC</dt><dd data-field="mac" class="mono"></dd>
+				<dt>mDNS host</dt><dd data-field="mdns_hostname" class="mono"></dd>
+				<dt>Last error</dt><dd data-field="last_error"></dd>
+			</dl>
+			<h2>Change network</h2>
+			<p class="hint">The saved password is never sent back to the browser, so it must be re-entered with every change.</p>
+			<form id="network-form">
+				<label>Network name (SSID)<input name="ssid" required maxlength="32" autocomplete="off"></label>
+				<label>Wi-Fi password<input type="password" name="wifi_password" required minlength="8" maxlength="63" autocomplete="new-password" placeholder="Enter Wi-Fi password"></label>
+				<div class="controls">
+					<button type="submit">Save and reconnect</button>
+					<button type="button" id="scan-button">Scan networks</button>
+				</div>
+			</form>
+			<div id="network-picker" class="picker" hidden></div>
+		</section>
+
+		<template id="network-row">
+			<button type="button" class="picker-item">
+				<span class="picker-ssid"></span>
+				<span class="picker-meta"></span>
+			</button>
+		</template>
+	</main>
+	<script type="module" src="/js/wifi.js"></script>
+</body>
+</html>

@@ -3,13 +3,16 @@
 // the SendGate (single-flight) guards so sms_gate.ino only drives
 // setup/loop and lifecycle delegation.
 // SCOPE:
-// - 24 HTTP routes: /, /app.js, /style.css, GET /api/status, GET
-//   /api/scan, POST /api/setup, POST /api/network, POST /api/password,
-//   GET/POST /api/smtp, POST/GET /api/smtp/test, GET/POST /api/zte,
-//   POST/GET /api/zte/test, POST/GET /api/zte/send, POST/GET
-//   /api/modem/send, POST /api/sms/send (via=zte|modem), GET
-//   /api/modem/status, GET/POST /api/modem/source, and the 302/404
-//   captive-portal NotFound handler; Digest authentication against the
+// - Full route table: /style.css, /js/main.js and /js/<page>.js (public,
+//   secret-free assets), the eight pages /wifi../sms Digest-gated once
+//   initial setup is done, GET / 302-redirecting to /wifi,
+//   GET /api/status, GET /api/scan, POST /api/setup, POST /api/network,
+//   GET/POST /api/ntp, POST /api/password, GET/POST /api/smtp,
+//   POST/GET /api/smtp/test, GET/POST /api/zte, POST/GET /api/zte/test,
+//   GET /api/zte/send and /api/modem/send (send progress only),
+//   POST /api/sms/send (via=zte|modem), GET /api/modem/status,
+//   GET/POST /api/modem/source, and the 302/404 captive-portal
+//   NotFound handler; Digest authentication against the
 //   stored admin password (realm "SMS Gate", user "admin"); JSON error
 //   envelope, candidate Wi-Fi validation, and the common SendGate helper
 //   that serialises outgoing SMS against poll/test/send busy states.
@@ -56,6 +59,7 @@ class HttpServer {
  private:
   bool requireAuthentication();
   void sendJsonError(int code, const String& error);
+  bool readWifiCredentials(RuntimeConfig& candidate, String& error);
   bool readCandidateConfig(RuntimeConfig& candidate, String& error);
   bool checkCommonSendBusy(String& error, int& code);
   int mapModemSendErrorToHttpCode(const String& error) const;
@@ -66,6 +70,8 @@ class HttpServer {
   void handleScanRequest();
   void handleSetupSubmission();
   void handleNetworkSubmission();
+  void handleNtpConfigRequest();
+  void handleNtpSaveSubmission();
   void handlePasswordSubmission();
   void handleSmtpConfigRequest();
   void handleSmtpSaveSubmission();
@@ -75,12 +81,10 @@ class HttpServer {
   void handleZteSaveSubmission();
   void handleZteTestStart();
   void handleZteTestStatus();
-  void handleZteSendStart();
   void handleZteSendStatus();
   void handleModemStatusRequest();
   void handleModemSourceRequest();
   void handleModemSourceSave();
-  void handleModemSendStart();
   void handleModemSendStatus();
   void handleSmsSendStart();
   void handleGpsConfigRequest();
@@ -89,6 +93,8 @@ class HttpServer {
   void handleTimeStatusRequest();
   void handleWatchdogStatusRequest();
   void handleWatchdogClearRequest();
+  void handleRootRedirect();
+  void sendPage(const char* path);
   void handleNotFound();
 
   WebServer& server_;

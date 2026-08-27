@@ -71,8 +71,6 @@ WebModemSourceConfig ModemService::webSourceConfig() const {
   web.label = loaded_ ? stored_.label : String();
   web.nitzTimeSyncEnabled = loaded_ ? stored_.nitzTimeSyncEnabled : true;
   web.smsPollEnabled = loaded_ ? stored_.smsPollEnabled : false;
-  // compat: enabled = module && poll && sms ? For old clients treat as sms polling
-  web.enabled = loaded_ ? (stored_.moduleEnabled && stored_.smsPollEnabled) : false;
   web.lastStatus = String();
   return web;
 }
@@ -112,13 +110,6 @@ bool ModemService::readSourceForm(WebServer& server, RuntimeModemSourceConfig& o
   out.pollEnabled = server.arg("poll_enabled") == F("1");
   out.smsPollEnabled = server.arg("sms_poll") == F("1");
   out.nitzTimeSyncEnabled = server.arg("nitz_time_sync") == F("1");
-  // backward compat: old enabled -> module+poll+sms
-  if (!server.hasArg("module_enabled") && server.hasArg("enabled")) {
-    bool legacy = server.arg("enabled") == F("1");
-    out.moduleEnabled = legacy;
-    out.pollEnabled = legacy;
-    out.smsPollEnabled = legacy;
-  }
   // defaults when fields missing (old clients)
   if (!server.hasArg("poll_enabled") && server.hasArg("module_enabled")) {
     out.pollEnabled = out.moduleEnabled;

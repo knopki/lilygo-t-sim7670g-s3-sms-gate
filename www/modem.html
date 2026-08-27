@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<meta name="color-scheme" content="light dark">
+	<title>Modem · SMS Gate</title>
+	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header class="site-header">
+		<h1>SMS Gate</h1>
+		<p id="banner" class="banner" hidden></p>
+	</header>
+	<nav class="site-nav" aria-label="Configuration pages">
+		<ul>
+			<li><a href="/wifi">Wi-Fi</a></li>
+			<li><a href="/admin">Admin</a></li>
+			<li><a href="/email">E-mail</a></li>
+			<li><a href="/time">Time Sync</a></li>
+			<li><a href="/modem" aria-current="page">Modem</a></li>
+			<li><a href="/zte">ZTE MF79RU</a></li>
+			<li><a href="/gps">GPS</a></li>
+			<li><a href="/sms">SMS</a></li>
+		</ul>
+	</nav>
+	<main id="content">
+		<noscript>
+			<p class="error">This page requires a JavaScript-capable browser.</p>
+		</noscript>
+		<h2>Status</h2>
+		<dl class="status" id="modem-status">
+			<dt>Module</dt><dd data-field="present"></dd>
+			<dt>SIM (CPIN)</dt><dd data-field="cpin"></dd>
+			<dt>Signal</dt><dd data-field="signal"></dd>
+			<dt>RSRP</dt><dd data-field="rsrp"></dd>
+			<dt>RSRQ</dt><dd data-field="rsrq"></dd>
+			<dt>BER</dt><dd data-field="ber"></dd>
+			<dt>Registration (CEREG)</dt><dd data-field="cereg"></dd>
+			<dt>Packet attached</dt><dd data-field="attached"></dd>
+			<dt>Operator</dt><dd data-field="operator"></dd>
+			<dt>Modem clock</dt><dd data-field="clock" class="mono"></dd>
+			<dt>SMS storage (device)</dt><dd data-field="storage_device"></dd>
+			<dt>SMS storage (SIM)</dt><dd data-field="storage_sim"></dd>
+			<dt>IMEI</dt><dd data-field="imei" class="mono"></dd>
+			<dt>Firmware</dt><dd data-field="firmware" class="mono"></dd>
+		</dl>
+
+		<h2>Settings</h2>
+		<form id="source-form">
+			<label class="checkbox"><input type="checkbox" name="module_enabled">Enable modem module (device &amp; task)</label>
+			<label class="checkbox"><input type="checkbox" name="poll_enabled">Enable status polling (requires module)</label>
+			<label class="checkbox"><input type="checkbox" name="sms_poll">Enable SMS polling &amp; forwarding (requires polling)</label>
+			<label class="checkbox"><input type="checkbox" name="nitz_time_sync">Enable NITZ time sync (requires polling)</label>
+			<label>Poll interval, seconds<input type="number" name="poll_interval" min="5" max="300" value="15" required></label>
+			<label>Phone number or alias<input name="label" maxlength="31" placeholder="For example, +79990000000 (modem)" autocomplete="off"></label>
+			<div class="controls">
+				<button type="submit">Save</button>
+			</div>
+		</form>
+		<dl class="status" id="modem-config">
+			<dt>Last poll result</dt><dd data-field="last_status" class="mono"></dd>
+		</dl>
+	</main>
+	<script type="module" src="/js/modem.js"></script>
+</body>
+</html>

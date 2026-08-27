@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<meta name="color-scheme" content="light dark">
+	<title>Time Sync · SMS Gate</title>
+	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header class="site-header">
+		<h1>SMS Gate</h1>
+		<p id="banner" class="banner" hidden></p>
+	</header>
+	<nav class="site-nav" aria-label="Configuration pages">
+		<ul>
+			<li><a href="/wifi">Wi-Fi</a></li>
+			<li><a href="/admin">Admin</a></li>
+			<li><a href="/email">E-mail</a></li>
+			<li><a href="/time" aria-current="page">Time Sync</a></li>
+			<li><a href="/modem">Modem</a></li>
+			<li><a href="/zte">ZTE MF79RU</a></li>
+			<li><a href="/gps">GPS</a></li>
+			<li><a href="/sms">SMS</a></li>
+		</ul>
+	</nav>
+	<main id="content">
+		<noscript>
+			<p class="error">This page requires a JavaScript-capable browser.</p>
+		</noscript>
+		<h2>Status</h2>
+		<dl class="status" id="time-status">
+			<dt>Source</dt><dd data-field="source"></dd>
+			<dt>Stratum</dt><dd data-field="stratum"></dd>
+			<dt>Dispersion</dt><dd data-field="dispersion"></dd>
+			<dt>Current time (UTC)</dt><dd data-field="now" class="mono"></dd>
+			<dt>Last sync</dt><dd data-field="last_sync" class="mono"></dd>
+			<dt>Quarantine</dt><dd data-field="quarantine"></dd>
+		</dl>
+
+		<h2>NTP servers</h2>
+		<form id="ntp-form">
+			<label class="checkbox"><input type="checkbox" name="ntp_enabled">Enable SNTP time sync</label>
+			<label>Primary NTP server<input name="ntp_server1" maxlength="64" autocomplete="off" class="mono"></label>
+			<label>Secondary NTP server<input name="ntp_server2" maxlength="64" autocomplete="off" class="mono"></label>
+			<p class="hint">Leave both fields empty to use the built-in defaults. Changes apply immediately.</p>
+			<div class="controls">
+				<button type="submit">Save</button>
+			</div>
+		</form>
+
+		<h2>How time sync works</h2>
+		<p class="hint">The device arbitrates its clock between three sources by priority: GNSS &gt; SNTP &gt; NITZ. GNSS comes from the <a href="/gps">GPS page</a>, NITZ from the <a href="/modem">internal modem</a>, and SNTP from the servers above. A source that disagrees with the current clock is quarantined before it is trusted.</p>
+	</main>
+	<script type="module" src="/js/time.js"></script>
+</body>
+</html>

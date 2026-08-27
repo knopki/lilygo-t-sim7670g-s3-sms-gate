@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<meta name="color-scheme" content="light dark">
+	<title>ZTE MF79RU · SMS Gate</title>
+	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header class="site-header">
+		<h1>SMS Gate</h1>
+		<p id="banner" class="banner" hidden></p>
+	</header>
+	<nav class="site-nav" aria-label="Configuration pages">
+		<ul>
+			<li><a href="/wifi">Wi-Fi</a></li>
+			<li><a href="/admin">Admin</a></li>
+			<li><a href="/email">E-mail</a></li>
+			<li><a href="/time">Time Sync</a></li>
+			<li><a href="/modem">Modem</a></li>
+			<li><a href="/zte" aria-current="page">ZTE MF79RU</a></li>
+			<li><a href="/gps">GPS</a></li>
+			<li><a href="/sms">SMS</a></li>
+		</ul>
+	</nav>
+	<main id="content">
+		<noscript>
+			<p class="error">This page requires a JavaScript-capable browser.</p>
+		</noscript>
+		<h2>Settings</h2>
+		<form id="zte-form">
+			<label class="checkbox"><input type="checkbox" name="module_enabled">Enable ZTE module (device &amp; task)</label>
+			<label class="checkbox"><input type="checkbox" name="forward_enabled">Enable SMS polling &amp; forwarding (requires module)</label>
+			<label>Host<input name="host" required maxlength="63" placeholder="192.168.0.1" autocomplete="off" class="mono"></label>
+			<label>Modem web password<input type="password" name="password" maxlength="63" autocomplete="new-password" placeholder="Enter password"></label>
+			<label>Poll interval, seconds<input type="number" name="poll_interval" min="5" max="300" value="15" required></label>
+			<label>Phone number or alias<input name="label" maxlength="31" placeholder="For example, +79990000000 (ZTE)" autocomplete="off"></label>
+			<p class="hint">The alias is shown in forwarded emails as the “Received on” line, so you can tell which SIM the message arrived on.</p>
+			<div class="controls">
+				<button type="submit">Save</button>
+			</div>
+		</form>
+		<dl class="status" id="zte-config">
+			<dt>Last poll result</dt><dd data-field="last_status" class="mono"></dd>
+		</dl>
+
+		<h2>Connection test</h2>
+		<p class="hint">Runs a login and status request against the host using the values currently entered in the form above.</p>
+		<div class="controls">
+			<button type="button" id="zte-test">Run test</button>
+		</div>
+	</main>
+	<script type="module" src="/js/zte.js"></script>
+</body>
+</html>

@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include "persistence/config_store_common.h"
+#include "system/ntp_validate.h"
 #include "system/sms_validate.h"
 #include "system/watchdog.h"
 #include "system/web_api.h"
@@ -54,9 +55,10 @@ void HttpServer::sendJsonError(int code, const String& error) {
   sendJson(server_, code, renderErrorJson(error));
 }
 // #endregion METHOD_sendJsonError
-// #region METHOD_readCandidateConfig
-// PURPOSE: Validates form data before a station connection test.
-bool HttpServer::readCandidateConfig(RuntimeConfig& candidate, String& error) {
+// #region METHOD_readWifiCredentials
+// PURPOSE: Validates the SSID and Wi-Fi password form fields shared by
+// POST /api/setup and POST /api/network.
+bool HttpServer::readWifiCredentials(RuntimeConfig& candidate, String& error) {
   candidate.ssid = server_.arg("ssid");
   candidate.wifiPassword = server_.arg("wifi_password");
   if (candidate.ssid.length() == 0 || candidate.ssid.length() > kMaxSsidLength) {
@@ -67,27 +69,23 @@ bool HttpServer::readCandidateConfig(RuntimeConfig& candidate, String& error) {
     error = F("Wi-Fi password must contain 8–63 printable ASCII characters.");
     return false;
   }
+  return true;
+}
+// #endregion METHOD_readWifiCredentials
+// #region METHOD_readCandidateConfig
+// PURPOSE: Validates setup form data (Wi-Fi + optional NTP) before a station
+// connection test.
+bool HttpServer::readCandidateConfig(RuntimeConfig& candidate, String& error) {
+  if (!readWifiCredentials(candidate, error)) {
+    return false;
+  }
   // NTP fields (ADR-0005): optional, 0..64 printable, empty = disabled slot.
   candidate.ntpEnabled = server_.arg("ntp_enabled") == F("1");
   if (!server_.hasArg("ntp_enabled")) candidate.ntpEnabled = true;
-  candidate.ntpServer1 = server_.arg("ntp_server1");
-  candidate.ntpServer2 = server_.arg("ntp_server2");
-  candidate.ntpServer1.trim();
-  candidate.ntpServer2.trim();
-  if (candidate.ntpServer1.length() > kMaxNtpServerLength ||
-      candidate.ntpServer2.length() > kMaxNtpServerLength) {
-    error = F("NTP server must contain up to 64 printable characters.");
+  if (!sanitizeNtpFormStrings(candidate.ntpEnabled, server_.arg("ntp_server1"),
+                              server_.arg("ntp_server2"), candidate.ntpServer1,
+                              candidate.ntpServer2, error)) {
     return false;
-  }
-  if (!isPrintableAscii(candidate.ntpServer1) || !isPrintableAscii(candidate.ntpServer2)) {
-    error = F("NTP server must contain printable ASCII.");
-    return false;
-  }
-  // Apply defaults when enabled but both empty (fresh setup without NTP fields).
-  if (candidate.ntpEnabled && candidate.ntpServer1.length() == 0 &&
-      candidate.ntpServer2.length() == 0) {
-    candidate.ntpServer1 = kDefaultNtpServer1;
-    candidate.ntpServer2 = kDefaultNtpServer2;
   }
   return true;
 }
@@ -115,7 +113,7 @@ bool HttpServer::checkCommonSendBusy(String& error, int& code) {
 // #endregion METHOD_checkCommonSendBusy
 // #region METHOD_mapModemSendErrorToHttpCode
 // PURPOSE: Centralizes string-to-code mapping for modem send failures so
-// handleModemSendStart and handleSmsSendStart share one predicate.
+// handleModemViaSend and handleSmsSendStart share one predicate.
 int HttpServer::mapModemSendErrorToHttpCode(const String& error) const {
   if (error.indexOf(F("already in progress")) >= 0 || error.indexOf(F("poll cycle")) >= 0) {
     return kHttpConflict;
@@ -277,7 +275,7 @@ void HttpServer::handleNetworkSubmission() {
   }
   RuntimeConfig candidate = config_;
   String error;
-  if (!readCandidateConfig(candidate, error)) {
+  if (!readWifiCredentials(candidate, error)) {
     sendJsonError(kHttpBadRequest, error);
     return;
   }
@@ -302,6 +300,43 @@ void HttpServer::handleNetworkSubmission() {
   sendJson(server_, kHttpOk, renderMessageJson(message));
 }
 // #endregion METHOD_handleNetworkSubmission
+// #region METHOD_handleNtpConfigRequest
+// PURPOSE: Serves GET /api/ntp with the stored NTP profile (ADR-0005).
+void HttpServer::handleNtpConfigRequest() {
+  if (config_.ssid.length() > 0 && !requireAuthentication()) return;
+  WebNtpConfig web;
+  web.ntpEnabled = config_.ntpEnabled;
+  web.ntpServer1 = config_.ntpServer1;
+  web.ntpServer2 = config_.ntpServer2;
+  sendJson(server_, kHttpOk, renderNtpConfigJson(web));
+}
+// #endregion METHOD_handleNtpConfigRequest
+// #region METHOD_handleNtpSaveSubmission
+// PURPOSE: Validates, persists and applies the NTP profile so the running
+// SNTP client picks up new servers without a station reconnect.
+void HttpServer::handleNtpSaveSubmission() {
+  Serial.println("event=http_ntp_submit");
+  if (config_.ssid.length() > 0 && !requireAuthentication()) return;
+  RuntimeConfig candidate = config_;
+  String error;
+  const bool enabled = server_.arg("ntp_enabled") == F("1");
+  if (!sanitizeNtpFormStrings(enabled, server_.arg("ntp_server1"), server_.arg("ntp_server2"),
+                              candidate.ntpServer1, candidate.ntpServer2, error)) {
+    sendJsonError(kHttpBadRequest, error);
+    return;
+  }
+  candidate.ntpEnabled = enabled;
+  if (!configStore_.save(candidate)) {
+    sendJsonError(kHttpInternalError, F("The NTP configuration could not be saved."));
+    return;
+  }
+  config_ = candidate;
+  wifi_.startWallClock(config_);
+  Serial.printf("event=ntp_saved enabled=%s server1=%s\n", candidate.ntpEnabled ? "true" : "false",
+                candidate.ntpServer1.c_str());
+  sendJson(server_, kHttpOk, renderMessageJson(F("NTP settings saved.")));
+}
+// #endregion METHOD_handleNtpSaveSubmission
 // #region METHOD_handlePasswordSubmission
 // PURPOSE: Changes admin/fallback-AP password.
 void HttpServer::handlePasswordSubmission() {
@@ -485,44 +520,6 @@ void HttpServer::handleZteTestStatus() {
   sendJson(server_, kHttpOk, renderAsyncOpJson(zte_.testStatus()));
 }
 // #endregion METHOD_handleZteTestStatus
-// #region METHOD_handleZteSendStart
-// PURPOSE: Starts one ZTE outgoing SMS.
-void HttpServer::handleZteSendStart() {
-  Serial.println("event=http_zte_send_submit");
-  if (!requireAuthentication()) {
-    return;
-  }
-  String busyError;
-  int busyCode = kHttpConflict;
-  if (!checkCommonSendBusy(busyError, busyCode)) {
-    sendJsonError(busyCode, busyError);
-    return;
-  }
-  if (WiFi.status() != WL_CONNECTED) {
-    sendJsonError(kHttpBadRequest, F("The device is not connected to a Wi-Fi network."));
-    return;
-  }
-  if (!zte_.isLoaded() || zte_.config().host.length() == 0 ||
-      zte_.config().password.length() == 0) {
-    sendJsonError(kHttpBadRequest,
-                  F("Save the ZTE modem settings (host and password) before sending."));
-    return;
-  }
-  String to;
-  String text;
-  String error;
-  if (!zte_.readSendForm(server_, to, text, error)) {
-    sendJsonError(kHttpBadRequest, error);
-    return;
-  }
-  String sendError;
-  if (!zte_.startSend(to, text, sendError)) {
-    sendJsonError(kHttpUnavailable, sendError);
-    return;
-  }
-  sendJson(server_, kHttpOk, renderMessageJson(F("Send started.")));
-}
-// #endregion METHOD_handleZteSendStart
 // #region METHOD_handleZteSendStatus
 // PURPOSE: Reports ZTE send progress.
 void HttpServer::handleZteSendStatus() {
@@ -575,39 +572,6 @@ void HttpServer::handleModemSourceSave() {
   sendJson(server_, kHttpOk, renderMessageJson(F("Modem source settings saved.")));
 }
 // #endregion METHOD_handleModemSourceSave
-// #region METHOD_handleModemSendStart
-// PURPOSE: Starts one SIM7670G outgoing SMS.
-void HttpServer::handleModemSendStart() {
-  Serial.println("event=http_modem_send_submit");
-  if (!requireAuthentication()) return;
-  String readyError;
-  int readyCode = kHttpUnavailable;
-  // Validate form before readiness so form errors (400) surface before 503.
-  String to;
-  String text;
-  String formError;
-  if (!zte_.readSendForm(server_, to, text, formError)) {
-    sendJsonError(kHttpBadRequest, formError);
-    return;
-  }
-  String busyError;
-  int busyCode = kHttpConflict;
-  if (!checkCommonSendBusy(busyError, busyCode)) {
-    sendJsonError(busyCode, busyError);
-    return;
-  }
-  if (!ensureModemReadyForSend(readyError, readyCode)) {
-    sendJsonError(readyCode, readyError);
-    return;
-  }
-  String sendError;
-  if (!modem_.startSend(to, text, sendError)) {
-    sendJsonError(mapModemSendErrorToHttpCode(sendError), sendError);
-    return;
-  }
-  sendJson(server_, kHttpOk, renderMessageJson(F("Send started.")));
-}
-// #endregion METHOD_handleModemSendStart
 // #region METHOD_handleModemSendStatus
 // PURPOSE: Reports modem send progress.
 void HttpServer::handleModemSendStatus() {
@@ -720,11 +684,28 @@ void HttpServer::handleSmsSendStart() {
   handleZteViaSend(to, text);
 }
 // #endregion METHOD_handleSmsSendStart
+// #region METHOD_sendPage
+// PURPOSE: Serves a page shell after Digest auth once initial setup is done;
+// the shell stays open during first-time provisioning (captive portal).
+void HttpServer::sendPage(const char* path) {
+  if (config_.ssid.length() > 0 && !requireAuthentication()) {
+    return;
+  }
+  sendAsset(server_, path);
+}
+// #endregion METHOD_sendPage
+// #region METHOD_handleRootRedirect
+// PURPOSE: Redirects the document root to the Wi-Fi page.
+void HttpServer::handleRootRedirect() {
+  server_.sendHeader("Location", "/wifi");
+  server_.send(kHttpRedirect, "text/plain", "Redirecting to /wifi.");
+}
+// #endregion METHOD_handleRootRedirect
 // #region METHOD_handleNotFound
 // PURPOSE: Redirects captive-portal requests or returns 404.
 void HttpServer::handleNotFound() {
   if (wifi_.accessPointActive()) {
-    server_.sendHeader("Location", "/");
+    server_.sendHeader("Location", "/wifi");
     server_.send(kHttpRedirect, "text/plain", "Redirecting to configuration.");
     return;
   }
@@ -735,13 +716,31 @@ void HttpServer::handleNotFound() {
 // PURPOSE: Registers routes and starts the server.
 void HttpServer::begin() {
   Serial.println("event=http_routes_register_begin");
-  server_.on("/", HTTP_GET, [this]() { sendAsset(server_, "/"); });
-  server_.on("/app.js", HTTP_GET, [this]() { sendAsset(server_, "/app.js"); });
+  server_.on("/", HTTP_GET, [this]() { handleRootRedirect(); });
   server_.on("/style.css", HTTP_GET, [this]() { sendAsset(server_, "/style.css"); });
+  server_.on("/wifi", HTTP_GET, [this]() { sendPage("/wifi"); });
+  server_.on("/admin", HTTP_GET, [this]() { sendPage("/admin"); });
+  server_.on("/email", HTTP_GET, [this]() { sendPage("/email"); });
+  server_.on("/time", HTTP_GET, [this]() { sendPage("/time"); });
+  server_.on("/modem", HTTP_GET, [this]() { sendPage("/modem"); });
+  server_.on("/zte", HTTP_GET, [this]() { sendPage("/zte"); });
+  server_.on("/gps", HTTP_GET, [this]() { sendPage("/gps"); });
+  server_.on("/sms", HTTP_GET, [this]() { sendPage("/sms"); });
+  server_.on("/js/main.js", HTTP_GET, [this]() { sendAsset(server_, "/js/main.js"); });
+  server_.on("/js/wifi.js", HTTP_GET, [this]() { sendAsset(server_, "/js/wifi.js"); });
+  server_.on("/js/admin.js", HTTP_GET, [this]() { sendAsset(server_, "/js/admin.js"); });
+  server_.on("/js/email.js", HTTP_GET, [this]() { sendAsset(server_, "/js/email.js"); });
+  server_.on("/js/time.js", HTTP_GET, [this]() { sendAsset(server_, "/js/time.js"); });
+  server_.on("/js/modem.js", HTTP_GET, [this]() { sendAsset(server_, "/js/modem.js"); });
+  server_.on("/js/zte.js", HTTP_GET, [this]() { sendAsset(server_, "/js/zte.js"); });
+  server_.on("/js/gps.js", HTTP_GET, [this]() { sendAsset(server_, "/js/gps.js"); });
+  server_.on("/js/sms.js", HTTP_GET, [this]() { sendAsset(server_, "/js/sms.js"); });
   server_.on("/api/status", HTTP_GET, [this]() { handleStatusRequest(); });
   server_.on("/api/scan", HTTP_GET, [this]() { handleScanRequest(); });
   server_.on("/api/setup", HTTP_POST, [this]() { handleSetupSubmission(); });
   server_.on("/api/network", HTTP_POST, [this]() { handleNetworkSubmission(); });
+  server_.on("/api/ntp", HTTP_GET, [this]() { handleNtpConfigRequest(); });
+  server_.on("/api/ntp", HTTP_POST, [this]() { handleNtpSaveSubmission(); });
   server_.on("/api/password", HTTP_POST, [this]() { handlePasswordSubmission(); });
   server_.on("/api/smtp", HTTP_GET, [this]() { handleSmtpConfigRequest(); });
   server_.on("/api/smtp", HTTP_POST, [this]() { handleSmtpSaveSubmission(); });
@@ -751,9 +750,7 @@ void HttpServer::begin() {
   server_.on("/api/zte", HTTP_POST, [this]() { handleZteSaveSubmission(); });
   server_.on("/api/zte/test", HTTP_POST, [this]() { handleZteTestStart(); });
   server_.on("/api/zte/test", HTTP_GET, [this]() { handleZteTestStatus(); });
-  server_.on("/api/zte/send", HTTP_POST, [this]() { handleZteSendStart(); });
   server_.on("/api/zte/send", HTTP_GET, [this]() { handleZteSendStatus(); });
-  server_.on("/api/modem/send", HTTP_POST, [this]() { handleModemSendStart(); });
   server_.on("/api/modem/send", HTTP_GET, [this]() { handleModemSendStatus(); });
   server_.on("/api/sms/send", HTTP_POST, [this]() { handleSmsSendStart(); });
   server_.on("/api/modem/status", HTTP_GET, [this]() { handleModemStatusRequest(); });

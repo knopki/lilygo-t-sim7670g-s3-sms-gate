@@ -33,6 +33,7 @@ description = "Run all host tests"
 run = """
 set -e
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate tests/config_record_test.cpp -o /tmp/config_record_test && /tmp/config_record_test
+c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate tests/ntp_validate_test.cpp -o /tmp/ntp_validate_test && /tmp/ntp_validate_test
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate tests/smtp_client_test.cpp sms_gate/smtp_client.cpp -o /tmp/smtp_client_test && /tmp/smtp_client_test
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate tests/zte_client_test.cpp sms_gate/zte_client.cpp sms_gate/zte_json.cpp sms_gate/zte_form_codec.cpp -o /tmp/zte_client_test && /tmp/zte_client_test
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate tests/modem_client_test.cpp sms_gate/modem_client.cpp -o /tmp/modem_client_test && /tmp/modem_client_test

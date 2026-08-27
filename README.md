@@ -122,9 +122,24 @@ Notes:
 ### First-time setup
 
 The web interface is a small JavaScript application served by the device itself;
-a JavaScript-capable browser is required. With no valid configuration, the
-device starts an open access point named `SMS-Gate-<MAC>`. Connect to it and
-open `http://192.168.4.1` if the captive portal does not open automatically.
+a JavaScript-capable browser is required. It is split into topic pages with a
+shared top navigation:
+
+- **Wi-Fi** — connection status and network change (also the initial-setup
+  page);
+- **Admin** — administrator password and watchdog status;
+- **E-mail** — SMTP settings and a test message;
+- **Time Sync** — SNTP servers and clock source status;
+- **Modem** — onboard SIM7670G status and SMS source settings;
+- **ZTE MF79RU** — additional modem settings, last poll status and test;
+- **GPS** — GNSS status and polling settings;
+- **SMS** — compose and send a message through any enabled modem.
+
+Each page polls only its own status endpoints. Opening the device root
+(`/` or `http://192.168.4.1`) redirects to the Wi-Fi page. With no valid
+configuration, the device starts an open access point named `SMS-Gate-<MAC>`.
+Connect to it and open `http://192.168.4.1` if the captive portal does not open
+automatically.
 
 The initial setup page accepts:
 
@@ -149,16 +164,24 @@ device starts `SMS-Gate-<MAC>` as a WPA2 access point and retries the saved
 station profile every 60 seconds. Its WPA2 password is the administrator
 password. The fallback AP closes after station connectivity returns.
 
-The normal web interface uses HTTP Digest authentication with username `admin`;
-the browser shows its native login prompt. HTTP is intentionally not encrypted;
+Once initial setup is done, every page and API request uses HTTP Digest
+authentication with username `admin`; the browser shows its native login
+prompt as soon as a page is opened. Page scripts and styles are static,
+secret-free assets served without a challenge. HTTP is intentionally not
+encrypted;
 deploy a reverse proxy or other network controls if access extends beyond a
 trusted local network.
 
-The protected page shows the mode, configured SSID, station IP, MAC, RSSI, mDNS
-name, and the last connection error. It never displays or writes passwords to
-Serial. It allows changing the Wi-Fi profile and administrator password.
-Changing the administrator password requires the current password and
-confirmation of the new password.
+After success, the open AP closes and the web interface is available on the
+configured network at `http://sms-gate-<MAC>.local`. The assigned IP address is
+also printed through USB CDC Serial.
+
+### Pages
+
+The Wi-Fi page shows the mode, configured SSID, station IP, MAC, RSSI, mDNS
+name, and the last connection error. The interface never displays or writes
+passwords to Serial. Changing the administrator password (Admin page) requires
+the current password and confirmation of the new password.
 
 Only WPA2/WPA3-Personal SSID/password networks are supported. Open, WEP, and
 Enterprise Wi-Fi networks are deliberately unsupported.

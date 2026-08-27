@@ -29,11 +29,18 @@ struct WebStatus {
   int rssiDbm;
   String mdnsHostname;
   String lastError;
-  String ntpServer1;
-  String ntpServer2;
-  bool ntpEnabled = true;
 };
 // #endregion STRUCT_WebStatus
+
+// #region STRUCT_WebNtpConfig
+// PURPOSE: Snapshot for GET /api/ntp; servers already trimmed, defaults
+// applied when enabled and empty.
+struct WebNtpConfig {
+  bool ntpEnabled = true;
+  String ntpServer1;
+  String ntpServer2;
+};
+// #endregion STRUCT_WebNtpConfig
 
 // #region STRUCT_WebSmtpConfig
 // PURPOSE: Snapshot for GET /api/smtp without password; security is starttls/implicit.
@@ -55,8 +62,6 @@ struct WebZteConfig {
   bool present;
   bool moduleEnabled = false;
   bool forwardEnabled = false;
-  // compat: enabled = module && forward
-  bool enabled = false;
   String host;
   bool passwordSet = false;
   String label;                   // Phone number or alias shown in forwarded emails.
@@ -70,7 +75,6 @@ struct WebZteConfig {
 // pollIntervalSec is the per-source SMS poll period (5–300 s).
 struct WebModemSourceConfig {
   bool present = false;
-  bool enabled = false;  // compat: module && smsPoll
   bool moduleEnabled = false;
   bool pollEnabled = false;
   bool smsPollEnabled = false;
@@ -85,7 +89,6 @@ struct WebModemSourceConfig {
 // PURPOSE: Common poll/label/status slice shared by ZTE and modem-source JSON.
 struct WebSourceConfigCommon {
   bool present = false;
-  bool enabled = false;
   uint16_t pollIntervalSec = 15;
   String label;
   String lastStatus;
@@ -122,7 +125,6 @@ struct WebModemStatus {
 // pollIntervalSec 5..300 s, default 60 s.
 struct WebGpsConfig {
   bool present = false;
-  bool enabled = false;  // compat: module && poll
   bool moduleEnabled = false;
   bool pollEnabled = false;
   bool timeSyncEnabled = false;
@@ -190,6 +192,7 @@ struct WebAsyncOp {
 String escapeJson(const String& value);
 void appendJsonString(String& out, const String& value);
 String renderStatusJson(const WebStatus& status);
+String renderNtpConfigJson(const WebNtpConfig& config);
 String renderSmtpConfigJson(const WebSmtpConfig& config);
 String renderZteConfigJson(const WebZteConfig& config);
 // #region FUNC_renderModemStatusJson

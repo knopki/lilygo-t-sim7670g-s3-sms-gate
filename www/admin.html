@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<meta name="color-scheme" content="light dark">
+	<title>Admin · SMS Gate</title>
+	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header class="site-header">
+		<h1>SMS Gate</h1>
+		<p id="banner" class="banner" hidden></p>
+	</header>
+	<nav class="site-nav" aria-label="Configuration pages">
+		<ul>
+			<li><a href="/wifi">Wi-Fi</a></li>
+			<li><a href="/admin" aria-current="page">Admin</a></li>
+			<li><a href="/email">E-mail</a></li>
+			<li><a href="/time">Time Sync</a></li>
+			<li><a href="/modem">Modem</a></li>
+			<li><a href="/zte">ZTE MF79RU</a></li>
+			<li><a href="/gps">GPS</a></li>
+			<li><a href="/sms">SMS</a></li>
+		</ul>
+	</nav>
+	<main id="content">
+		<noscript>
+			<p class="error">This page requires a JavaScript-capable browser.</p>
+		</noscript>
+		<h2>Administrator password</h2>
+		<p class="hint">The administrator password protects this web interface (HTTP Digest login <span class="mono">admin</span>) and the fallback access point that appears when the configured Wi-Fi network cannot be reached.</p>
+		<form id="password-form">
+			<label>Current password<input type="password" name="current_password" required autocomplete="current-password"></label>
+			<label>New password<input type="password" name="new_password" required minlength="8" maxlength="63" autocomplete="new-password"></label>
+			<label>Confirm new password<input type="password" name="new_password_confirm" required minlength="8" maxlength="63" autocomplete="new-password"></label>
+			<div class="controls">
+				<button type="submit">Change password</button>
+			</div>
+		</form>
+
+		<h2>Watchdog</h2>
+		<dl class="status" id="watchdog-status">
+			<dt>Safe mode</dt><dd data-field="safe_mode"></dd>
+			<dt>Boot count</dt><dd data-field="boot_count"></dd>
+			<dt>Timeout</dt><dd data-field="timeout"></dd>
+			<dt>Last reset reason</dt><dd data-field="last_reset_reason"></dd>
+			<dt>Uptime</dt><dd data-field="uptime"></dd>
+		</dl>
+		<div class="controls">
+			<button type="button" id="watchdog-clear" hidden>Exit safe mode</button>
+		</div>
+	</main>
+	<script type="module" src="/js/admin.js"></script>
+</body>
+</html>

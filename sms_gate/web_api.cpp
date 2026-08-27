@@ -23,11 +23,9 @@ void appendJsonNullableString(String& out, bool present, const String& value) {
   appendJsonString(out, value);
 }
 
-void appendPresentEnabled(String& out, bool present, bool enabled) {
+void appendPresent(String& out, bool present) {
   out += F("{\"present\":");
   out += present ? F("true") : F("false");
-  out += F(",\"enabled\":");
-  out += enabled ? F("true") : F("false");
 }
 
 void appendSourceCommonFields(String& out, const WebSourceConfigCommon& common,
@@ -137,16 +135,26 @@ String renderStatusJson(const WebStatus& status) {
   appendJsonString(json, status.mdnsHostname);
   json += F(",\"last_error\":");
   appendJsonNullableString(json, status.lastError.length() > 0, status.lastError);
-  json += F(",\"ntp_enabled\":");
-  json += status.ntpEnabled ? F("true") : F("false");
-  json += F(",\"ntp_server1\":");
-  appendJsonString(json, status.ntpServer1);
-  json += F(",\"ntp_server2\":");
-  appendJsonString(json, status.ntpServer2);
   json += '}';
   return json;
 }
 // #endregion FUNC_renderStatusJson
+
+// #region FUNC_renderNtpConfigJson
+// PURPOSE: Serializes WebNtpConfig into the /api/ntp envelope.
+String renderNtpConfigJson(const WebNtpConfig& config) {
+  String json;
+  json.reserve(96 + config.ntpServer1.length() + config.ntpServer2.length());
+  json += F("{\"ntp_enabled\":");
+  json += config.ntpEnabled ? F("true") : F("false");
+  json += F(",\"ntp_server1\":");
+  appendJsonString(json, config.ntpServer1);
+  json += F(",\"ntp_server2\":");
+  appendJsonString(json, config.ntpServer2);
+  json += '}';
+  return json;
+}
+// #endregion FUNC_renderNtpConfigJson
 
 // #region FUNC_renderSmtpConfigJson
 // PURPOSE: Serializes WebSmtpConfig into the /api/smtp envelope without exposing the password.
@@ -179,7 +187,7 @@ String renderSmtpConfigJson(const WebSmtpConfig& config) {
 String renderZteConfigJson(const WebZteConfig& config) {
   String json;
   json.reserve(kZteJsonReserve);
-  appendPresentEnabled(json, config.present, config.enabled);
+  appendPresent(json, config.present);
   json += F(",\"module_enabled\":");
   json += config.moduleEnabled ? F("true") : F("false");
   json += F(",\"forward_enabled\":");
@@ -188,7 +196,7 @@ String renderZteConfigJson(const WebZteConfig& config) {
   appendJsonString(json, config.host);
   json += F(",\"password_set\":");
   json += config.passwordSet ? F("true") : F("false");
-  WebSourceConfigCommon common{config.present, config.enabled, config.pollIntervalSec, config.label,
+  WebSourceConfigCommon common{config.present, config.pollIntervalSec, config.label,
                                config.lastStatus};
   appendSourceCommonFields(json, common, true);
   json += '}';
@@ -201,7 +209,7 @@ String renderZteConfigJson(const WebZteConfig& config) {
 String renderModemSourceJson(const WebModemSourceConfig& config) {
   String json;
   json.reserve(kModemSourceReserve);
-  appendPresentEnabled(json, config.present, config.enabled);
+  appendPresent(json, config.present);
   json += F(",\"module_enabled\":");
   json += config.moduleEnabled ? F("true") : F("false");
   json += F(",\"poll_enabled\":");
@@ -210,7 +218,7 @@ String renderModemSourceJson(const WebModemSourceConfig& config) {
   json += config.smsPollEnabled ? F("true") : F("false");
   json += F(",\"nitz_time_sync_enabled\":");
   json += config.nitzTimeSyncEnabled ? F("true") : F("false");
-  WebSourceConfigCommon common{config.present, config.enabled, config.pollIntervalSec, config.label,
+  WebSourceConfigCommon common{config.present, config.pollIntervalSec, config.label,
                                config.lastStatus};
   appendSourceCommonFields(json, common, false);
   json += '}';
@@ -274,7 +282,7 @@ String renderModemStatusJson(const WebModemStatus& status) {
 String renderGpsConfigJson(const WebGpsConfig& config) {
   String json;
   json.reserve(kGpsConfigReserve);
-  appendPresentEnabled(json, config.present, config.enabled);
+  appendPresent(json, config.present);
   json += F(",\"module_enabled\":");
   json += config.moduleEnabled ? F("true") : F("false");
   json += F(",\"poll_enabled\":");
