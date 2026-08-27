@@ -6,7 +6,13 @@
  * #endregion moduleContract
  */
 
-import { apiFetch, fillFields, poll, submitSettingsForm } from "/js/main.js";
+import {
+	apiFetch,
+	bindFieldDependencies,
+	fillFields,
+	poll,
+	submitSettingsForm,
+} from "/js/main.js";
 
 const SOURCE_LABELS = {
 	unsynced: "Not synchronized",
@@ -16,6 +22,13 @@ const SOURCE_LABELS = {
 };
 
 const ntpForm = document.getElementById("ntp-form");
+
+// The firmware starts SNTP and consumes the server addresses only while the
+// enable flag is on (wifi_manager.cpp gates startSntp on ntpEnabled).
+const syncForm = bindFieldDependencies(ntpForm, {
+	ntp_server1: "ntp_enabled",
+	ntp_server2: "ntp_enabled",
+});
 
 function formatUtc(epochMs) {
 	if (!Number.isFinite(epochMs) || epochMs <= 0) {
@@ -51,6 +64,7 @@ async function loadConfig() {
 		ntp_server1: payload.ntp_server1 ?? "",
 		ntp_server2: payload.ntp_server2 ?? "",
 	});
+	syncForm();
 }
 
 ntpForm.addEventListener("submit", (event) => {

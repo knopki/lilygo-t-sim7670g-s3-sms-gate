@@ -2,8 +2,8 @@
  * #region moduleContract
  * @purpose Shared UI runtime: fetch wrapper with request timeout and
  *   centralized 401 handling, banner and busy state, reachability banner,
- *   visibility-aware polling, template DOM helpers and one-time session
- *   prefetch of sibling pages.
+ *   visibility-aware polling, template DOM helpers, dependency-driven field
+ *   state and one-time session prefetch of sibling pages.
  * @scope imported by every page script; NOT: page-specific markup or logic.
  * #endregion moduleContract
  */
@@ -251,6 +251,57 @@ export function fillFields(root, values) {
 		}
 		element.textContent = value ?? "";
 	}
+}
+
+// Keeps form controls disabled while the checkbox chain they depend on is
+// off: a field stays editable only while every master checkbox is checked
+// AND its own masters are active, recursively ("<dependent>: <master|masters>").
+// The rules table must be acyclic. Applies immediately, on every master
+// change, and returns a sync function to re-run after fillFields() replaced
+// the loaded values (checked changes programmatically fire no event).
+// Values are preserved on purpose: disabling never clears stored settings,
+// and submit handlers still read .checked/.value from disabled controls.
+export function bindFieldDependencies(form, rules) {
+	const elements = form.elements;
+	const mastersOf = new Map(
+		Object.entries(rules).map(([name, requires]) => [
+			name,
+			Array.isArray(requires) ? requires : [requires],
+		]),
+	);
+	const masters = new Set();
+	for (const names of mastersOf.values()) {
+		masters.add(...names);
+	}
+	function sync() {
+		// Memoized per run, so evaluation order never matters: a stale
+		// checked-but-disabled master must not keep its own dependents alive.
+		const active = new Map();
+		const isChainOn = (name) => {
+			if (active.has(name)) {
+				return active.get(name);
+			}
+			const state =
+				Boolean(elements[name]?.checked) &&
+				(mastersOf.get(name) ?? []).every(isChainOn);
+			active.set(name, state);
+			return state;
+		};
+		for (const [name, requires] of mastersOf) {
+			const control = elements[name];
+			if (!control) {
+				continue;
+			}
+			const enabled = requires.every(isChainOn);
+			control.disabled = !enabled;
+			control.closest("label")?.classList.toggle("is-disabled", !enabled);
+		}
+	}
+	for (const name of masters) {
+		elements[name]?.addEventListener("change", sync);
+	}
+	sync();
+	return sync;
 }
 
 // Warms the browser cache with all pages and scripts once per session

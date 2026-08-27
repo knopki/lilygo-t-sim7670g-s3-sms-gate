@@ -6,9 +6,26 @@
  * #endregion moduleContract
  */
 
-import { apiFetch, fillFields, poll, submitSettingsForm } from "/js/main.js";
+import {
+	apiFetch,
+	bindFieldDependencies,
+	fillFields,
+	poll,
+	submitSettingsForm,
+} from "/js/main.js";
 
 const sourceForm = document.getElementById("source-form");
+
+// A field is editable only while the firmware actually consumes it: polling
+// needs the module task, SMS forwarding and NITZ need polling, the interval
+// drives the poll task, and the label only marks forwarded emails.
+const syncForm = bindFieldDependencies(sourceForm, {
+	poll_enabled: "module_enabled",
+	sms_poll: "poll_enabled",
+	nitz_time_sync: "poll_enabled",
+	poll_interval: "poll_enabled",
+	label: "sms_poll",
+});
 
 function text(value) {
 	return value === null || value === undefined || value === ""
@@ -105,6 +122,7 @@ function applyConfig(payload) {
 		poll_interval: String(payload.poll_interval ?? ""),
 		label: payload.label ?? "",
 	});
+	syncForm();
 	applyLastStatus(payload);
 }
 

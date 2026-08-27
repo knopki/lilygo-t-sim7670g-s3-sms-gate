@@ -6,9 +6,23 @@
  * #endregion moduleContract
  */
 
-import { apiFetch, fillFields, poll, submitSettingsForm } from "/js/main.js";
+import {
+	apiFetch,
+	bindFieldDependencies,
+	fillFields,
+	poll,
+	submitSettingsForm,
+} from "/js/main.js";
 
 const gpsForm = document.getElementById("gps-form");
+
+// Polling requires the GNSS module task; time sync and the poll interval
+// only matter while polling runs.
+const syncForm = bindFieldDependencies(gpsForm, {
+	poll_enabled: "module_enabled",
+	time_sync: "poll_enabled",
+	poll_interval: "poll_enabled",
+});
 
 function text(value) {
 	return value === null || value === undefined || value === ""
@@ -50,6 +64,7 @@ async function loadConfig() {
 		time_sync: payload.time_sync_enabled === true,
 		poll_interval: String(payload.poll_interval ?? ""),
 	});
+	syncForm();
 }
 
 gpsForm.addEventListener("submit", (event) => {

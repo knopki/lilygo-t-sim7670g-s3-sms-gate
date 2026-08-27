@@ -8,6 +8,7 @@
 
 import {
 	apiFetch,
+	bindFieldDependencies,
 	fillFields,
 	poll,
 	runAsyncOperation,
@@ -16,6 +17,17 @@ import {
 
 const zteForm = document.getElementById("zte-form");
 const passwordInput = zteForm.elements.password;
+
+// The module task holds the connection profile (host, password); the poll
+// interval is consumed only inside poll cycles, which run solely while SMS
+// forwarding is on; the label only marks forwarded emails.
+const syncForm = bindFieldDependencies(zteForm, {
+	forward_enabled: "module_enabled",
+	host: "module_enabled",
+	password: "module_enabled",
+	poll_interval: "forward_enabled",
+	label: "forward_enabled",
+});
 
 function formFields() {
 	const elements = zteForm.elements;
@@ -47,6 +59,7 @@ async function loadConfig() {
 		poll_interval: String(payload.poll_interval ?? ""),
 		label: payload.label ?? "",
 	});
+	syncForm();
 	applyPasswordPlaceholder(payload.password_set === true);
 }
 

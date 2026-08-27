@@ -128,6 +128,12 @@ button:disabled {
 	opacity: 0.6;
 }
 
+/* Label of a control disabled by bindFieldDependencies() while its
+   dependency checkbox is off. */
+label.is-disabled {
+	opacity: 0.5;
+}
+
 dl.status {
 	display: grid;
 	grid-template-columns: max-content 1fr;
