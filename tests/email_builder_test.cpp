@@ -1,8 +1,8 @@
 // #region MODULE_CONTRACT
 // PURPOSE: Host test for email_builder — sanitizeSenderForSubject and
 // buildSmsEmailFromParts / buildZteSmsEmail / buildModemSmsEmail. Asserts
-// printable-ASCII, 40-char cap, unknown sender, INCOMPLETE flag and body
-// Received-on alias.
+// printable-ASCII, 40-char cap, unknown sender, INCOMPLETE flag, alias
+// subject prefix and body Received-on alias.
 // #endregion MODULE_CONTRACT
 #include <cassert>
 #include <cstdio>
@@ -56,8 +56,8 @@ int main() {
   {
     String subject, body;
     buildSmsEmailFromParts("+123456789", "MyLabel", "42", "2024-01-02", "hello", true, "1", "1", subject, body);
-    EXPECT(contains(subject, "SMS from +123456789"), "subject complete");
-    EXPECT(!contains(subject, "INCOMPLETE"), "no incomplete tag");
+    EXPECT(contains(subject, "[MyLabel] SMS from +123456789"), "alias subject prefix");
+    EXPECT(subject.indexOf("[MyLabel]") == 0, "alias prefix first");
     EXPECT(contains(body, "Sender: +123456789"), "body sender");
     EXPECT(contains(body, "Received on: MyLabel"), "body label");
     EXPECT(contains(body, "Modem message ID: 42"), "body id");
@@ -68,10 +68,17 @@ int main() {
   {
     String subject, body;
     buildSmsEmailFromParts("Alice", "", "7", "2024-01-02", "frag", false, "1", "3", subject, body);
+    EXPECT(String(subject.c_str()) == String("[INCOMPLETE 1/3] SMS from Alice"), "no alias, old subject");
     EXPECT(contains(subject, "[INCOMPLETE 1/3]"), "incomplete subject tag");
     EXPECT(contains(subject, "SMS from Alice"), "incomplete subject sender");
     EXPECT(contains(body, "WARNING"), "incomplete warning");
     EXPECT(!contains(body, "Received on:"), "empty label not emitted");
+  }
+  // incomplete with alias: alias prefix first, then INCOMPLETE tag
+  {
+    String subject, body;
+    buildSmsEmailFromParts("Alice", "Work", "7", "2024-01-02", "frag", false, "1", "3", subject, body);
+    EXPECT(String(subject.c_str()) == String("[Work] [INCOMPLETE 1/3] SMS from Alice"), "alias + incomplete subject");
   }
   // null text/id/date
   {

@@ -433,7 +433,8 @@ Each poll cycle:
 4. If found → decode `content` (UCS-2 hex → UTF-8), build email:
 
    ```
-   Subject: "SMS from <sender>"  or "[INCOMPLETE r/t] SMS from <sender>"
+   Subject: "[alias] SMS from <sender>"  or "[alias] [INCOMPLETE r/t] SMS from <sender>"
+   (without an alias: "SMS from <sender>" / "[INCOMPLETE r/t] SMS from <sender>")
    Message-ID: <zte-sms-<id>@<modem_host>>    (stable per id → mail dedup)
    Body: Sender / Received on (label) / Modem message ID / Modem date / text
    ```

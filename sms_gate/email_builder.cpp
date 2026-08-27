@@ -38,8 +38,8 @@ String sanitizeSenderForSubject(const char* sender) {
 
 // #region FUNC_buildSmsEmailFromParts
 // PURPOSE: Shared subject/body renderer for every SMS source so ZTE and
-// SIM7670G share one email layout (alias via Received on:, INCOMPLETE
-// tag and modem date formatting).
+// SIM7670G share one email layout (alias prefix in the subject, alias via
+// Received on:, INCOMPLETE tag and modem date formatting).
 void buildSmsEmailFromParts(const char* senderRaw, const String& label, const char* id,
                             const char* dateRaw, const char* text, bool concatComplete,
                             const char* received, const char* total, String& subject,
@@ -57,6 +57,15 @@ void buildSmsEmailFromParts(const char* senderRaw, const String& label, const ch
   } else {
     subject = F("SMS from ");
     subject += sender;
+  }
+  if (label.length() > 0) {
+    String prefixed;
+    prefixed.reserve(label.length() + 2 + subject.length());
+    prefixed += '[';
+    prefixed += label;
+    prefixed += F("] ");
+    prefixed += subject;
+    subject = prefixed;
   }
   body = F("Sender: ");
   body += sender;
