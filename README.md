@@ -1,6 +1,8 @@
 # LilyGO T-SIM7670G-S3 SMS Gate
 
-A gateway based on the **LilyGO T-SIM7670G-S3** for delivering SMS messages by email and using GNSS as an accurate time source.
+A gateway based on the **LilyGO T-SIM7670G-S3** (LilyGo SIM7670G ESP32S3) for
+delivering SMS messages by email and using GNSS as an accurate time source.
+Product page: <https://lilygo.cc/products/t-sim-7670g-s3>.
 
 ## Status
 
@@ -350,4 +352,6 @@ python3 tools/ntp_probe.py sms-gate-<MAC>.local
 
 ## Board documentation
 
+- [LilyGO T-SIM7670G-S3 product page](https://lilygo.cc/products/t-sim-7670g-s3)
+- [LilyGo-Modem-Series: SIM7670G-S3](https://github.com/Xinyuan-LilyGO/LilyGo-Modem-Series/blob/main/docs/en/esp32s3/sim7670g-s3/README.MD)
 - [LilyGO T-SIM7670G-S3 Standard](https://github.com/Xinyuan-LILYGO/LilyGo-Modem-Series/blob/main/docs/en/esp32s3/sim7670g-s3-standard/README.MD)
