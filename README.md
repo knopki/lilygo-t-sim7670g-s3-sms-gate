@@ -167,7 +167,12 @@ password. The fallback AP closes after station connectivity returns.
 Once initial setup is done, every page and API request uses HTTP Digest
 authentication with username `admin`; the browser shows its native login
 prompt as soon as a page is opened. Page scripts and styles are static,
-secret-free assets served without a challenge. HTTP is intentionally not
+secret-free assets served without a challenge. Assets carry an ETag with one
+hour of freshness (the same for every asset, so a page and its scripts expire
+together), and the page scripts prefetch every page and script into the
+browser cache once per session, so menu navigation renders from cache without
+waiting on the device. After flashing new firmware, force one reload (F5) to
+pick up changed pages immediately. HTTP is intentionally not
 encrypted;
 deploy a reverse proxy or other network controls if access extends beyond a
 trusted local network.

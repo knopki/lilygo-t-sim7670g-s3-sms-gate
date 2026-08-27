@@ -8,6 +8,7 @@ byte array. The output is included exactly once, by sms_gate/web_api.cpp.
 from __future__ import annotations
 
 import gzip
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -65,25 +66,29 @@ def main() -> None:
         "  const char* contentType;",
         "  const unsigned char* data;",
         "  const unsigned int size;",
+        "  const char* etag;",
         "};",
         "",
     ]
     total_raw = 0
     total_packed = 0
+    entries = []
     for file_name, route, content_type, ident in ASSETS:
         raw = (WWW_DIR / file_name).read_bytes()
         packed = gzip_bytes(raw)
         total_raw += len(raw)
         total_packed += len(packed)
+        etag = f'"{zlib.crc32(packed) & 0xFFFFFFFF:08x}"'
+        entries.append((route, content_type, ident, etag))
         parts.append(c_array(ident, packed))
         parts.append("")
         print(
             f"asset={file_name} raw={len(raw)} gzip={len(packed)} route={route}"
         )
     parts.append("const Asset kAssets[] = {")
-    for _, route, content_type, ident in ASSETS:
+    for route, content_type, ident, etag in entries:
         parts.append(
-            f'    {{"{route}", "{content_type}", {ident}, sizeof {ident}}},'
+            f'    {{"{route}", "{content_type}", {ident}, sizeof {ident}, {etag}}},'
         )
     parts.append("};")
     parts.append("")

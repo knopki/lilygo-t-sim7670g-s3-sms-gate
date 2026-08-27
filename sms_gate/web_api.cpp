@@ -433,14 +433,22 @@ void sendJson(WebServer& server, int code, const String& json) {
 // #endregion FUNC_sendJson
 
 // #region FUNC_sendAsset
-// PURPOSE: Serves a gzipped asset from PROGMEM with long-term caching headers; falls back to 404.
+// PURPOSE: Serves a gzipped asset from PROGMEM with an ETag for 304
+// revalidation and one hour of freshness (equal for every asset so page and
+// scripts expire together) so prefetched pages render from the browser
+// cache; falls back to 404.
 void sendAsset(WebServer& server, const String& path) {
   for (const web_assets::Asset& asset : web_assets::kAssets) {
     if (path != asset.path) {
       continue;
     }
+    server.sendHeader("Cache-Control", "max-age=3600");
+    server.sendHeader("ETag", asset.etag);
+    if (server.header("If-None-Match").indexOf(asset.etag) >= 0) {
+      server.send(304, asset.contentType, "");
+      return;
+    }
     server.sendHeader("Content-Encoding", "gzip");
-    server.sendHeader("Cache-Control", "no-cache");
     server.send_P(200, asset.contentType, reinterpret_cast<PGM_P>(asset.data), asset.size);
     return;
   }

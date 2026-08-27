@@ -1,7 +1,6 @@
 .build/
 .cache
 .arduino/
-sms_gate/web_assets.h
 __pycache__
 *.pyc
 a.out

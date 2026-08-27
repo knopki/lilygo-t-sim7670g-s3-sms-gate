@@ -2,7 +2,8 @@
  * #region moduleContract
  * @purpose Shared UI runtime: fetch wrapper with request timeout and
  *   centralized 401 handling, banner and busy state, reachability banner,
- *   visibility-aware polling and template DOM helpers.
+ *   visibility-aware polling, template DOM helpers and one-time session
+ *   prefetch of sibling pages.
  * @scope imported by every page script; NOT: page-specific markup or logic.
  * #endregion moduleContract
  */
@@ -251,3 +252,67 @@ export function fillFields(root, values) {
 		element.textContent = value ?? "";
 	}
 }
+
+// Warms the browser cache with all pages and scripts once per session
+// (staggered, silent) so menu navigation renders from cache instead of
+// waiting on the device. Plain fetch on purpose: a 401 or a timeout here
+// must never raise the authentication or reachability banners nor stop
+// the page pollers.
+const PREFETCH_ASSETS = [
+	"/wifi",
+	"/admin",
+	"/email",
+	"/time",
+	"/modem",
+	"/zte",
+	"/gps",
+	"/sms",
+	"/style.css",
+	"/js/main.js",
+	"/js/wifi.js",
+	"/js/admin.js",
+	"/js/email.js",
+	"/js/time.js",
+	"/js/modem.js",
+	"/js/zte.js",
+	"/js/gps.js",
+	"/js/sms.js",
+];
+const PREFETCH_FLAG = "sms-gate-prefetched";
+
+function sessionFlagSet(name) {
+	try {
+		return window.sessionStorage.getItem(name) !== null;
+	} catch (_error) {
+		return false;
+	}
+}
+
+function markSessionFlag(name) {
+	try {
+		window.sessionStorage.setItem(name, "1");
+	} catch (_error) {
+		// Storage unavailable: prefetch again next time, which is harmless.
+	}
+}
+
+function prefetchAssets() {
+	let index = 0;
+	function next() {
+		if (index >= PREFETCH_ASSETS.length) {
+			markSessionFlag(PREFETCH_FLAG);
+			return;
+		}
+		const path = PREFETCH_ASSETS[index];
+		index += 1;
+		fetch(path).catch(() => {});
+		window.setTimeout(next, 250);
+	}
+	next();
+}
+
+window.setTimeout(() => {
+	if (!sessionFlagSet(PREFETCH_FLAG)) {
+		prefetchAssets();
+	}
+}, 1500);

@@ -716,6 +716,9 @@ void HttpServer::handleNotFound() {
 // PURPOSE: Registers routes and starts the server.
 void HttpServer::begin() {
   Serial.println("event=http_routes_register_begin");
+  // If-None-Match feeds the 304 revalidation path in sendAsset.
+  static const char* kCollectedHeaders[] = {"If-None-Match"};
+  server_.collectHeaders(kCollectedHeaders, 1);
   server_.on("/", HTTP_GET, [this]() { handleRootRedirect(); });
   server_.on("/style.css", HTTP_GET, [this]() { sendAsset(server_, "/style.css"); });
   server_.on("/wifi", HTTP_GET, [this]() { sendPage("/wifi"); });
