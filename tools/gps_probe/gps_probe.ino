@@ -203,7 +203,7 @@ void logGnssPoll(unsigned long elapsedMs) {
     Serial.printf("event=gnss_fix poll=%lu ttff_ms=%lu raw_cgps=\"%s\" raw_cgnss=\"%s\"\n",
                   gPollCount, ttff,
                   sanitizeReply(r3).c_str(), sanitizeReply(r4).c_str());
-    Serial.println("event=hint msg=\"PPS LED should now flash 1Hz if antenna has sky view\"");
+    Serial.println("event=hint msg=\"Fix confirmed by populated CGPSINFO coordinates\"");
   }
 
   // Hint for common failure
@@ -285,7 +285,9 @@ void runGnssInitSequence() {
   gLastPollMs = 0;
   Serial.printf("event=gnss_init_done elapsed_ms=%lu heap=%u\n",
                 (unsigned long)(millis() - gGnssPowerOnMs), (unsigned)ESP.getFreeHeap());
-  Serial.println("event=hint msg=\"Polling CGPSINFO/CGNSSINFO every 3s — put active antenna outdoors label-down with sky view. PPS LED: ON=startup, OFF=ready, 1Hz=fix\"");
+  Serial.println(
+      "event=hint msg=\"Polling CGPSINFO/CGNSSINFO every 3s — put active antenna outdoors "
+      "label-down with sky view; Classic H707 has no PPS indicator\"");
 }
 
 void setup() {

@@ -357,6 +357,14 @@ String renderGpsStatusJson(const WebGpsStatus& status) {
   json += String(status.satsUsed);
   json += F(",\"visible\":");
   json += String(status.satsVisible);
+  json += F(",\"gps\":");
+  json += String(status.satsGps);
+  json += F(",\"glonass\":");
+  json += String(status.satsGlonass);
+  json += F(",\"galileo\":");
+  json += String(status.satsGalileo);
+  json += F(",\"beidou\":");
+  json += String(status.satsBeidou);
   json += F("}");
   json += F(",\"coords\":{\"lat\":");
   json += String(status.lat, 6);

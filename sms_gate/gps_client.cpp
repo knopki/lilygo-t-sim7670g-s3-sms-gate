@@ -237,51 +237,47 @@ bool parseCgpsInfoLine(const char* line, GpsFixFields& out) {
 // #endregion FUNC_parseCgpsInfoLine
 
 // #region FUNC_parseCgnssInfoLine
-// PURPOSE: Parses +CGNSSINFO: <mode>,<fix>,<satsVisible?>,<satsUsed?> flexible.
-// SIM7670G variants emit mode, fix, totalVisible, fixSats... Keep first numeric fields.
-bool parseCgnssInfoLine(const char* line, int& mode, int& satsUsed, int& satsVisible) {
-  const char* p = strstr(line, "+CGNSSINFO:");
-  if (p == nullptr) p = strstr(line, "+CGNSSINFO");
+// PURPOSE: Parses +CGNSSINFO by the SIM767xx AT manual V1.02 field order:
+// <mode>,<GPS-SVs>,<GLONASS-SVs>,<GALILEO-SVs>,<BEIDOU-SVs>,<lat>,<N/S>,
+// <log>,<E/W>,<date>,<UTC>,<alt>,<speed>,<course>,<PDOP>,<HDOP>,<VDOP>,<NoSV>.
+// The *-SVs fields are visible satellites per constellation; NoSV counts the
+// satellites involved in positioning. Empty fields are positional: a dropped
+// field would shift every later index.
+bool parseCgnssInfoLine(const char* line, GpsSatsInfo& out) {
+  const char* p = strstr(line, "+CGNSSINFO");
   if (p == nullptr) return false;
   const char* colon = strchr(p, ':');
   if (colon == nullptr) return false;
   p = colon + 1;
   while (*p == ' ' || *p == '\t') ++p;
-  // Extract up to 4 ints
-  char buf[160];
-  snprintf(buf, sizeof(buf), "%s", p);
-  // Replace non digit/comma/minus with comma? Simple sscanf attempt
-  int m = -1, fix = -1, vis = 0, used = 0;
-  // Try: mode,fix,visible,used  OR mode,sats, ...
-  // Use strtok
-  char* tok = strtok(buf, ",");
-  int idx = 0;
-  int vals[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
-  while (tok && idx < 8) {
-    while (*tok == ' ' || *tok == '\t') ++tok;
-    if (*tok == '\0')
-      vals[idx] = 0;
-    else
-      vals[idx] = atoi(tok);
-    vals[idx] = vals[idx] < 0 ? 0 : vals[idx];
-    tok = strtok(nullptr, ",");
-    ++idx;
+
+  char buf[192];
+  const char* fields[18];
+  int last = 0;  // index of the field currently being copied
+  size_t n = 0;  // bytes written to buf
+  fields[0] = buf;
+  for (const char* q = p; *q != '\0' && *q != '\r' && *q != '\n'; ++q) {
+    if (*q == ',' && last < 17) {
+      buf[n++] = '\0';
+      fields[++last] = buf + n;
+    } else if (n + 1 < sizeof(buf)) {
+      buf[n++] = *q;
+    }
   }
-  if (idx < 1) return false;
-  m = vals[0];
-  // Heuristic: SIM7670G spec: +CGNSSINFO: <mode>,<sats>,... where sats is used count?
-  // We'll map vals[1]=fixSats, vals[2]=visible if present.
-  if (idx >= 3) {
-    used = vals[1];
-    vis = vals[2];
-  } else if (idx >= 2) {
-    used = vals[1];
-    vis = vals[1];
+  buf[n] = '\0';
+  const int count = last + 1;
+
+  out = GpsSatsInfo{};
+  int* perConstellation[4] = {&out.gps, &out.glonass, &out.galileo, &out.beidou};
+  for (int i = 1; i <= 4 && i < count; ++i) {
+    const int value = atoi(fields[i]);
+    if (value > 0) *perConstellation[i - 1] = value;
   }
-  mode = m;
-  satsUsed = used;
-  satsVisible = vis ? vis : used;
-  (void)fix;
+  out.visible = out.gps + out.glonass + out.galileo + out.beidou;
+  if (count >= 18) {
+    const int used = atoi(fields[17]);
+    out.used = used > 0 ? used : 0;
+  }
   return true;
 }
 // #endregion FUNC_parseCgnssInfoLine
@@ -347,9 +343,66 @@ GpsResult GpsClient::readResponse() {
 }
 // #endregion METHOD_GpsClient_readResponse
 
+// #region METHOD_GpsClient_restart
+// PURPOSE: Forces one clean GNSS power cycle so antenna bias is established
+// before receiver startup even when CGNSSPWR survived the previous ESP image.
+GpsResult GpsClient::restart() {
+  if (sendCommand("AT+CGNSSPWR?", kGpsDefaultTimeoutMs) != GpsResult::kSuccess) {
+    fail("cgnsspwr_query");
+    return GpsResult::kTimeout;
+  }
+  GpsResult queryResult = readResponse();
+  if (queryResult != GpsResult::kSuccess) {
+    fail("cgnsspwr_query");
+    return queryResult;
+  }
+
+  bool powered = false;
+  if (!parseCgnssPwrLine(scratch_, powered)) {
+    fail("cgnsspwr_query");
+    return GpsResult::kProtocolError;
+  }
+  if (powered) {
+    if (sendCommand("AT+CGNSSPWR=0", kGpsPowerTimeoutMs) != GpsResult::kSuccess) {
+      fail("cgnsspwr_off");
+      return GpsResult::kTimeout;
+    }
+    GpsResult powerOffResult = readResponse();
+    if (powerOffResult != GpsResult::kSuccess) {
+      fail("cgnsspwr_off");
+      return powerOffResult;
+    }
+  }
+  return ensurePowered();
+}
+// #endregion METHOD_GpsClient_restart
+
 // #region METHOD_GpsClient_ensurePowered
 GpsResult GpsClient::ensurePowered() {
-  // Check current power
+  // This firmware targets the Classic board, whose active GNSS antenna is wired
+  // to modem GPIO4. GPIO1 commands can return OK but only drive the Standard
+  // board's antenna route, so an OK response cannot be used for auto-detection.
+  if (sendCommand("AT+CGDRT=4,1", 2000) != GpsResult::kSuccess) {
+    fail("antenna_bias_route");
+    return GpsResult::kTimeout;
+  }
+  GpsResult antennaRoute = readResponse();
+  if (antennaRoute != GpsResult::kSuccess) {
+    fail("antenna_bias_route");
+    return antennaRoute;
+  }
+  if (sendCommand("AT+CGSETV=4,1", 2000) != GpsResult::kSuccess) {
+    fail("antenna_bias_voltage");
+    return GpsResult::kTimeout;
+  }
+  GpsResult antennaVoltage = readResponse();
+  if (antennaVoltage != GpsResult::kSuccess) {
+    fail("antenna_bias_voltage");
+    return antennaVoltage;
+  }
+
+  // Check current power only after restoring antenna bias. The modem can keep
+  // CGNSSPWR=1 across an ESP/task restart while the antenna route is not set.
   if (sendCommand("AT+CGNSSPWR?", kGpsDefaultTimeoutMs) == GpsResult::kSuccess) {
     GpsResult r = readResponse();
     if (r == GpsResult::kSuccess) {
@@ -377,21 +430,6 @@ GpsResult GpsClient::ensurePowered() {
     return GpsResult::kSuccess;
   }
 power_on:
-  // Antenna bias — critical for etecl25t6a active patch.
-  // Try GPIO 1 then 4, matching gps_probe logic.
-  {
-    const char* antCmds[][2] = {
-        {"AT+CGDRT=1,1", "AT+CGSETV=1,1"},
-        {"AT+CGDRT=4,1", "AT+CGSETV=4,1"},
-    };
-    for (auto& pair : antCmds) {
-      if (sendCommand(pair[0], 2000) == GpsResult::kSuccess) readResponse();
-      if (sendCommand(pair[1], 2000) == GpsResult::kSuccess) {
-        GpsResult rr = readResponse();
-        if (rr == GpsResult::kSuccess) break;
-      }
-    }
-  }
   if (sendCommand("AT+CGNSSPWR=1", kGpsPowerTimeoutMs) == GpsResult::kSuccess) {
     GpsResult r = readResponse();
     if (r != GpsResult::kSuccess) {
@@ -430,11 +468,10 @@ GpsResult GpsClient::poll(GpsStatus& out) {
   // Ensure GNSS engine powered (also sets mode)
   GpsResult pr = ensurePowered();
   if (pr != GpsResult::kSuccess) {
-    // Still continue to poll? Mark not powered
-    tmp.powered = false;
-  } else {
-    tmp.powered = true;
+    out = tmp;
+    return pr;
   }
+  tmp.powered = true;
 
   // CGNSSPWR? echo check
   if (sendCommand("AT+CGNSSPWR?", kGpsDefaultTimeoutMs) == GpsResult::kSuccess &&
@@ -471,11 +508,9 @@ GpsResult GpsClient::poll(GpsStatus& out) {
   // CGNSSINFO for sats
   if (sendCommand("AT+CGNSSINFO", 3000) == GpsResult::kSuccess &&
       readResponse() == GpsResult::kSuccess) {
-    int mode = -1, used = 0, vis = 0;
-    if (parseCgnssInfoLine(scratch_, mode, used, vis)) {
-      if (mode >= 0) tmp.mode = mode;
-      tmp.satsUsed = used;
-      tmp.satsVisible = vis;
+    GpsSatsInfo sats;
+    if (parseCgnssInfoLine(scratch_, sats)) {
+      tmp.sats = sats;
     }
   }
   out = tmp;

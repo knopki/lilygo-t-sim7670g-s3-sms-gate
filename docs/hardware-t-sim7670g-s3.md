@@ -111,7 +111,7 @@ terminal failure (mirrors the ZTE `sendRejected` contract in ADR-0003).
   AT+CGNSSPWR=1        # engine on  (AT+CGNSSPWR? -> 1)
   AT+CGNSSMODE=3       # GPS+BD+GLONASS (read-back should be 3)
   AT+CGPSINFO          # NMEA-like: lat,N,lon,E,date,time,alt,speed
-  AT+CGNSSINFO         # sat count / fix status (,,,,,,, = no fix)
+  AT+CGNSSINFO         # fix mode,GPS/GLONASS/GALILEO/BEIDOU-SVs visible,lat,N,lon,E,date,UTC,alt,speed,course,PDOP,HDOP,VDOP,NoSV(used); (,,,,,,,,,,,,,,,,, = no fix)
   AT+CGNSSPORTSWITCH=0,1 / AT+CGNSSTST=1  # optional NMEA routing
   AT+CGPSCOLD          # cold start (forces TTFF)
   AT+CGNSSPWR=0        # engine off
@@ -149,8 +149,9 @@ terminal failure (mirrors the ZTE `sendRejected` contract in ADR-0003).
   sky view. Indoors/through window film or inside a metal case: `no_fix` is
   expected. Cold TTFF 30–60 s after `CGNSSPWR=1`, up to several minutes on
   first lock.
-* **LED:** `GPS PPS` (red near modem) — `ON = starting, OFF = ready, 1 Hz flash = fix`.
-  Mirrors `AT+CGNSSINFO` fix status.
+* **Fix indication:** the Classic H707 board has no exposed PPS route or GPS
+  PPS indicator. Check `AT+CGPSINFO`/`AT+CGNSSINFO`; PPS-related descriptions
+  apply only to board revisions that route that signal.
 
 ## 6. Connectors, jumpers, and indicators
 
@@ -161,8 +162,8 @@ terminal failure (mirrors the ZTE `sendRejected` contract in ADR-0003).
 * `QWIIC` (Standard only), `JST Solar` (5–6 V charge only, not board power),
   `TF` (FFat at `0x616000`), `CAM 24-pin` (Standard).
 * LEDs: `MODEM STATE` (startup ON), `MODEM NET` (flashing after attach),
-  `GPS PPS` (§5), `CHARGE` / `CHARGE DONE` near battery switch (DONE stays on
-  with no battery).
+  `CHARGE` / `CHARGE DONE` near battery switch (DONE stays on with no battery).
+  The Classic H707 has no GPS PPS indicator.
 * VBUS = USB-C 5 V, VBAT = 4.2 V header; VBUS is the only cabled power input
   besides battery.
 
@@ -212,9 +213,9 @@ gnss_poll count=1..10 every 3s: AT+CGPSINFO -> ,,,,,,,, | AT+CGNSSINFO -> ,,,,,,
 ```
 
 Transition `ERROR -> ",,,,,,,,"` and stable `PWR:1 MODE:3` for 27 s proves:
-antenna bias path, Classic GPIO4 mapping, and integrated GNSS engine are all
-healthy. `no_fix` indoors is expected; a fix appears only outdoors (PPS 1 Hz,
-`CGPSINFO` fills lat/lon).
+antenna bias command path, Classic GPIO4 mapping, and integrated GNSS engine
+control all respond. This short indoor run did not verify RF reception; a fix
+is confirmed only when `CGPSINFO` fills lat/lon.
 
 Reproduce: `mise exec -- arduino-cli upload tools/gps_probe -p /dev/ttyACM0`
 and monitor at 115200. Passthrough stays active for manual `AT` entry.

@@ -56,7 +56,7 @@ WebGpsConfig GpsService::webConfig() const {
   GpsStatus raw = statusCache_.read();
   if (raw.present) {
     if (raw.fix)
-      web.lastStatus = String(F("fix sats=")) + String(raw.satsUsed) + F(" lat=") +
+      web.lastStatus = String(F("fix sats=")) + String(raw.sats.used) + F(" lat=") +
                        String(raw.lat, 6) + F(" lon=") + String(raw.lon, 6);
     else if (raw.powered)
       web.lastStatus = F("powered, no fix");
@@ -75,8 +75,12 @@ WebGpsStatus GpsService::webStatus() const {
   web.powered = raw.powered;
   web.fix = raw.fix;
   web.mode = raw.mode;
-  web.satsUsed = raw.satsUsed;
-  web.satsVisible = raw.satsVisible;
+  web.satsUsed = raw.sats.used;
+  web.satsVisible = raw.sats.visible;
+  web.satsGps = raw.sats.gps;
+  web.satsGlonass = raw.sats.glonass;
+  web.satsGalileo = raw.sats.galileo;
+  web.satsBeidou = raw.sats.beidou;
   web.lat = raw.lat;
   web.lon = raw.lon;
   web.alt = raw.alt;
@@ -153,6 +157,7 @@ void GpsService::runPollTask() {
     vTaskDelay(pdMS_TO_TICKS(kPollSliceMs));
   }
 
+  bool restartRequired = true;
   while (!taskStopRequested_) {
     if (shouldPoll()) {
       pollActive_ = true;
@@ -164,7 +169,15 @@ void GpsService::runPollTask() {
         transport.begin();
         GpsClient client(transport, scratch, kGpsScratchSize);
         GpsStatus status;
-        GpsResult result = client.poll(status);
+        GpsResult result = GpsResult::kSuccess;
+        if (restartRequired) {
+          result = client.restart();
+          if (result == GpsResult::kSuccess) {
+            restartRequired = false;
+            Serial.println("event=gps_restart_complete reason=task_start");
+          }
+        }
+        if (result == GpsResult::kSuccess) result = client.poll(status);
         status.updatedMs = millis();
         if (result == GpsResult::kSuccess) {
           publishStatus(status);
@@ -172,7 +185,7 @@ void GpsService::runPollTask() {
               "event=gps_poll present=%s powered=%s fix=%s mode=%d sats_used=%d sats_vis=%d "
               "lat=%.6f lon=%.6f alt=%.1f iso=%s stack_hwm=%u\n",
               status.present ? "true" : "false", status.powered ? "true" : "false",
-              status.fix ? "true" : "false", status.mode, status.satsUsed, status.satsVisible,
+              status.fix ? "true" : "false", status.mode, status.sats.used, status.sats.visible,
               status.lat, status.lon, status.alt, status.isoTime,
               static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
           // Time sync: feed GNSS sample to TimeSync (ms precision) when fix & timeSyncEnabled.

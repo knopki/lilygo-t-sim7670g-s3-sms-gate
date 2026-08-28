@@ -5,7 +5,7 @@
 // hardware (mirrors modem_client.h style).
 // SCOPE:
 // - GpsStatus snapshot, GpsFix helpers, GpsResult stable outcome,
-//   GpsClient ensurePowered/poll with scratch and failedStage,
+//   GpsClient restart/ensurePowered/poll with scratch and failedStage,
 //   pure parsers for +CGNSSPWR/+CGPSINFO/+CGNSSINFO/CGPSSAT.
 // - NOT: HardwareSerial ownership and pin control (modem_transport.h),
 //   NVS persistence, HTTP/JSON rendering and system clock sync.
@@ -33,6 +33,19 @@ enum class GpsResult {
 };
 // #endregion ENUM_GpsResult
 
+// #region STRUCT_GpsSatsInfo
+// PURPOSE: Satellite counts from +CGNSSINFO kept per constellation so the
+// UI can show the breakdown instead of only a combined total.
+struct GpsSatsInfo {
+  int gps = 0;      // <GPS-SVs> visible
+  int glonass = 0;  // <GLONASS-SVs> visible
+  int galileo = 0;  // <GALILEO-SVs> visible
+  int beidou = 0;   // <BEIDOU-SVs> visible
+  int visible = 0;  // sum of the four constellation counts
+  int used = 0;     // <NoSV>: satellites involved in positioning
+};
+// #endregion STRUCT_GpsSatsInfo
+
 // #region STRUCT_GpsStatus
 // PURPOSE: Snapshot for the portMUX cache and GET /api/gps/status. All strings
 // are bounded NUL-terminated buffers; lat/lon are decimal degrees, 0 when no fix.
@@ -40,9 +53,8 @@ struct GpsStatus {
   bool present = false;  // AT OK seen
   bool powered = false;  // +CGNSSPWR: 1
   bool fix = false;
-  int mode = -1;  // +CGNSSMODE or -1 unknown
-  int satsUsed = 0;
-  int satsVisible = 0;
+  int mode = -1;     // +CGNSSMODE or -1 unknown
+  GpsSatsInfo sats;  // counts from +CGNSSINFO
   double lat = 0.0;
   double lon = 0.0;
   float alt = 0.0f;
@@ -66,6 +78,7 @@ class GpsClient {
  public:
   GpsClient(ModemChannel& channel, char* scratch, size_t scratchSize);
 
+  GpsResult restart();
   GpsResult ensurePowered();
   GpsResult poll(GpsStatus& out);
 
@@ -104,7 +117,11 @@ struct GpsFixFields {
   char rawLon[24] = "";
 };
 bool parseCgpsInfoLine(const char* line, GpsFixFields& out);
-bool parseCgnssInfoLine(const char* line, int& mode, int& satsUsed, int& satsVisible);
+// Parses +CGNSSINFO by the SIM767xx manual V1.02 field order
+// (<mode>,<GPS-SVs>,<GLONASS-SVs>,<GALILEO-SVs>,<BEIDOU-SVs>,...,<NoSV>) into
+// per-constellation counts; field 0 is the fix mode (2=2D/3=3D) and is not
+// part of the output because GpsStatus.mode is sourced from AT+CGNSSMODE?.
+bool parseCgnssInfoLine(const char* line, GpsSatsInfo& out);
 bool gpsFixToIso(const GpsFixFields& fix, char* out, size_t outSize);
 // Converts fix date+time (with ms) to UTC epoch milliseconds; false on malformed.
 bool gpsFixToEpochMs(const GpsFixFields& fix, int64_t& epochMsOut);

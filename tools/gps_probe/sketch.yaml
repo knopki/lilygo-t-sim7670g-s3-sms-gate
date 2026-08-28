@@ -1,5 +1,5 @@
 #Arduino CLI defaults for LilyGO T-SIM7670G-S3.
-default_fqbn: "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,FlashMode=qio,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=enabled,UploadSpeed=921600"
+default_fqbn: "esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,FlashMode=qio,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=enabled,UploadSpeed=921600"
 default_port: "/dev/ttyACM0"
 default_port_config:
   baudrate: 115200

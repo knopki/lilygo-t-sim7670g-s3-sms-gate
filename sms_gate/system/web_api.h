@@ -167,6 +167,10 @@ struct WebGpsStatus {
   int mode = -1;
   int satsUsed = 0;
   int satsVisible = 0;
+  int satsGps = 0;
+  int satsGlonass = 0;
+  int satsGalileo = 0;
+  int satsBeidou = 0;
   double lat = 0.0;
   double lon = 0.0;
   float alt = 0.0f;
