@@ -5,10 +5,15 @@
 // SCOPE:
 // - ModemSourceStore load/save, WebModemSourceConfig snapshot, form
 //   validation, poll interval, status cache, the modem_poll/send tasks,
-//   forwardModemSms via SMTP and AT dialog.
-// - NOT: Wi-Fi lifecycle, ZTE goform, HTTP route registration.
-// INVARIANTS: SMS deleted only after SMTP 250 OK; Serial1 owned only by
-// modem tasks; credentials never logged; at most one poll owns Serial1.
+//   forwardModemSms via SMTP, AT dialog, and the bounded volatile concat
+//   cache (two sets, five parts each, 20 poll-cycle incomplete fallback).
+// - NOT: Wi-Fi lifecycle, ZTE goform, HTTP route registration or persistent
+//   multipart state.
+// INVARIANTS: SMS deleted only after SMTP 250 OK; volatile concat state
+// records SMTP acceptance before each CMGD and retries only unfinished
+// cleanup during this boot; oversized/cache-full parts use the incomplete
+// single-message path; Serial1 is owned by modem tasks; credentials never
+// logged; at most one poll owns Serial1.
 // DEPENDENCIES: Uses ModemClient, ModemTransport, SmtpClient, SmtpTransport,
 // WifiManager, ConfigStore and WebApi.
 // #endregion MODULE_CONTRACT
@@ -21,6 +26,7 @@
 #include <WebServer.h>
 
 #include "persistence/config_store.h"
+#include "modem/concat_cache.h"
 #include "modem/modem_client.h"
 #include "system/task_control.h"
 #include "system/time_sync.h"
@@ -74,6 +80,7 @@ class ModemService {
   volatile bool sendDone_ = false;
   bool sendSuccess_ = false;
   String sendMessage_;
+  ModemConcatCache concatCache_;
 
   class SmtpService* smtp_ = nullptr;
   class WifiManager* wifi_ = nullptr;
@@ -86,6 +93,10 @@ class ModemService {
   void runSend();
   bool shouldRunSms(const ModemStatus& snapshot) const;
   bool forwardSms(const ModemSms& sms);
+  bool forwardCompleteConcat(ModemClient& client, size_t setIndex);
+  bool forwardExpiredConcat(ModemClient& client, size_t setIndex);
+  // Retries only source records already accepted by SMTP and not yet deleted.
+  bool deleteConcatSet(ModemClient& client, size_t setIndex);
   void runPollCycle(ModemClient& client);
 };
 // #endregion CLASS_ModemService

@@ -1,7 +1,8 @@
 # ADR-0004: Onboard SIM7670G modem as SMS source and sender (AT over Serial1)
 
-- **Status:** Accepted
+- **Status:** Superseded
 - **Date:** 2026-08-25
+- **Superseded by**: ADR-0007
 
 ## Context
 

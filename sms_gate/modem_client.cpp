@@ -1,5 +1,7 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements the host-testable SIM7670G AT dialog (ADR-0004).
+// PURPOSE: Implements the SIM7670G AT dialog (ADR-0004) as pure parsing
+// and sequencing, so the wire behavior is provable on the host while the
+// device layer only binds the transport.
 // INVARIANTS: Every exit leaves channel idle; failedStage is stable;
 // parsers tolerate 99/255 unknown sentinels; CMS/CME ERROR shapes are
 // recognised; all non-trivial functions have GRACE contracts.
@@ -7,10 +9,13 @@
 
 #include "modem/modem_client.h"
 
-#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef ARDUINO
+#include <Arduino.h>
+#endif
 
 #include "codec.h"
 #include "system/sms_validate.h"
@@ -20,10 +25,16 @@ constexpr unsigned long kModemDefaultTimeoutMs = 1000;
 constexpr unsigned long kModemSendTimeoutMs = 60000;
 constexpr int kModemInitRetries = 10;
 constexpr int kModemMaxLines = 30;
+// CMGL="ALL" of a full SM (30 SMS) needs >=61 meaningful lines (header+body
+// pairs and the terminal OK) plus empty framing lines and URCs; the budget is
+// set on total read attempts so framing noise cannot exhaust it early.
+constexpr int kModemCmglMaxReadAttempts = 128;
 }  // namespace
 
 // #region FUNC_parseCpinLine
-// PURPOSE: Parses +CPIN: <code> line into out (READY, SIM PIN, NOT INSERTED…).
+// PURPOSE: Parses the +CPIN code so the READY send/forward gate and the
+// status UI share one tested parser; unknown codes surface verbatim
+// (READY, SIM PIN, NOT INSERTED…).
 bool parseCpinLine(const char* line, char* out, size_t outSize) {
   const char* p = strstr(line, "+CPIN:");
   if (p == nullptr) return false;
@@ -39,7 +50,8 @@ bool parseCpinLine(const char* line, char* out, size_t outSize) {
 // #endregion FUNC_parseCpinLine
 
 // #region FUNC_parseCsqLine
-// PURPOSE: Parses +CSQ: <rssi>,<ber> (27.007). rssi 0-31/99, ber 0-7/99.
+// PURPOSE: Parses +CSQ under 27.007 bounds (rssi 0-31/99, ber 0-7/99), so
+// signal fields stay sentinel-guarded instead of trusting modem prose.
 bool parseCsqLine(const char* line, int& rssi, int& ber) {
   const char* p = strstr(line, "+CSQ:");
   if (p == nullptr) return false;
@@ -49,8 +61,8 @@ bool parseCsqLine(const char* line, int& rssi, int& ber) {
 // #endregion FUNC_parseCsqLine
 
 // #region FUNC_parseCesqLine
-// PURPOSE: Parses +CESQ: …,<rsrq>,<rsrp> subset; converts to dBm/dB.
-// Stores sentinel 255 as 0 dBm/dB for ModemStatus (unknown).
+// PURPOSE: Parses the +CESQ <rsrq>,<rsrp> tail and folds the 255 unknown
+// sentinel to 0, so the UI never renders a bogus dBm/dB figure.
 bool parseCesqLine(const char* line, int& rsrpDbm, int& rsrqDb) {
   // +CESQ: <rxlev>,<ber>,<rscp>,<ecno>,<rsrq>,<rsrp>
   int rxlev = 0;
@@ -76,7 +88,9 @@ bool parseCesqLine(const char* line, int& rsrpDbm, int& rsrqDb) {
 // #endregion FUNC_parseCesqLine
 
 // #region FUNC_parseCregLine
-// PURPOSE: Parses +CREG/+CEREG: <n>,<stat>[,…] and returns stat.
+// PURPOSE: Parses <stat> from both +CREG and +CEREG flavors, so readiness
+// checks need one parser regardless of which registration the network
+// reports.
 bool parseCregLine(const char* line, int& stat) {
   const char* p = strstr(line, "+CREG:");
   if (p == nullptr) p = strstr(line, "+CEREG:");
@@ -89,7 +103,9 @@ bool parseCregLine(const char* line, int& stat) {
 // #endregion FUNC_parseCregLine
 
 // #region FUNC_parseCopsLine
-// PURPOSE: Parses +COPS: <mode>,<format>,"<oper>",<act>.
+// PURPOSE: Parses +COPS and accepts the operator-less reply shape, so an
+// unregistered modem degrades to a blank operator field instead of a parse
+// failure.
 bool parseCopsLine(const char* line, char* op, size_t opSize, int& act) {
   const char* p = strstr(line, "+COPS:");
   if (p == nullptr) return false;
@@ -110,7 +126,8 @@ bool parseCopsLine(const char* line, char* op, size_t opSize, int& act) {
 // #endregion FUNC_parseCopsLine
 
 // #region FUNC_parseCpmsLine
-// PURPOSE: Parses +CPMS: "ME",<used>,<total> … for one store.
+// PURPOSE: Parses one store's used/total from +CPMS, so storage counters
+// stay best-effort display data that cannot fail a status poll.
 bool parseCpmsLine(const char* line, uint16_t& used, uint16_t& total) {
   const char* p = strstr(line, "+CPMS:");
   if (p == nullptr) return false;
@@ -126,7 +143,8 @@ bool parseCpmsLine(const char* line, uint16_t& used, uint16_t& total) {
 // #endregion FUNC_parseCpmsLine
 
 // #region FUNC_parseCclkLine
-// PURPOSE: Parses +CCLK: "yy/MM/dd,hh:mm:ss+zz".
+// PURPOSE: Extracts the quoted +CCLK value so the NITZ time feed can
+// convert modem time (cclkToEpochMs) without re-parsing the reply line.
 bool parseCclkLine(const char* line, char* out, size_t outSize) {
   const char* p = strstr(line, "+CCLK:");
   if (p == nullptr) return false;
@@ -179,8 +197,8 @@ bool cclkToEpochMs(const char* cclk, int64_t& epochMsOut) {
 // #endregion FUNC_parseCclkLine
 
 // #region FUNC_parseImeiLine
-// PURPOSE: Extracts IMEI (14-16 digits) from AT+CGSN/AT+GSN reply, tolerating
-// "+CGSN: 864..." prefix or plain "864...".
+// PURPOSE: Extracts the IMEI from both CGSN/GSN reply shapes, so status
+// identification does not depend on one firmware's echo style.
 bool parseImeiLine(const char* line, char* out, size_t outSize) {
   if (line == nullptr || out == nullptr || outSize == 0) return false;
   const char* p = strchr(line, ':');
@@ -201,8 +219,8 @@ bool parseImeiLine(const char* line, char* out, size_t outSize) {
 // #endregion FUNC_parseImeiLine
 
 // #region FUNC_parseFwLine
-// PURPOSE: Extracts firmware string from AT+CGMR reply, stripping "+CGMR: "
-// when present, otherwise returns trimmed plain line.
+// PURPOSE: Extracts the firmware string from +CGMR in either reply shape,
+// so diagnostics identify the modem build without hardcoding one format.
 bool parseFwLine(const char* line, char* out, size_t outSize) {
   if (line == nullptr || out == nullptr || outSize == 0) return false;
   const char* p = strstr(line, "+CGMR:");
@@ -224,7 +242,9 @@ bool parseFwLine(const char* line, char* out, size_t outSize) {
 // #endregion FUNC_parseFwLine
 
 // #region FUNC_decodeModemText
-// PURPOSE: Decodes one modem text field that may be UCS2-hex or plain GSM; empty stays empty.
+// PURPOSE: Normalizes modem text fields that arrive UCS2-hex
+// (CSCS="UCS2") or plain, so callers always receive UTF-8 regardless of
+// the charset the modem used for the field.
 bool decodeModemText(const char* encoded, char* out, size_t outSize) {
   if (encoded == nullptr || out == nullptr || outSize == 0) return false;
   if (encoded[0] == '\0') {
@@ -243,7 +263,9 @@ bool decodeModemText(const char* encoded, char* out, size_t outSize) {
 // #endregion FUNC_decodeModemText
 
 // #region FUNC_parseQuotedField
-// PURPOSE: Extracts one quoted string field advancing cursor past closing quote.
+// PURPOSE: Advances a cursor across one bounds-checked quoted field, so
+// both header parsers share a single extractor for the quoted-field
+// grammar.
 static bool parseQuotedField(const char*& cursor, char* out, size_t outSize) {
   while (*cursor == ' ' || *cursor == '\t') ++cursor;
   if (*cursor != '"') return false;
@@ -261,7 +283,9 @@ static bool parseQuotedField(const char*& cursor, char* out, size_t outSize) {
 // #endregion FUNC_parseQuotedField
 
 // #region FUNC_parseCmglHeader
-// PURPOSE: Parses +CMGL header tolerant to CSDH=0 (no tail) and CSDH=1 (tooa,len).
+// PURPOSE: Parses +CMGL headers with or without the CSDH tail, so the
+// inbox scan works on both firmware reply shapes without a probing
+// round-trip.
 bool parseCmglHeader(const char* line, ModemCmglInfo& out) {
   out = ModemCmglInfo{};
   if (line == nullptr) return false;
@@ -327,7 +351,8 @@ bool parseCmglHeader(const char* line, ModemCmglInfo& out) {
 // #endregion FUNC_parseCmglHeader
 
 // #region FUNC_parseCmgrHeader
-// PURPOSE: Parses +CMGR header tolerant to CSDH=0 and CSDH=1 with 7-field tail.
+// PURPOSE: Parses +CMGR headers with or without the CSDH tail, so the
+// full-body read tolerates both firmware reply shapes.
 bool parseCmgrHeader(const char* line, ModemCmgrInfo& out) {
   out = ModemCmgrInfo{};
   if (line == nullptr) return false;
@@ -404,7 +429,8 @@ bool parseCmgrHeader(const char* line, ModemCmgrInfo& out) {
 // #endregion FUNC_parseCmgrHeader
 
 // #region FUNC_parseCmglEntry
-// PURPOSE: Builds one ModemSms from a CMGL header+body pair (CSDH tolerant).
+// PURPOSE: Mirrors parseCmgrEntry for CMGL pairs, so listing and
+// single-read sources produce ModemSms through one tested decode contract.
 bool parseCmglEntry(const char* headerLine, const char* bodyLine, ModemSms& out) {
   out = ModemSms{};
   ModemCmglInfo info{};
@@ -424,7 +450,8 @@ bool parseCmglEntry(const char* headerLine, const char* bodyLine, ModemSms& out)
   }
   const char* body = bodyLine != nullptr ? bodyLine : "";
   // Body may be quoted in some firmware variants; strip quotes if present.
-  char bodyRaw[1024] = "";
+  // Max UCS2 bodies: 335 units *4 =1340 hex + quotes, so need >1400.
+  char bodyRaw[1536] = "";
   size_t bl = strlen(body);
   if (bl >= 2 && body[0] == '"' && body[bl - 1] == '"') {
     if (bl - 2 >= sizeof(bodyRaw)) return false;
@@ -450,7 +477,8 @@ bool parseCmglEntry(const char* headerLine, const char* bodyLine, ModemSms& out)
 // #endregion FUNC_parseCmglEntry
 
 // #region FUNC_parseCmgrEntry
-// PURPOSE: Builds one ModemSms from a CMGR header+body pair.
+// PURPOSE: Builds the delivered ModemSms from the CMGR pair, so forwarding
+// gets the complete UCS2-decoded text that CMGL bodies truncate.
 bool parseCmgrEntry(const char* headerLine, const char* bodyLine, ModemSms& out) {
   out = ModemSms{};
   ModemCmgrInfo info{};
@@ -468,7 +496,7 @@ bool parseCmgrEntry(const char* headerLine, const char* bodyLine, ModemSms& out)
     out.date[l] = '\0';
   }
   const char* body = bodyLine != nullptr ? bodyLine : "";
-  char bodyRaw[1024] = "";
+  char bodyRaw[1536] = "";
   size_t bl = strlen(body);
   if (bl >= 2 && body[0] == '"' && body[bl - 1] == '"') {
     if (bl - 2 >= sizeof(bodyRaw)) return false;
@@ -493,8 +521,6 @@ bool parseCmgrEntry(const char* headerLine, const char* bodyLine, ModemSms& out)
 }
 // #endregion FUNC_parseCmgrEntry
 
-// #region FUNC_parsePduConcat
-// PURPOSE: Scans a PDU hex string for 8-bit concat IE (050003) and returns ref/total/seq.
 static int hexVal(char c) {
   if (c >= '0' && c <= '9') return c - '0';
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -508,54 +534,114 @@ static bool hexByte(const char* p, uint8_t& out) {
   out = static_cast<uint8_t>((hi << 4) | lo);
   return true;
 }
-bool parsePduConcat(const char* pduHex, uint8_t& ref, uint8_t& total, uint8_t& seq) {
-  if (pduHex == nullptr) return false;
-  const size_t len = strlen(pduHex);
-  // Search case-insensitive for 050003 (UDHL 05, IEI 00, IEDL 03).
-  for (size_t i = 0; i + 12 <= len; ++i) {
-    if (tolower((unsigned char)pduHex[i]) != '0' || tolower((unsigned char)pduHex[i + 1]) != '5')
-      continue;
-    if (tolower((unsigned char)pduHex[i + 2]) != '0' ||
-        tolower((unsigned char)pduHex[i + 3]) != '0')
-      continue;
-    if (tolower((unsigned char)pduHex[i + 4]) != '0' ||
-        tolower((unsigned char)pduHex[i + 5]) != '3')
-      continue;
-    uint8_t r = 0, t = 0, s = 0;
-    if (!hexByte(pduHex + i + 6, r)) continue;
-    if (!hexByte(pduHex + i + 8, t)) continue;
-    if (!hexByte(pduHex + i + 10, s)) continue;
-    if (t == 0 || s == 0 || s > t) continue;
-    ref = r;
-    total = t;
-    seq = s;
-    return true;
+
+// #region FUNC_parseUdhConcat
+// PURPOSE: Walks exactly one bounded UDH IE sequence, so only explicit
+// concat IEs contribute metadata and malformed IE boundaries never make a
+// message body or unrelated IE look like concatenation state.
+static bool parseUdhConcat(const char* udhHex, ModemConcatInfo& out) {
+  out = ModemConcatInfo{};
+  if (udhHex == nullptr) return false;
+  const size_t chars = strlen(udhHex);
+  if (chars < 2 || chars % 2 != 0) return false;
+  const size_t bytes = chars / 2;
+  for (size_t index = 0; index < chars; ++index) {
+    if (hexVal(udhHex[index]) < 0) return false;
   }
-  // 16-bit ref variant: 060804 (UDHL 06, IEI 08, IEDL 04, 2-byte ref).
-  for (size_t i = 0; i + 14 <= len; ++i) {
-    if (tolower((unsigned char)pduHex[i]) != '0' || tolower((unsigned char)pduHex[i + 1]) != '6')
-      continue;
-    if (tolower((unsigned char)pduHex[i + 2]) != '0' ||
-        tolower((unsigned char)pduHex[i + 3]) != '8')
-      continue;
-    if (tolower((unsigned char)pduHex[i + 4]) != '0' ||
-        tolower((unsigned char)pduHex[i + 5]) != '4')
-      continue;
-    uint8_t t = 0, s = 0;
-    if (!hexByte(pduHex + i + 10, t)) continue;
-    if (!hexByte(pduHex + i + 12, s)) continue;
-    if (t == 0 || s == 0 || s > t) continue;
-    uint8_t rHi = 0, rLo = 0;
-    if (!hexByte(pduHex + i + 6, rHi)) continue;
-    if (!hexByte(pduHex + i + 8, rLo)) continue;
-    ref = rHi;
-    total = t;
-    seq = s;
-    return true;
+  uint8_t udhl = 0;
+  if (!hexByte(udhHex, udhl) || bytes != static_cast<size_t>(udhl) + 1) return false;
+  for (size_t pos = 1; pos < bytes;) {
+    uint8_t iei = 0;
+    uint8_t iedl = 0;
+    if (pos + 2 > bytes || !hexByte(udhHex + pos * 2, iei) ||
+        !hexByte(udhHex + (pos + 1) * 2, iedl) || pos + 2 + static_cast<size_t>(iedl) > bytes)
+      return false;
+    const size_t data = pos + 2;
+    ModemConcatInfo candidate{};
+    if (iei == 0x00 && iedl == 3) {
+      uint8_t ref = 0;
+      if (!hexByte(udhHex + data * 2, ref) || !hexByte(udhHex + (data + 1) * 2, candidate.total) ||
+          !hexByte(udhHex + (data + 2) * 2, candidate.seq))
+        return false;
+      candidate.present = true;
+      candidate.ref = ref;
+    } else if (iei == 0x08 && iedl == 4) {
+      uint8_t refHigh = 0;
+      uint8_t refLow = 0;
+      if (!hexByte(udhHex + data * 2, refHigh) || !hexByte(udhHex + (data + 1) * 2, refLow) ||
+          !hexByte(udhHex + (data + 2) * 2, candidate.total) ||
+          !hexByte(udhHex + (data + 3) * 2, candidate.seq))
+        return false;
+      candidate.present = true;
+      candidate.ref = static_cast<uint16_t>((static_cast<uint16_t>(refHigh) << 8) | refLow);
+      candidate.refIs16Bit = true;
+    }
+    if (candidate.present) {
+      if (candidate.total == 0 || candidate.seq == 0 || candidate.seq > candidate.total ||
+          out.present)
+        return false;
+      out = candidate;
+    }
+    pos += 2 + static_cast<size_t>(iedl);
   }
-  return false;
+  return true;
+}
+// #endregion FUNC_parseUdhConcat
+
+// #region FUNC_parsePduConcat
+// PURPOSE: Exposes strict UDH concat parsing to host tests and callers that
+// already isolated TP-UDH bytes, retaining all reference bits and width.
+bool parsePduConcat(const char* udhHex, ModemConcatInfo& out) {
+  return parseUdhConcat(udhHex, out) && out.present;
 }
 // #endregion FUNC_parsePduConcat
+
+// #region FUNC_extractConcatFromDeliverPdu
+// PURPOSE: Walks an SMS-DELIVER PDU to its real user-data header before
+// strictly parsing bounded UDH IEs, so a concat-like byte sequence in sender
+// data or message text cannot turn a single SMS into a cached multipart fragment.
+bool extractConcatFromDeliverPdu(const char* pduHex, ModemConcatInfo& out) {
+  out = ModemConcatInfo{};
+  if (pduHex == nullptr) return false;
+  const size_t hexLen = strlen(pduHex);
+  if (hexLen == 0 || hexLen % 2 != 0) return false;
+  for (size_t i = 0; i < hexLen; ++i) {
+    if (hexVal(pduHex[i]) < 0) return false;
+  }
+  const size_t bytes = hexLen / 2;
+  auto byteAt = [&](size_t index, uint8_t& value) {
+    return index < bytes && hexByte(pduHex + index * 2, value);
+  };
+  uint8_t scaLen = 0;
+  if (!byteAt(0, scaLen) || static_cast<size_t>(scaLen) + 1 >= bytes) return false;
+  size_t pos = static_cast<size_t>(scaLen) + 1;
+  uint8_t firstOctet = 0;
+  if (!byteAt(pos++, firstOctet) || (firstOctet & 0x03) != 0) return false;
+  uint8_t oaDigits = 0;
+  if (!byteAt(pos++, oaDigits)) return false;
+  // OA type plus semi-octet address, then PID, DCS, SCTS(7), and UDL.
+  const size_t oaOctets = (static_cast<size_t>(oaDigits) + 1) / 2;
+  if (pos + 1 + oaOctets + 1 + 1 + 7 + 1 > bytes) return false;
+  ++pos;  // TP-OA type-of-address
+  pos += oaOctets;
+  pos += 1 + 1 + 7;  // TP-PID, TP-DCS, TP-SCTS
+  uint8_t udl = 0;
+  if (!byteAt(pos++, udl)) return false;
+  if ((firstOctet & 0x40) == 0) return true;  // TP-UDHI absent: single SMS.
+  uint8_t udhl = 0;
+  if (!byteAt(pos, udhl) || udhl == 0 || static_cast<size_t>(udhl) + 1 > udl ||
+      pos + 1 + static_cast<size_t>(udhl) > bytes)
+    return false;
+  char udhHex[281] = "";  // UDHL is one octet, maximum UDH is 140 octets.
+  const size_t udhChars = (static_cast<size_t>(udhl) + 1) * 2;
+  memcpy(udhHex, pduHex + pos * 2, udhChars);
+  udhHex[udhChars] = '\0';
+  ModemConcatInfo concat;
+  if (!parseUdhConcat(udhHex, concat)) return false;
+  out = concat;
+  return true;
+}
+// #endregion FUNC_extractConcatFromDeliverPdu
 
 // #region FUNC_modemSmsUtf16Units
 // PURPOSE: Counts UTF-16 code units of UTF-8 text for the 335-unit send
@@ -564,18 +650,104 @@ bool parsePduConcat(const char* pduHex, uint8_t& ref, uint8_t& total, uint8_t& s
 static size_t modemSmsUtf16Units(const char* utf8) { return smsUtf16Units(utf8); }
 // #endregion FUNC_modemSmsUtf16Units
 
+// #region FUNC_isDirectGsmAsciiText
+// PURPOSE: Gates the raw GSM send path so only bytes whose ASCII codes are
+// identical to GSM 03.38 go unencoded; mismatched ASCII punctuation and
+// every non-ASCII byte must take the UCS2 fallback instead of trusting the
+// GSM extension table.
+bool isDirectGsmAsciiText(const char* text) {
+  if (text == nullptr) return false;
+  for (const char* p = text; *p != '\0'; ++p) {
+    const unsigned char ch = static_cast<unsigned char>(*p);
+    const bool safe = (ch >= 0x20 && ch <= 0x23) || (ch >= 0x25 && ch <= 0x3F) ||
+                      (ch >= 0x41 && ch <= 0x5A) || (ch >= 0x61 && ch <= 0x7A);
+    if (!safe) return false;
+  }
+  return true;
+}
+// #endregion FUNC_isDirectGsmAsciiText
+
+// #region FUNC_buildUcs2SubmitPdu
+// PURPOSE: Renders one concat part as a standards-conformant SMS-SUBMIT PDU
+// (TP-UDHI, DCS 8) so a long text reaches the peer as one reassemblable
+// message instead of being silently truncated by single-segment text mode;
+// pure so the byte-exact layout stays host-tested.
+bool buildUcs2SubmitPdu(const char* number, const char* partUcs2Hex, uint8_t ref, uint8_t total,
+                        uint8_t seq, char* out, size_t outSize, size_t& pduOctetsOut) {
+  pduOctetsOut = 0;
+  if (number == nullptr || partUcs2Hex == nullptr || out == nullptr || outSize == 0) return false;
+  if (total == 0 || seq == 0 || seq > total) return false;
+  const size_t hexLen = strlen(partUcs2Hex);
+  if (hexLen == 0 || hexLen % 4 != 0 || hexLen / 4 > kUcs2PduPartUnits) return false;
+  const char* digits = number;
+  uint8_t tonNpi = 0x81;  // unknown type / unknown numbering plan by default
+  if (*digits == '+') {
+    tonNpi = 0x91;
+    ++digits;
+  }
+  const size_t numDigits = strlen(digits);
+  if (numDigits == 0 || numDigits > 20) return false;
+  const size_t contentOctets = hexLen / 2;
+  const size_t udOctets = 6 + contentOctets;  // UDHL octet + 5 UDH bytes + content
+  if (udOctets > 255) return false;
+  const size_t addrOctets = (numDigits + 1) / 2;
+  const size_t tpduOctets = 4 + addrOctets + 3 + udOctets;  // hdr + addr + PID/DCS/UDL + UD
+  if (outSize < 2 * (tpduOctets + 1) + 1) return false;     // + SCA octet + NUL
+  size_t used = 0;
+  auto put = [&](uint8_t v) {
+    static const char kHex[] = "0123456789ABCDEF";
+    out[used++] = kHex[v >> 4];
+    out[used++] = kHex[v & 0x0F];
+  };
+  put(0x00);  // SCA: no service centre address
+  put(0x41);  // SMS-SUBMIT, TP-UDHI=1, VPF=00 (no validity period)
+  put(0x00);  // TP-MR
+  put(static_cast<uint8_t>(numDigits));
+  put(tonNpi);
+  for (size_t i = 0; i < addrOctets; ++i) {
+    // Semi-octet address: low nibble first, F fills the high nibble when
+    // the digit count is odd.
+    const int lo = hexVal(digits[2 * i]);
+    const int hi = (2 * i + 1 < numDigits) ? hexVal(digits[2 * i + 1]) : hexVal('F');
+    if (lo < 0 || hi < 0) return false;
+    put(static_cast<uint8_t>((hi << 4) | lo));
+  }
+  put(0x00);                            // TP-PID
+  put(0x08);                            // TP-DCS: UCS2
+  put(static_cast<uint8_t>(udOctets));  // TP-UDL counts UDHL + UDH + content
+  put(0x05);                            // TP-UDHL: one 5-byte concat header
+  put(0x00);                            // IEI: concatenated 8-bit reference
+  put(0x03);                            // IE data length
+  put(ref);
+  put(total);
+  put(seq);
+  for (size_t i = 0; i < hexLen; i += 2) {
+    const int hi = hexVal(partUcs2Hex[i]);
+    const int lo = hexVal(partUcs2Hex[i + 1]);
+    if (hi < 0 || lo < 0) return false;
+    put(static_cast<uint8_t>((hi << 4) | lo));
+  }
+  out[used] = '\0';
+  pduOctetsOut = tpduOctets;
+  return true;
+}
+// #endregion FUNC_buildUcs2SubmitPdu
+
 // #region CLASS_ModemClient
 ModemClient::ModemClient(ModemChannel& channel, char* scratch, size_t scratchSize)
     : channel_(channel), scratch_(scratch), scratchSize_(scratchSize) {}
 // #endregion CLASS_ModemClient
 
 // #region METHOD_ModemClient_fail
-// PURPOSE: Records stable stage token for Serial/UI.
+// PURPOSE: Sets the stable stage token for the last failure, so Serial
+// events and the UI report a fixed vocabulary instead of raw modem text.
 void ModemClient::fail(const char* stage) { failedStage_ = stage; }
 // #endregion METHOD_ModemClient_fail
 
 // #region METHOD_ModemClient_sendCommand
-// PURPOSE: Sends one AT command (with CRLF) and drains echo.
+// PURPOSE: Purges stale input, then writes one CRLF-terminated command, so
+// every dialog step starts from a clean line boundary and stale replies
+// cannot be attributed to the new command.
 ModemResult ModemClient::sendCommand(const char* cmd, unsigned long timeoutMs) {
   (void)timeoutMs;
   channel_.purge();
@@ -597,8 +769,9 @@ ModemResult ModemClient::sendCommand(const char* cmd, unsigned long timeoutMs) {
 // #endregion METHOD_ModemClient_sendCommand
 
 // #region METHOD_ModemClient_readResponse
-// PURPOSE: Reads lines until OK/ERROR/+CMS ERROR/+CME ERROR; stores last
-// non-empty + line in scratch for failedStage diagnostics.
+// PURPOSE: Drains a bounded reply to its terminal OK/ERROR and keeps the
+// last payload line in scratch, so failure diagnostics carry the decisive
+// modem line while the success path stays quiet.
 ModemResult ModemClient::readResponse() {
   if (scratch_ == nullptr || scratchSize_ == 0) {
     fail("no_scratch");
@@ -634,10 +807,11 @@ ModemResult ModemClient::readResponse() {
 // #endregion METHOD_ModemClient_readResponse
 
 // #region METHOD_ModemClient_init
-// PURPOSE: Bring-up sequence: AT -> ATE0 -> ATV1 -> CMEE=2 -> CMGF=1 ->
-// CSCS="UCS2" -> CSDH=1 -> CPMS="ME" -> CNMI=2,1 + bounded wait for
-// "SMS DONE" URC (research §1/§8). Each step is best-effort but reported
-// via failedStage on hard AT absence.
+// PURPOSE: Brings the modem to text-mode SMS readiness so one unsupported
+// command cannot block the rest: each step is best-effort with its stage
+// token, only absent AT fails init (kNotPresent), and the SMS DONE URC
+// wait stays bounded (research §1/§8). Sequence: AT -> ATE0 -> ATV1 ->
+// CMEE=2 -> CMGF=1 -> CSCS="UCS2" -> CSDH=1 -> CPMS="ME" -> CNMI=2,1.
 ModemResult ModemClient::init() {
   for (int attempt = 0; attempt < kModemInitRetries; ++attempt) {
     if (sendCommand("AT", kModemDefaultTimeoutMs) != ModemResult::kSuccess) continue;
@@ -749,6 +923,9 @@ ModemResult ModemClient::pollStatus(ModemStatus& out) {
     parseCopsLine(scratch_, tmp.copsOp, sizeof(tmp.copsOp), act);
     tmp.copsAct = act;
   }
+  // Read ME counters, then SM counters via a mem1-only CPMS switch, then
+  // always restore mem1 to ME. Best-effort: a storage-counter failure never
+  // fails the whole status poll.
   if (sendCommand("AT+CPMS?", 2000) == ModemResult::kSuccess &&
       readResponse() == ModemResult::kSuccess) {
     uint16_t used = 0;
@@ -757,16 +934,14 @@ ModemResult ModemClient::pollStatus(ModemStatus& out) {
       tmp.smsUsedMe = used;
       tmp.smsTotalMe = total;
     }
-    if (sendCommand("AT+CPMS=\"SM\",\"SM\",\"SM\"", 2000) == ModemResult::kSuccess) readResponse();
-    if (sendCommand("AT+CPMS?", 2000) == ModemResult::kSuccess &&
-        readResponse() == ModemResult::kSuccess) {
-      if (parseCpmsLine(scratch_, used, total)) {
+    if (selectReadStorage("SM") == ModemResult::kSuccess) {
+      if (sendCommand("AT+CPMS?", 2000) == ModemResult::kSuccess &&
+          readResponse() == ModemResult::kSuccess && parseCpmsLine(scratch_, used, total)) {
         tmp.smsUsedSm = used;
         tmp.smsTotalSm = total;
       }
     }
-    sendCommand("AT+CPMS=\"ME\",\"ME\",\"ME\"", 2000);
-    readResponse();
+    selectReadStorage("ME");
   }
   if (sendCommand("AT+CCLK?", 2000) == ModemResult::kSuccess &&
       readResponse() == ModemResult::kSuccess) {
@@ -817,7 +992,12 @@ ModemResult ModemClient::pollStatus(ModemStatus& out) {
 // #endregion METHOD_ModemClient_pollStatus
 
 // #region METHOD_ModemClient_findOldestUnread
-// PURPOSE: Bounded poll of "REC UNREAD" via AT+CMGL, decoding UCS2 and picking oldest by idx.
+// PURPOSE: Bounded scan of AT+CMGL="ALL" picking the oldest incoming index;
+// the reply is drained to its terminal OK (otherwise kTimeout with stage
+// timeout/cmgl_no_ok) and the full body is fetched via CMGR only after that
+// OK, so a truncated or full-storage listing is never mistaken for an empty
+// inbox and never bleeds into the next command. CMGL bodies stay undecoded
+// (truncated for Latin on this firmware); CMGR is the body source of truth.
 ModemResult ModemClient::findOldestUnread(ModemSms& out, bool& found) {
   out = ModemSms{};
   found = false;
@@ -825,82 +1005,125 @@ ModemResult ModemClient::findOldestUnread(ModemSms& out, bool& found) {
     fail("no_scratch");
     return ModemResult::kProtocolError;
   }
-  if (sendCommand("AT+CMGL=\"REC UNREAD\"", 5000) != ModemResult::kSuccess)
-    return ModemResult::kTimeout;
-  char line[256];
-  char pendingHeader[256] = "";
-  bool hasPending = false;
-  ModemSms best{};
+  // Use "ALL" so REC READ (already seen but not deleted after SMTP fail) also gets forwarded;
+  // filter to incoming only, like ZTE does for tags 0/1. This also prevents SM/ME drift.
+  if (sendCommand("AT+CMGL=\"ALL\"", 5000) != ModemResult::kSuccess) return ModemResult::kTimeout;
+  char line[1536];
   uint16_t bestIdx = 0xFFFF;
   bool haveBest = false;
-  for (int i = 0; i < 60; ++i) {
+  bool terminalOk = false;
+  for (int attempt = 0; attempt < kModemCmglMaxReadAttempts; ++attempt) {
     int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
     if (len < 0) {
       fail("timeout");
       return ModemResult::kTimeout;
     }
     if (len == 0) continue;
-    if (strcmp(line, "OK") == 0) break;
+    if (strcmp(line, "OK") == 0) {
+      terminalOk = true;
+      break;
+    }
     if (strstr(line, "+CMS ERROR") != nullptr || strstr(line, "+CME ERROR") != nullptr ||
         strcmp(line, "ERROR") == 0) {
       fail("cms_error");
       return ModemResult::kProtocolError;
     }
     if (strncmp(line, "+CMGL:", 6) == 0) {
-      if (hasPending) {
-        ModemSms cur{};
-        if (parseCmglEntry(pendingHeader, "", cur)) {
-          uint16_t idx = static_cast<uint16_t>(atoi(cur.id));
-          if (!haveBest || idx < bestIdx) {
-            best = cur;
-            bestIdx = idx;
+      ModemCmglInfo curInfo{};
+      if (parseCmglHeader(line, curInfo)) {
+        // Only incoming — ignore STO SENT/UNSENT/DRAFT (like ZTE tags 2/3/4)
+        if (strcmp(curInfo.stat, "REC UNREAD") == 0 || strcmp(curInfo.stat, "REC READ") == 0) {
+          if (!haveBest || curInfo.idx < bestIdx) {
+            bestIdx = curInfo.idx;
             haveBest = true;
           }
         }
       }
-      snprintf(pendingHeader, sizeof(pendingHeader), "%s", line);
-      hasPending = true;
-      continue;
-    }
-    if (hasPending) {
-      ModemSms cur{};
-      if (parseCmglEntry(pendingHeader, line, cur)) {
-        uint16_t idx = static_cast<uint16_t>(atoi(cur.id));
-        if (!haveBest || idx < bestIdx) {
-          best = cur;
-          bestIdx = idx;
-          haveBest = true;
-        }
-      } else {
-        fail("cmgl_parse");
-        return ModemResult::kProtocolError;
-      }
-      hasPending = false;
     }
   }
-  if (hasPending) {
-    ModemSms cur{};
-    if (parseCmglEntry(pendingHeader, "", cur)) {
-      uint16_t idx = static_cast<uint16_t>(atoi(cur.id));
-      if (!haveBest || idx < bestIdx) {
-        best = cur;
-        bestIdx = idx;
-        haveBest = true;
-      }
-    }
+  if (!terminalOk) {
+    // Bounded budget exhausted without terminal OK: the listing is incomplete,
+    // so it must not count as an empty inbox and CMGR must not start.
+    fail("cmgl_no_ok");
+    return ModemResult::kTimeout;
   }
   if (!haveBest) {
     found = false;
     return ModemResult::kSuccess;
   }
-  out = best;
+  // Fetch the full SMS via CMGR — reliable for both Latin and Cyrillic with CSCS="UCS2"
+  char idStr[16];
+  snprintf(idStr, sizeof(idStr), "%u", (unsigned)bestIdx);
+#ifdef ARDUINO
+  Serial.printf("event=modem_cmgl_picked idx=%u fetching_via_cmgr\n", (unsigned)bestIdx);
+#endif
+  ModemResult r = readSms(idStr, out);
+  if (r != ModemResult::kSuccess) return r;
   found = true;
-  (void)bestIdx;
   return ModemResult::kSuccess;
 }
 // #endregion METHOD_ModemClient_findOldestUnread
+
+// #region METHOD_ModemClient_findUnreadCandidates
+// PURPOSE: Drains CMGL into ascending incoming message identifiers without
+// issuing CMGR, so ModemService can skip RAM-cached concat parts and keep
+// scanning for their siblings instead of repeatedly selecting the oldest one.
+ModemResult ModemClient::findUnreadCandidates(ModemInboxCandidate* out, size_t capacity,
+                                              size_t& count) {
+  count = 0;
+  if (out == nullptr || capacity == 0) {
+    fail("cmgl_input");
+    return ModemResult::kProtocolError;
+  }
+  if (sendCommand("AT+CMGL=\"ALL\"", 5000) != ModemResult::kSuccess) return ModemResult::kTimeout;
+  char line[1536];
+  bool terminalOk = false;
+  for (int attempt = 0; attempt < kModemCmglMaxReadAttempts; ++attempt) {
+    const int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
+    if (len < 0) {
+      fail("timeout");
+      return ModemResult::kTimeout;
+    }
+    if (len == 0) continue;
+    if (strcmp(line, "OK") == 0) {
+      terminalOk = true;
+      break;
+    }
+    if (strstr(line, "+CMS ERROR") != nullptr || strstr(line, "+CME ERROR") != nullptr ||
+        strcmp(line, "ERROR") == 0) {
+      fail("cms_error");
+      return ModemResult::kProtocolError;
+    }
+    if (strncmp(line, "+CMGL:", 6) != 0) continue;
+    ModemCmglInfo info{};
+    if (!parseCmglHeader(line, info) ||
+        (strcmp(info.stat, "REC UNREAD") != 0 && strcmp(info.stat, "REC READ") != 0))
+      continue;
+    size_t insert = 0;
+    while (insert < count && atoi(out[insert].id) < info.idx) ++insert;
+    if (insert < count && atoi(out[insert].id) == info.idx) continue;
+    if (count < capacity) {
+      for (size_t move = count; move > insert; --move) out[move] = out[move - 1];
+      ++count;
+    } else if (insert < capacity) {
+      for (size_t move = capacity - 1; move > insert; --move) out[move] = out[move - 1];
+    } else {
+      continue;
+    }
+    snprintf(out[insert].id, sizeof(out[insert].id), "%u", static_cast<unsigned>(info.idx));
+  }
+  if (!terminalOk) {
+    fail("cmgl_no_ok");
+    return ModemResult::kTimeout;
+  }
+  return ModemResult::kSuccess;
+}
+// #endregion METHOD_ModemClient_findUnreadCandidates
+
 // #region METHOD_ModemClient_readSms
-// PURPOSE: Reads one SMS by index via AT+CMGR.
+// PURPOSE: Fetches one SMS with its complete body via CMGR, because CMGL
+// bodies truncate Latin text on this firmware — CMGR is the body source of
+// truth for forwarding.
 ModemResult ModemClient::readSms(const char* id, ModemSms& out) {
   out = ModemSms{};
   if (id == nullptr || id[0] == '\0') {
@@ -916,10 +1139,10 @@ ModemResult ModemClient::readSms(const char* id, ModemSms& out) {
   char cmd[32];
   snprintf(cmd, sizeof(cmd), "AT+CMGR=%ld", idx);
   if (sendCommand(cmd, 3000) != ModemResult::kSuccess) return ModemResult::kTimeout;
-  char line[256];
-  char header[256] = "";
+  char line[1536];
+  char header[1536] = "";
   bool haveHeader = false;
-  char body[1024] = "";
+  char body[1536] = "";
   bool haveBody = false;
   for (int i = 0; i < kModemInitRetries; ++i) {
     int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
@@ -956,8 +1179,76 @@ ModemResult ModemClient::readSms(const char* id, ModemSms& out) {
   return ModemResult::kSuccess;
 }
 // #endregion METHOD_ModemClient_readSms
+
+// #region METHOD_ModemClient_probeConcat
+// PURPOSE: Obtains only SMS-DELIVER UDH metadata in a bounded PDU-mode
+// CMGR probe while preserving text mode for body reads, so multipart parts
+// can be cached without adding a GSM-7 decoder or changing CMGR text bodies.
+ModemResult ModemClient::probeConcat(const char* id, ModemConcatInfo& out) {
+  out = ModemConcatInfo{};
+  if (id == nullptr || id[0] == '\0') {
+    fail("cmgr_input");
+    return ModemResult::kProtocolError;
+  }
+  char* end = nullptr;
+  const long idx = strtol(id, &end, 10);
+  if (end == id || *end != '\0' || idx < 0 || idx > 65535) {
+    fail("cmgr_input");
+    return ModemResult::kProtocolError;
+  }
+  ModemResult result = ModemResult::kSuccess;
+  if (sendCommand("AT+CMGF=0", 3000) != ModemResult::kSuccess ||
+      readResponse() != ModemResult::kSuccess) {
+    fail("cmgf");
+    result = ModemResult::kProtocolError;
+  } else {
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "AT+CMGR=%ld", idx);
+    if (sendCommand(cmd, 3000) != ModemResult::kSuccess) {
+      result = ModemResult::kTimeout;
+    } else {
+      char line[1536];
+      char pdu[1536] = "";
+      bool terminalOk = false;
+      for (int attempt = 0; attempt < kModemInitRetries; ++attempt) {
+        const int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
+        if (len < 0) {
+          fail("timeout");
+          result = ModemResult::kTimeout;
+          break;
+        }
+        if (len == 0) continue;
+        if (strcmp(line, "OK") == 0) {
+          terminalOk = true;
+          break;
+        }
+        if (strstr(line, "+CMS ERROR") != nullptr || strstr(line, "+CME ERROR") != nullptr ||
+            strcmp(line, "ERROR") == 0) {
+          fail("cms_error");
+          result = ModemResult::kProtocolError;
+          break;
+        }
+        if (line[0] != '+' && pdu[0] == '\0') snprintf(pdu, sizeof(pdu), "%s", line);
+      }
+      if (result == ModemResult::kSuccess &&
+          (!terminalOk || pdu[0] == '\0' || !extractConcatFromDeliverPdu(pdu, out))) {
+        fail("cmgr_parse");
+        result = ModemResult::kProtocolError;
+      }
+    }
+  }
+  // Text CMGR/CMGL is the source of bodies. Attempt restoration even after
+  // a PDU error; its result never hides the original probe outcome.
+  sendCommand("AT+CMGF=1", 3000);
+  readResponse();
+  return result;
+}
+// #endregion METHOD_ModemClient_probeConcat
+
 // #region METHOD_ModemClient_deleteSms
-// PURPOSE: Deletes one SMS by index via AT+CMGD and expects OK.
+// PURPOSE: Erases one SMS only after an explicit modem OK, so the
+// at-least-once delivery contract never drops a message that failed to
+// delete.
 ModemResult ModemClient::deleteSms(const char* id) {
   if (id == nullptr || id[0] == '\0') {
     fail("cmgd_input");
@@ -990,70 +1281,30 @@ ModemResult ModemClient::deleteSms(const char* id) {
   return ModemResult::kTimeout;
 }
 // #endregion METHOD_ModemClient_deleteSms
-// #region METHOD_ModemClient_sendSms
-// PURPOSE: Validates recipient and UTF-8 text under the shared 335-unit
-// limit and performs the UCS2 AT send: CMGF=1, CSCS="UCS2", CMGS with
-// ">" prompt, body + 0x1A, then +CMGS/+CMS ERROR/OK handling.
-ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
-  if (number == nullptr || textUtf8 == nullptr) {
-    fail("send_input");
+// #region METHOD_ModemClient_selectReadStorage
+// PURPOSE: Keeps incoming SMS landing in ME while the inbox scan may work
+// on the small SIM store: only the read/delete storage (mem1) switches
+// between "ME" and "SM" for subsequent CMGL/CMGR/CMGD; write and incoming
+// storages (mem2 and mem3) always stay "ME".
+ModemResult ModemClient::selectReadStorage(const char* mem) {
+  if (mem == nullptr || (strcmp(mem, "ME") != 0 && strcmp(mem, "SM") != 0)) {
+    fail("cpms_input");
     return ModemResult::kProtocolError;
   }
-  if (!isValidSmsRecipient(number)) {
-    fail("send_input");
-    return ModemResult::kProtocolError;
-  }
-  const size_t units = modemSmsUtf16Units(textUtf8);
-  if (units == 0 || units == kSmsInvalidUnits || units > kMaxSmsSendUnits) {
-    fail("send_input");
-    return ModemResult::kProtocolError;
-  }
-  lastSendHex_[0] = '\0';
-  channel_.purge();
-  // Encode number and body as UCS2 hex (DRY via codec::encodeUcs2Hex).
-  char hexNumber[128] = "";
-  char hexBody[1400] = "";
-  codec::encodeUcs2Hex(number, hexNumber, sizeof(hexNumber));
-  codec::encodeUcs2Hex(textUtf8, hexBody, sizeof(hexBody));
-  snprintf(lastSendHex_, sizeof(lastSendHex_), "%s:%s", hexNumber, hexBody);
-
-  // Step 1: AT+CMGF=1
-  if (sendCommand("AT+CMGF=1", 3000) != ModemResult::kSuccess) {
-    fail("cmgf");
-    return ModemResult::kProtocolError;
-  }
+  char cmd[32];
+  snprintf(cmd, sizeof(cmd), "AT+CPMS=\"%s\",\"ME\",\"ME\"", mem);
+  if (sendCommand(cmd, 2000) != ModemResult::kSuccess) return ModemResult::kTimeout;
   ModemResult r = readResponse();
-  if (r != ModemResult::kSuccess) {
-    fail("cmgf");
-    return r;
-  }
-  // Step 2: AT+CSCS="UCS2"
-  if (sendCommand("AT+CSCS=\"UCS2\"", 3000) != ModemResult::kSuccess) {
-    fail("cscs");
-    return ModemResult::kProtocolError;
-  }
-  r = readResponse();
-  if (r != ModemResult::kSuccess) {
-    fail("cscs");
-    return r;
-  }
-  // Step 3: AT+CMGS="<hexNumber>" -> await ">"
-  char cmd[160] = "";
-  snprintf(cmd, sizeof(cmd), "AT+CMGS=\"%s\"", hexNumber);
-  channel_.purge();
-  size_t cmdLen = strlen(cmd);
-  char withCr[192];
-  if (cmdLen + 2 >= sizeof(withCr)) {
-    fail("cmgs_prompt");
-    return ModemResult::kProtocolError;
-  }
-  memcpy(withCr, cmd, cmdLen);
-  withCr[cmdLen++] = '\r';
-  withCr[cmdLen++] = '\n';
-  if (!channel_.write(withCr, cmdLen)) {
-    fail("cmgs_prompt");
-    return ModemResult::kTimeout;
-  }
+  if (r != ModemResult::kSuccess) fail("cpms");
+  return r;
+}
+// #endregion METHOD_ModemClient_selectReadStorage
+
+// #region METHOD_ModemClient_submitData
+// PURPOSE: Drives the one shared CMGS data dialog — ">" prompt wait,
+// payload plus Ctrl-Z, then +CMGS/OK confirmation — so text mode and every
+// PDU part reuse one implementation instead of drifting apart.
+ModemResult ModemClient::submitData(const char* payload) {
   char line[192] = "";
   bool promptSeen = false;
   for (int attempt = 0; attempt < 6; ++attempt) {
@@ -1080,8 +1331,7 @@ ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
     fail("cmgs_prompt");
     return ModemResult::kTimeout;
   }
-  // Step 4: send body + Ctrl-Z
-  if (!channel_.write(hexBody, strlen(hexBody))) {
+  if (!channel_.write(payload, strlen(payload))) {
     fail("cms_error");
     return ModemResult::kTimeout;
   }
@@ -1090,7 +1340,6 @@ ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
     fail("cms_error");
     return ModemResult::kTimeout;
   }
-  // Step 5: wait for +CMGS: and OK (30-60s)
   bool haveCmgs = false;
   for (int attempt = 0; attempt < 60; ++attempt) {
     int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
@@ -1123,5 +1372,226 @@ ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
   }
   fail("timeout");
   return ModemResult::kTimeout;
+}
+// #endregion METHOD_ModemClient_submitData
+
+// #region METHOD_ModemClient_sendMultipartUcs2
+// PURPOSE: Delivers texts beyond one segment as a reassemblable UCS2
+// concatenation (SMS-SUBMIT PDU, TP-UDHI) instead of letting text mode
+// truncate them in the air; restores text mode on every outcome because
+// receive/status rely on it.
+ModemResult ModemClient::sendMultipartUcs2(const char* number, const char* textUtf8, size_t units) {
+  char hexBody[1400] = "";
+  // Exact-length check: encodeUcs2Hex truncates silently, which must fail
+  // the send instead of delivering a cut message.
+  if (codec::encodeUcs2Hex(textUtf8, hexBody, sizeof(hexBody)) != units * 4) {
+    fail("send_encode");
+    return ModemResult::kProtocolError;
+  }
+  uint16_t partStart[kMaxSmsSendMultipartParts];
+  uint16_t partLen[kMaxSmsSendMultipartParts];
+  size_t partCount = 0;
+  for (size_t off = 0; off < units;) {
+    if (partCount >= kMaxSmsSendMultipartParts) {
+      fail("send_parts");
+      return ModemResult::kProtocolError;
+    }
+    size_t len = units - off < kUcs2PduPartUnits ? units - off : kUcs2PduPartUnits;
+    // A surrogate pair split across parts decodes to garbage at both ends,
+    // so shift the boundary back until the pair travels in one part.
+    if (off + len < units) {
+      const uint32_t lastUnit = codec::parseHex4(hexBody + (off + len - 1) * 4);
+      if (lastUnit >= 0xD800 && lastUnit <= 0xDBFF) --len;
+    }
+    partStart[partCount] = static_cast<uint16_t>(off);
+    partLen[partCount] = static_cast<uint16_t>(len);
+    ++partCount;
+    off += len;
+  }
+  if (sendCommand("AT+CMGF=0", 3000) != ModemResult::kSuccess) {
+    fail("cmgf");
+    return ModemResult::kProtocolError;  // write failed: mode unchanged
+  }
+  ModemResult result = readResponse();
+  if (result != ModemResult::kSuccess) {
+    fail("cmgf");
+    // Mode state is unknown after a failed switch: put text mode back.
+    sendCommand("AT+CMGF=1", 3000);
+    readResponse();
+    return result;
+  }
+#ifdef ARDUINO
+  Serial.printf("event=modem_send_diag stage=pdu_mode parts=%u\n",
+                static_cast<unsigned>(partCount));
+#endif
+  const uint8_t ref = static_cast<uint8_t>(++pduRef_);
+  for (size_t i = 0; i < partCount && result == ModemResult::kSuccess; ++i) {
+    char partHex[4 * kUcs2PduPartUnits + 1];
+    memcpy(partHex, hexBody + static_cast<size_t>(partStart[i]) * 4,
+           static_cast<size_t>(partLen[i]) * 4);
+    partHex[static_cast<size_t>(partLen[i]) * 4] = '\0';
+    char pduHex[320];  // 1 SCA + ≤158 TPDU octets → ≤318 hex chars + NUL
+    size_t pduOctets = 0;
+    if (!buildUcs2SubmitPdu(number, partHex, ref, static_cast<uint8_t>(partCount),
+                            static_cast<uint8_t>(i + 1), pduHex, sizeof(pduHex), pduOctets)) {
+      fail("send_pdu");
+      result = ModemResult::kProtocolError;
+      break;
+    }
+    char cmd[24];
+    snprintf(cmd, sizeof(cmd), "AT+CMGS=%u", static_cast<unsigned>(pduOctets));
+    channel_.purge();
+    if (sendCommand(cmd, 3000) != ModemResult::kSuccess) {
+      fail("cmgs_prompt");
+      result = ModemResult::kTimeout;
+      break;
+    }
+    result = submitData(pduHex);
+  }
+  // Receive/status run in text mode: restore it on every outcome; a failed
+  // restore surfaces at the next poll, not as a false send result.
+  sendCommand("AT+CMGF=1", 3000);
+  readResponse();
+  return result;
+}
+// #endregion METHOD_ModemClient_sendMultipartUcs2
+
+// #region METHOD_ModemClient_sendSms
+// PURPOSE: Delivers SMS text undistorted at the peer: single-segment texts
+// take the manually proven text mode (raw GSM only for the ASCII subset
+// whose codes equal GSM 03.38, UCS2 otherwise); longer texts are handed to
+// the UCS2 concat PDU path so the whole shared 335-unit range arrives
+// instead of being truncated. Enforces the shared limit and sequences
+// CMGF/CSCS/CSMP/CMGS with the ">" prompt, body + 0x1A, then
+// +CMGS/+CMS ERROR/OK handling.
+ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
+  if (number == nullptr || textUtf8 == nullptr) {
+    fail("send_input");
+    return ModemResult::kProtocolError;
+  }
+  if (!isValidSmsRecipient(number)) {
+    fail("send_input");
+    return ModemResult::kProtocolError;
+  }
+  const size_t units = modemSmsUtf16Units(textUtf8);
+  if (units == 0 || units == kSmsInvalidUnits || units > kMaxSmsSendUnits) {
+    fail("send_input");
+    return ModemResult::kProtocolError;
+  }
+  channel_.purge();
+  // Raw GSM only for the ASCII subset whose codes match GSM 03.38; the
+  // differing punctuation and any non-ASCII take UCS2 — no extension-table
+  // encoder, per the locked plan decisions.
+  const bool directGsm = isDirectGsmAsciiText(textUtf8);
+  const bool singleSegment = (directGsm && units <= kGsmSingleSegmentUnits) ||
+                             (!directGsm && units <= kUcs2TextSegmentUnits);
+  char hexNumber[128] = "";
+  char hexBody[1400] = "";
+  char plainNumber[64] = "";
+  const char* numberForAt = nullptr;
+  const char* bodyForAt = nullptr;
+  const char* cscs = nullptr;
+  if (directGsm) {
+    cscs = "GSM";
+    snprintf(plainNumber, sizeof(plainNumber), "%s", number);
+    numberForAt = plainNumber;
+    bodyForAt = textUtf8;
+  } else {
+    cscs = "UCS2";
+    // Exact-length check: encodeUcs2Hex truncates silently, which must fail
+    // the send instead of delivering a cut message.
+    if (codec::encodeUcs2Hex(number, hexNumber, sizeof(hexNumber)) != strlen(number) * 4 ||
+        codec::encodeUcs2Hex(textUtf8, hexBody, sizeof(hexBody)) != units * 4) {
+      fail("send_encode");
+      return ModemResult::kProtocolError;
+    }
+    numberForAt = hexNumber;
+    bodyForAt = hexBody;
+  }
+
+  // Step 0: AT sync (wake modem after Serial1 reopen, DTR low)
+  sendCommand("AT", 2000);
+  readResponse();
+  // The AT probe is best-effort: drop any stage it recorded so the send
+  // outcome reports its own stage instead of leftover junk.
+  failedStage_ = "";
+  if (!singleSegment) {
+    // A text beyond one segment is silently truncated by text mode
+    // (measured on device: 300 chars -> 44 delivered), so hand it to the
+    // reassemblable concat path.
+    return sendMultipartUcs2(number, textUtf8, units);
+  }
+  // Step 1: AT+CMGF=1
+  if (sendCommand("AT+CMGF=1", 3000) != ModemResult::kSuccess) {
+    fail("cmgf");
+#ifdef ARDUINO
+    Serial.printf("event=modem_send_diag stage=cmgf_send_failed\n");
+#endif
+    return ModemResult::kProtocolError;
+  }
+  ModemResult r = readResponse();
+  if (r != ModemResult::kSuccess) {
+    fail("cmgf");
+#ifdef ARDUINO
+    Serial.printf("event=modem_send_diag stage=cmgf_reply_failed result=%d\n", (int)r);
+#endif
+    return r;
+  }
+  // Step 2: AT+CSCS="<GSM|UCS2>"
+  {
+    char cscsCmd[32];
+    snprintf(cscsCmd, sizeof(cscsCmd), "AT+CSCS=\"%s\"", cscs);
+    if (sendCommand(cscsCmd, 3000) != ModemResult::kSuccess) {
+      fail("cscs");
+      return ModemResult::kProtocolError;
+    }
+  }
+  r = readResponse();
+  if (r != ModemResult::kSuccess) {
+    fail("cscs");
+#ifdef ARDUINO
+    Serial.printf("event=modem_send_diag stage=cscs_reply_failed cscs=%s result=%d\n", cscs,
+                  (int)r);
+#endif
+    return r;
+  }
+#ifdef ARDUINO
+  Serial.printf("event=modem_send_diag stage=cmgf_cscs_ok cscs=%s body_len=%u\n", cscs,
+                (unsigned)strlen(bodyForAt));
+#endif
+  // Step 2b: AT+CSMP sets DCS (0=GSM 7-bit, 8=UCS2) so peer decodes correctly
+  {
+    const char* csmp = directGsm ? "AT+CSMP=17,167,0,0" : "AT+CSMP=17,167,0,8";
+    if (sendCommand(csmp, 3000) != ModemResult::kSuccess) {
+      fail("csmp");
+      return ModemResult::kProtocolError;
+    }
+    r = readResponse();
+    if (r != ModemResult::kSuccess) {
+      fail("csmp");
+#ifdef ARDUINO
+      Serial.printf("event=modem_send_diag stage=csmp_failed csmp=%s result=%d\n", csmp, (int)r);
+#endif
+      return r;
+    }
+  }
+  // Step 3: AT+CMGS="<number>" -> await ">"
+  char cmd[160] = "";
+  snprintf(cmd, sizeof(cmd), "AT+CMGS=\"%s\"", numberForAt);
+  channel_.purge();
+  size_t cmdLen = strlen(cmd);
+  char withCr[192];
+  if (cmdLen + 2 >= sizeof(withCr)) {
+    fail("cmgs_prompt");
+    return ModemResult::kProtocolError;
+  }
+  memcpy(withCr, cmd, cmdLen);
+  withCr[cmdLen++] = '\r';
+  withCr[cmdLen++] = '\n';
+  if (!channel_.write(withCr, cmdLen)) {
+    fail("cmgs_prompt");
+    return ModemResult::kTimeout;
+  }
+  return submitData(bodyForAt);
 }
 // #endregion METHOD_ModemClient_sendSms
