@@ -1152,6 +1152,7 @@ ModemResult ModemClient::readSms(const char* id, ModemSms& out) {
   bool haveHeader = false;
   char body[1536] = "";
   bool haveBody = false;
+  bool terminalOk = false;
   for (int i = 0; i < kModemInitRetries; ++i) {
     int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
     if (len < 0) {
@@ -1159,7 +1160,10 @@ ModemResult ModemClient::readSms(const char* id, ModemSms& out) {
       return ModemResult::kTimeout;
     }
     if (len == 0) continue;
-    if (strcmp(line, "OK") == 0) break;
+    if (strcmp(line, "OK") == 0) {
+      terminalOk = true;
+      break;
+    }
     if (strstr(line, "+CMS ERROR") != nullptr || strstr(line, "+CME ERROR") != nullptr ||
         strcmp(line, "ERROR") == 0) {
       fail("cms_error");
@@ -1174,6 +1178,10 @@ ModemResult ModemClient::readSms(const char* id, ModemSms& out) {
       snprintf(body, sizeof(body), "%s", line);
       haveBody = true;
     }
+  }
+  if (!terminalOk) {
+    fail("cmgr_no_ok");
+    return ModemResult::kTimeout;
   }
   if (!haveHeader) {
     fail("cmgr");

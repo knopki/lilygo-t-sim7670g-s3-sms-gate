@@ -1538,6 +1538,25 @@ void testReadCmsError() {
 }
 // #endregion FUNC_testReadCmsError
 
+// #region FUNC_testReadMissingOk
+// PURPOSE: Rejects a complete-looking CMGR payload when its terminal OK is
+// absent, so an incomplete modem reply cannot be forwarded or deleted.
+void testReadMissingOk() {
+  FakeModemChannel ch;
+  char scratch[256];
+  ch.addScript("AT+CMGR=2",
+               {"+CMGR: \"REC UNREAD\",\"+70000000002\",\"\",\"26/08/25,20:00:00+12\"", "0041",
+                "+CMTI: \"ME\",1", "+CMTI: \"ME\",2", "+CMTI: \"ME\",3", "+CMTI: \"ME\",4",
+                "+CMTI: \"ME\",5", "+CMTI: \"ME\",6", "+CMTI: \"ME\",7", "+CMTI: \"ME\",8"});
+  ModemClient client(ch, scratch, sizeof(scratch));
+  ModemSms sms{};
+  assert(client.readSms("2", sms) == ModemResult::kTimeout);
+  assert(strcmp(client.failedStage(), "cmgr_no_ok") == 0);
+  expectNoViolations(ch, "read_missing_ok");
+  puts("testReadMissingOk ok");
+}
+// #endregion FUNC_testReadMissingOk
+
 int main() {
   testParseCpin();
   testParseCsq();
@@ -1590,6 +1609,7 @@ int main() {
   testInitNotPresent();
   testDeleteCmsError();
   testReadCmsError();
+  testReadMissingOk();
   puts("all modem tests passed");
   return 0;
 }
