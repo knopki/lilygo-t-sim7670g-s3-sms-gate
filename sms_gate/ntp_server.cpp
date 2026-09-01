@@ -1,3 +1,13 @@
+// #region MODULE_CONTRACT
+// PURPOSE: Makes trusted local time available to LAN clients.
+// SCOPE:
+//   - Listens for LAN NTP requests and emits bounded protocol replies.
+//   - NOT: Selecting, disciplining, or persisting the system clock source.
+// INVARIANTS:
+//   - The server stops when station connectivity is unavailable.
+//   - Reply traffic is rate-limited to preserve the shared firmware loop.
+// #endregion MODULE_CONTRACT
+
 #include "system/ntp_server.h"
 
 #ifdef ARDUINO
@@ -48,6 +58,7 @@ void stampNow(uint32_t& outSec, uint32_t& outFrac) {
 #endif
 
 // #region METHOD_NtpServer_begin
+// PURPOSE: Prevents an offline or unsynchronized device from advertising bad time.
 void NtpServer::begin() {
 #ifdef ARDUINO
   if (started_) return;
@@ -65,6 +76,7 @@ void NtpServer::begin() {
 // #endregion METHOD_NtpServer_begin
 
 // #region METHOD_NtpServer_loop
+// PURPOSE: Serves LAN time without letting NTP traffic starve modem or HTTP work.
 void NtpServer::loop() {
 #ifdef ARDUINO
   if (WiFi.status() != WL_CONNECTED) {

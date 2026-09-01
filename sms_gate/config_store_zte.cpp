@@ -1,8 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Persists verified records in a dedicated NVS partition so USB
-// recovery can erase them without touching future independent settings.
-// INVARIANTS: Credentials are stored and retrieved only as whole checksummed
-// records. Schema changes must migrate stored data (see AGENTS.md).
+// PURPOSE: Preserves ZTE settings so recovery can clear them independently.
+// SCOPE:
+// - Reads, validates, migrates, and writes the ZTE profile in appcfg.
+// - NOT: ZTE modem dialogs, SMS forwarding, and HTTP rendering.
+// INVARIANTS:
+// - Credentials are stored and retrieved only as whole checksummed records.
+// - Schema changes must migrate stored data.
 // DEPENDENCIES: Uses Preferences partition label appcfg.
 // #endregion MODULE_CONTRACT
 
@@ -16,9 +19,7 @@ constexpr char kZteNamespace[] = "zte";
 }  // namespace
 
 // #region FUNC_buildZteConfigRecord
-// PURPOSE: Converts the runtime ZTE profile into its checksummed binary
-// record so persistence and the web form always exercise the same field
-// limits.
+// PURPOSE: Gives persistence one bounded ZTE representation shared with forms.
 ZteConfigRecord buildZteConfigRecord(const RuntimeZteConfig& config) {
   ZteConfigRecord record{};
   record.magic = kZteConfigMagic;
@@ -37,6 +38,8 @@ ZteConfigRecord buildZteConfigRecord(const RuntimeZteConfig& config) {
 }
 // #endregion FUNC_buildZteConfigRecord
 
+// #region METHOD_ZteConfigStore_migrateV3Record
+// PURPOSE: Upgrades a valid legacy ZTE blob without losing its settings.
 bool ZteConfigStore::migrateV3Record(size_t readLength) const {
   if (readLength != sizeof(ZteConfigRecordV3)) {
     return false;
@@ -72,11 +75,11 @@ bool ZteConfigStore::migrateV3Record(size_t readLength) const {
                 persisted ? "true" : "false");
   return persisted;
 }
+// #endregion METHOD_ZteConfigStore_migrateV3Record
 
-// #region FUNC_ZteConfigStore_load
-// PURPOSE: Restores the ZTE profile only as a whole validated record so a
-// corrupt or partial blob can never reach the modem dialog; stored v3
-// records are migrated to v4 in place (sample kept, older removed).
+// #region METHOD_ZteConfigStore_load
+// PURPOSE: Keeps corrupt or partial ZTE policy out of the modem dialog.
+// Stored v3 records are migrated to v4 in place (sample kept, older removed).
 bool ZteConfigStore::load(RuntimeZteConfig& config) const {
   Serial.printf("event=zte_load_begin partition=%s\n", kAppCfgPartition);
   Preferences preferences;
@@ -112,11 +115,10 @@ bool ZteConfigStore::load(RuntimeZteConfig& config) const {
                 static_cast<unsigned>(config.pollIntervalSec));
   return true;
 }
-// #endregion FUNC_ZteConfigStore_load
+// #endregion METHOD_ZteConfigStore_load
 
-// #region FUNC_ZteConfigStore_save
-// PURPOSE: Persists the ZTE profile only after the full record passes the
-// shared validation predicate, so web input and NVS content agree.
+// #region METHOD_ZteConfigStore_save
+// PURPOSE: Commits only shared-valid ZTE policy so forms and NVS cannot diverge.
 bool ZteConfigStore::save(const RuntimeZteConfig& config) const {
   Serial.println("event=zte_save_begin");
   const ZteConfigRecord record = buildZteConfigRecord(config);
@@ -137,4 +139,4 @@ bool ZteConfigStore::save(const RuntimeZteConfig& config) const {
                 static_cast<unsigned>(writtenLength));
   return saved;
 }
-// #endregion FUNC_ZteConfigStore_save
+// #endregion METHOD_ZteConfigStore_save

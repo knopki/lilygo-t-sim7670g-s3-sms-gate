@@ -1,15 +1,12 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Provides the single bounded recv() loop for plain-HTTP sockets so
-// smtp_transport and zte_transport share one implementation (ADR-0002). The
-// core's lwIP select returns spurious -1/EINTR under concurrent selects on
-// core 3.x, therefore plain reads never use select and treat
-// EAGAIN/EWOULDBLOCK/EINTR as "no data yet" until the caller deadline.
+// PURPOSE: Keeps plain-socket reads bounded and independent of flaky select().
 // SCOPE:
 // - Line reads and exact byte reads over an already-connected fd with
 // SO_RCVTIMEO.
 // - NOT: TLS reads, connect/write, and HTTP framing.
-// INVARIANTS: One recv() per byte/chunk, bounded by deadline via millis()+
-// delay(1); never calls available() or select().
+// INVARIANTS:
+// - One recv() per byte/chunk, bounded by deadline via millis()+ delay(1);
+// - never calls available() or select().
 // DEPENDENCIES: Arduino millis/delay and lwIP sockets.
 // #endregion MODULE_CONTRACT
 

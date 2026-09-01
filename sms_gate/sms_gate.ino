@@ -1,20 +1,9 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Boots the SMS gateway, drives the Wi-Fi lifecycle and
-// delegates HTTP, SMTP, ZTE and modem work to owned services so the
-// sketch stays a thin setup/loop shell (target ~250 lines).
+// PURPOSE: Keeps boot and loop orchestration separate from service behavior.
 // SCOPE:
-// - Boot trace, Serial heartbeat, service construction, setupFirmware
-//   station/AP selection, NVS load for SMTP/ZTE/modem, cross-service
-//   wiring, poll-task alignment, and loopFirmware request servicing.
-// - NOT: HTTP route table, Digest authentication, JSON rendering, SMTP
-//   TLS, ZTE goform, modem AT, asset gzip generation, and email
-//   rendering — all owned by library modules.
-// INVARIANTS: Credentials never written to Serial or returned in HTTP;
-// one poll/test/send owns the modem at a time; boot events are
-// preserved through the in-memory trace until USB CDC is ready.
-// DEPENDENCIES: Uses Arduino-ESP32 WiFi/WebServer/esp_system;
-// delegates to WifiManager, ConfigStore, SmtpService, ZteService,
-// ModemService and HttpServer.
+// - Boot trace, service wiring, setupFirmware, and loopFirmware.
+// - NOT: Protocol dialogs, persistence details, HTTP routes, or UI rendering.
+// INVARIANTS: Secrets stay out of logs and HTTP; modem operations are single-flight.
 // #endregion MODULE_CONTRACT
 
 #include <Arduino.h>

@@ -1,9 +1,10 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Serves the gzipped browser UI from PROGMEM and serializes the JSON
-// API responses consumed by that UI, keeping presentation out of firmware
-// control flow.
-// INVARIANTS: Every dynamic string is JSON-escaped before serialization and
-// credentials are never serialized.
+// PURPOSE: Keeps browser presentation and JSON safety out of control flow.
+// SCOPE:
+// - Escapes strings and serializes web-facing configuration, status, and operation models to JSON.
+// - NOT: HTTP route handling, authentication, persistent configuration, and hardware control.
+// INVARIANTS:
+// - Every dynamic string is JSON-escaped before serialization and credentials are never serialized.
 // #endregion MODULE_CONTRACT
 
 #include "system/web_api.h"
@@ -115,7 +116,7 @@ void appendJsonString(String& out, const String& value) {
 // #endregion FUNC_appendJsonString
 
 // #region FUNC_renderStatusJson
-// PURPOSE: Serializes WebStatus into the /api/status envelope.
+// PURPOSE: Keeps network status responses stable for provisioning and recovery UI.
 String renderStatusJson(const WebStatus& status) {
   String json;
   json.reserve(kStatusJsonReserve + 128);
@@ -141,7 +142,7 @@ String renderStatusJson(const WebStatus& status) {
 // #endregion FUNC_renderStatusJson
 
 // #region FUNC_renderNtpConfigJson
-// PURPOSE: Serializes WebNtpConfig into the /api/ntp envelope.
+// PURPOSE: Keeps normalized clock settings round-trippable through the API.
 String renderNtpConfigJson(const WebNtpConfig& config) {
   String json;
   json.reserve(96 + config.ntpServer1.length() + config.ntpServer2.length());
@@ -157,7 +158,7 @@ String renderNtpConfigJson(const WebNtpConfig& config) {
 // #endregion FUNC_renderNtpConfigJson
 
 // #region FUNC_renderSmtpConfigJson
-// PURPOSE: Serializes WebSmtpConfig into the /api/smtp envelope without exposing the password.
+// PURPOSE: Lets the settings UI inspect SMTP configuration without exposing its password.
 String renderSmtpConfigJson(const WebSmtpConfig& config) {
   String json;
   json.reserve(kSmtpJsonReserve);
@@ -183,7 +184,7 @@ String renderSmtpConfigJson(const WebSmtpConfig& config) {
 // #endregion FUNC_renderSmtpConfigJson
 
 // #region FUNC_renderZteConfigJson
-// PURPOSE: Serializes WebZteConfig into the /api/zte envelope without exposing the password.
+// PURPOSE: Lets the settings UI inspect ZTE configuration without exposing its password.
 String renderZteConfigJson(const WebZteConfig& config) {
   String json;
   json.reserve(kZteJsonReserve);
@@ -205,7 +206,7 @@ String renderZteConfigJson(const WebZteConfig& config) {
 // #endregion FUNC_renderZteConfigJson
 
 // #region FUNC_renderModemSourceJson
-// PURPOSE: Serializes WebModemSourceConfig into the /api/modem/source envelope.
+// PURPOSE: Lets the settings UI manage modem-source policy without exposing credentials.
 String renderModemSourceJson(const WebModemSourceConfig& config) {
   String json;
   json.reserve(kModemSourceReserve);
@@ -227,7 +228,7 @@ String renderModemSourceJson(const WebModemSourceConfig& config) {
 // #endregion FUNC_renderModemSourceJson
 
 // #region FUNC_renderModemStatusJson
-// PURPOSE: Serializes WebModemStatus into the /api/modem/status envelope.
+// PURPOSE: Gives the UI bounded modem diagnostics without exposing credentials.
 String renderModemStatusJson(const WebModemStatus& status) {
   String json;
   json.reserve(kModemStatusReserve);
@@ -278,7 +279,7 @@ String renderModemStatusJson(const WebModemStatus& status) {
 // #endregion FUNC_renderModemStatusJson
 
 // #region FUNC_renderGpsConfigJson
-// PURPOSE: Serializes WebGpsConfig into /api/gps envelope.
+// PURPOSE: Keeps GNSS settings available to the UI without exposing modem internals.
 String renderGpsConfigJson(const WebGpsConfig& config) {
   String json;
   json.reserve(kGpsConfigReserve);
@@ -299,6 +300,7 @@ String renderGpsConfigJson(const WebGpsConfig& config) {
 // #endregion FUNC_renderGpsConfigJson
 
 // #region FUNC_renderWatchdogStatusJson
+// PURPOSE: Gives operators recovery state needed to diagnose boot loops.
 String renderWatchdogStatusJson(const WebWatchdogStatus& status) {
   String json;
   json.reserve(180);
@@ -318,6 +320,7 @@ String renderWatchdogStatusJson(const WebWatchdogStatus& status) {
 // #endregion FUNC_renderWatchdogStatusJson
 
 // #region FUNC_renderTimeStatusJson
+// PURPOSE: Gives clients clock quality needed to judge displayed time.
 String renderTimeStatusJson(const WebTimeStatus& status) {
   String json;
   json.reserve(kTimeReserve + 32);
@@ -341,7 +344,7 @@ String renderTimeStatusJson(const WebTimeStatus& status) {
 // #endregion FUNC_renderTimeStatusJson
 
 // #region FUNC_renderGpsStatusJson
-// PURPOSE: Serializes WebGpsStatus into /api/gps/status envelope.
+// PURPOSE: Gives operators one bounded GNSS snapshot for diagnosis.
 String renderGpsStatusJson(const WebGpsStatus& status) {
   String json;
   json.reserve(kGpsStatusReserve);
@@ -392,7 +395,7 @@ String renderGpsStatusJson(const WebGpsStatus& status) {
 // #endregion FUNC_renderGpsStatusJson
 
 // #region FUNC_renderAsyncOpJson
-// PURPOSE: Serializes WebAsyncOp (running/done/result/message) for polling test/send routes.
+// PURPOSE: Keeps one-shot test and send progress pollable without blocking routes.
 String renderAsyncOpJson(const WebAsyncOp& op) {
   String json;
   json.reserve(op.message.length() + kAsyncOpReserveExtra);
@@ -410,7 +413,7 @@ String renderAsyncOpJson(const WebAsyncOp& op) {
 // #endregion FUNC_renderAsyncOpJson
 
 // #region FUNC_renderMessageJson
-// PURPOSE: Serializes a success envelope {ok:true,message}.
+// PURPOSE: Keeps successful route responses uniform for browser clients.
 String renderMessageJson(const String& message) {
   String json;
   json.reserve(message.length() + kMessageReserveExtra);
@@ -422,7 +425,7 @@ String renderMessageJson(const String& message) {
 // #endregion FUNC_renderMessageJson
 
 // #region FUNC_renderErrorJson
-// PURPOSE: Serializes an error envelope {ok:false,error}.
+// PURPOSE: Keeps validation and operation failures uniform for browser clients.
 String renderErrorJson(const String& error) {
   String json;
   json.reserve(error.length() + kMessageReserveExtra);
@@ -434,7 +437,7 @@ String renderErrorJson(const String& error) {
 // #endregion FUNC_renderErrorJson
 
 // #region FUNC_sendJson
-// PURPOSE: Sends a JSON response with the correct content type.
+// PURPOSE: Keeps HTTP clients on the API's declared JSON content type.
 void sendJson(WebServer& server, int code, const String& json) {
   server.send(code, "application/json; charset=utf-8", json);
 }

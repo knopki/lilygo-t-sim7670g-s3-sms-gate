@@ -1,20 +1,13 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Binds the host-testable SMTP dialog to the bundled
-// NetworkClientSecure transport with standard Mozilla root validation.
+// PURPOSE: Isolates secure SMTP transport from testable dialog sequencing.
 // SCOPE:
-// - TCP connect (plain or implicit TLS), line reads with deadlines, the
-// STARTTLS upgrade point, and clean teardown.
-// - NOT: SMTP sequencing, persistence, and HTML rendering.
-// INVARIANTS: The plain phase never touches the core's lwIP select path
-// (available() there does a zero-timeout select that returns spurious
-// -1/EINTR under concurrent selects on core 3.x, confirmed on hardware);
-// plain reads use one bounded recv() per byte instead. TLS-phase reads keep
-// the core's mbedTLS path proven by implicit-TLS deliveries. connected() is
-// never called in the plain phase. Every connection validates the server
-// chain, expiry, and hostname against the embedded root bundle; there is no
-// insecure mode.
-// DEPENDENCIES: Uses Arduino-ESP32 NetworkClientSecure and the Mozilla CA
-// bundle linked into the core (esp_crt_bundle).
+// - Plain/implicit TLS connections, bounded reads, STARTTLS, and teardown.
+// - NOT: SMTP sequencing, persistence, or rendering.
+// INVARIANTS:
+// - Plain reads avoid the unreliable select path;
+// - TLS validates the embedded CA bundle, expiry, and hostname;
+// - no insecure mode exists.
+// DEPENDENCIES: NetworkClientSecure, lwIP sockets, embedded Mozilla CA bundle.
 // #endregion MODULE_CONTRACT
 
 #pragma once

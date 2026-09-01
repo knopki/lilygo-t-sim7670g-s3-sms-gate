@@ -1,33 +1,15 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Owns HTTP Digest authentication, the route table and
-// the SendGate (single-flight) guards so sms_gate.ino only drives
-// setup/loop and lifecycle delegation.
+// PURPOSE: Keeps authentication and route policy in one boundary.
 // SCOPE:
-// - Full route table: /style.css, /js/main.js and /js/<page>.js (public,
-//   secret-free assets), the eight pages /wifi../sms Digest-gated once
-//   initial setup is done, GET / 302-redirecting to /wifi,
-//   GET /api/status, GET /api/scan, POST /api/setup, POST /api/network,
-//   GET/POST /api/ntp, POST /api/password, GET/POST /api/smtp,
-//   POST/GET /api/smtp/test, GET/POST /api/zte, POST/GET /api/zte/test,
-//   GET /api/zte/send and /api/modem/send (send progress only),
-//   POST /api/sms/send (via=zte|modem), GET /api/modem/status,
-//   GET/POST /api/modem/source, and the 302/404 captive-portal
-//   NotFound handler; Digest authentication against the
-//   stored admin password (realm "SMS Gate", user "admin"); JSON error
-//   envelope, candidate Wi-Fi validation, and the common SendGate helper
-//   that serialises outgoing SMS against poll/test/send busy states.
-// - NOT: Wi-Fi STA/AP state machine, NVS persistence, SMTP/TLS, ZTE
-//   goform, modem AT, asset gzip generation, and email rendering.
-// INVARIANTS: Credentials are never written to Serial or returned in
-// HTTP responses; the SMTP/modem/ZTE passwords are never serialized;
-// at most one test/send/poll owns the external modem at a time; every
-// validation error is a JSON envelope with an operator message; 409 is
-// used for SendGate busy, 503 for modem unreachable, 400 for form
-// validation.
-// DEPENDENCIES: Uses Arduino-ESP32 WebServer and WiFi; delegates
-// persistence to ConfigStore, status/scan/validation to WifiManager,
-// SMTP delivery to SmtpService, ZTE source to ZteService, modem source
-// to ModemService, and JSON/assets to web_api.h.
+// - Registers protected pages, provisioning/configuration APIs, SMS
+// send/test routes, captive-portal redirects, and JSON/assets.
+// - NOT: service lifecycles, persistence, modem dialogs, SMTP/TLS, or email rendering.
+// INVARIANTS:
+// - Responses never expose credentials;
+// - validation errors use JSON;
+// - busy sends return 409 and unavailable modems return 503.
+// DEPENDENCIES: WebServer/WiFi; ConfigStore, WifiManager, SmtpService,
+// ZteService, ModemService, GpsService, TimeSync, and web_api.h.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -53,7 +35,11 @@ class HttpServer {
   HttpServer(WebServer& server, ConfigStore& store, RuntimeConfig& config, WifiManager& wifi,
              SmtpService& smtp, ZteService& zte, ModemService& modem, GpsService& gps,
              TimeSync& timeSync);
+
+  // #region METHOD_HttpServer_begin
+  // PURPOSE: Registers routes so the operator can provision and control the gateway.
   void begin();
+  // #endregion METHOD_HttpServer_begin
   void handleClient() { server_.handleClient(); }
 
  private:

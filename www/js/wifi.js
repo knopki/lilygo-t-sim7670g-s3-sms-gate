@@ -1,9 +1,8 @@
 /**
  * #region moduleContract
- * @purpose Wi-Fi page logic: station status polling, network change form
- *   with saved-SSID prefill, on-demand scan picker and the initial-setup
- *   combined Wi-Fi + administrator form.
- * @scope /wifi only; NOT: shared helpers or other pages.
+ * @modulecontract
+ * @purpose Lets operators establish and recover network access safely.
+ * @scope /wifi page; NOT: shared runtime.
  * #endregion moduleContract
  */
 
@@ -31,6 +30,10 @@ const wifiSection = document.getElementById("wifi-section");
 const setupForm = document.getElementById("setup-form");
 const networkForm = document.getElementById("network-form");
 
+// #region FUNC_applyStatus
+/**
+ * @purpose Keeps access status and setup visibility aligned with the device.
+ */
 function applyStatus(status) {
 	const setupRequired = status.setup_required === true;
 	setupSection.hidden = !setupRequired;
@@ -54,14 +57,24 @@ function applyStatus(status) {
 		networkForm.elements.ssid.value = status.ssid ?? "";
 	}
 }
+// #endregion FUNC_applyStatus
 
+// #region FUNC_loadStatus
+/**
+ * @purpose Refreshes network state so recovery decisions use current data.
+ */
 async function loadStatus() {
 	const { response, payload } = await apiFetch("/api/status");
 	if (response.ok && payload) {
 		applyStatus(payload);
 	}
 }
+// #endregion FUNC_loadStatus
 
+// #region FUNC_renderPicker
+/**
+ * @purpose Turns scan results into selectable network choices.
+ */
 function renderPicker(pickerId, form, networks) {
 	const picker = document.getElementById(pickerId);
 	fillList(picker, "network-row", networks, (node, network) => {
@@ -76,7 +89,12 @@ function renderPicker(pickerId, form, networks) {
 	});
 	picker.hidden = networks.length === 0;
 }
+// #endregion FUNC_renderPicker
 
+// #region FUNC_runScan
+/**
+ * @purpose Lets operators discover nearby networks without leaving the form.
+ */
 async function runScan(pickerId, form) {
 	setBusy(true);
 	setBanner("ok", "Scanning nearby networks…");
@@ -97,6 +115,7 @@ async function runScan(pickerId, form) {
 		setBusy(false);
 	}
 }
+// #endregion FUNC_runScan
 
 setupForm.addEventListener("submit", (event) => {
 	event.preventDefault();

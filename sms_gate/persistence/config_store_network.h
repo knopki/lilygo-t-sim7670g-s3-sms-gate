@@ -1,8 +1,8 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Persists the verified Wi-Fi and administrator profile in isolated
-// appcfg NVS so USB recovery can erase it without touching other settings.
-// SCOPE: load/save of ConfigStore network profile.
-// NOT: SMTP/ZTE/modem delivery or protocol handling.
+// PURPOSE: Preserves network access so recovery can clear it independently.
+// SCOPE:
+// - load/save of ConfigStore network profile.
+// - NOT: SMTP/ZTE/modem delivery or protocol handling.
 // INVARIANTS: Credentials are stored as a whole checksummed record.
 // DEPENDENCIES: Preferences partition appcfg.
 // #endregion MODULE_CONTRACT
@@ -19,6 +19,8 @@
 constexpr char kDefaultNtpServer1[] = "pool.ntp.org";
 constexpr char kDefaultNtpServer2[] = "time.nist.gov";
 
+// #region STRUCT_RuntimeConfig
+// PURPOSE: Carries the validated network profile between web, runtime, and NVS boundaries.
 struct RuntimeConfig {
   String ssid;
   String wifiPassword;
@@ -27,13 +29,24 @@ struct RuntimeConfig {
   String ntpServer2 = kDefaultNtpServer2;
   bool ntpEnabled = true;
 };
+// #endregion STRUCT_RuntimeConfig
 
+// #region CLASS_ConfigStore
+// PURPOSE: Owns atomic persistence of the network profile in the recovery-safe partition.
 class ConfigStore {
  public:
+  // #region METHOD_ConfigStore_load
+  // PURPOSE: Restores only a valid network profile from appcfg.
   bool load(RuntimeConfig& config) const;
+  // #endregion METHOD_ConfigStore_load
+
+  // #region METHOD_ConfigStore_save
+  // PURPOSE: Commits a validated network profile atomically.
   bool save(const RuntimeConfig& config) const;
+  // #endregion METHOD_ConfigStore_save
 
  private:
   bool migrateV1Record(size_t readLength) const;
 };
+// #endregion CLASS_ConfigStore
 #endif  // PERSISTENCE_CONFIG_STORE_NETWORK_H

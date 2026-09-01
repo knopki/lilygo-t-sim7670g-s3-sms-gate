@@ -1,3 +1,13 @@
+// #region MODULE_CONTRACT
+// PURPOSE: Locks SMTP dialog and record rules before firmware reaches a mail server.
+// SCOPE:
+// - Tests SMTP record validation and scripted TLS, authentication, message,
+//   and rejection dialog outcomes.
+// INVARIANTS:
+// - STARTTLS credentials are sent only after a successful upgrade;
+// - every attempted session closes its channel and reports its failure stage.
+// #endregion MODULE_CONTRACT
+
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -8,7 +18,7 @@
 namespace {
 
 // #region FUNC_makeRecord
-// PURPOSE: Builds one known-good record as the baseline for every mutation.
+// PURPOSE: Supplies a known-good baseline so each mutation isolates one integrity rule.
 SmtpConfigRecord makeRecord() {
   SmtpConfigRecord record{};
   record.magic = kSmtpConfigMagic;
@@ -26,8 +36,7 @@ SmtpConfigRecord makeRecord() {
 // #endregion FUNC_makeRecord
 
 // #region CLASS_FakeChannel
-// PURPOSE: Scripts the server side of one SMTP session and records every byte
-// the client writes, so tests assert the exact dialog contract.
+// PURPOSE: Keeps one deterministic server dialog so exact client writes remain testable.
 class FakeChannel : public SmtpChannel {
  public:
   void enqueueReply(const char* reply) {
@@ -108,8 +117,7 @@ class FakeChannel : public SmtpChannel {
       const bool atStart = position == 0;
       const bool afterLine =
           position >= 2 && written_[position - 2] == '\r' && written_[position - 1] == '\n';
-      if ((atStart || afterLine) &&
-          strncmp(written_ + position, wanted, wantedLength) == 0 &&
+      if ((atStart || afterLine) && strncmp(written_ + position, wanted, wantedLength) == 0 &&
           written_[position + wantedLength] == '\r' &&
           written_[position + wantedLength + 1] == '\n') {
         return written_ + position;
@@ -130,7 +138,7 @@ class FakeChannel : public SmtpChannel {
 // #endregion CLASS_FakeChannel
 
 // #region FUNC_testRecordValidation
-// PURPOSE: Integrity checks gate every load and save path.
+// PURPOSE: Prevents invalid records from reaching SMTP setup.
 void testRecordValidation() {
   SmtpConfigRecord record = makeRecord();
   assert(isSmtpConfigRecordValid(record));
@@ -178,7 +186,7 @@ void testRecordValidation() {
 // #endregion FUNC_testRecordValidation
 
 // #region FUNC_enqueueEhlo
-// PURPOSE: Scripts the multi-line EHLO shape used by real submission servers.
+// PURPOSE: Keeps EHLO capability variants explicit so STARTTLS decisions remain testable.
 void enqueueEhlo(FakeChannel& channel, bool withStartTls) {
   channel.enqueueReply("250-smtp.example.com at your service");
   channel.enqueueReply("250-SIZE 35882577");
@@ -192,7 +200,7 @@ void enqueueEhlo(FakeChannel& channel, bool withStartTls) {
 // #endregion FUNC_enqueueEhlo
 
 // #region FUNC_scriptHappySession
-// PURPOSE: Scripts one complete accepted session for both security modes.
+// PURPOSE: Reuses one accepted session so both security modes share the same outcome.
 void scriptHappySession(FakeChannel& channel, bool startTlsMode) {
   channel.enqueueReply("220 smtp.example.com ESMTP ready");
   enqueueEhlo(channel, startTlsMode);
@@ -225,8 +233,7 @@ void scriptHappySession(FakeChannel& channel, bool startTlsMode) {
 // #endregion FUNC_scriptHappySession
 
 // #region FUNC_testStartTlsHappyPath
-// PURPOSE: Verifies the full 587 dialog: banner, EHLO, STARTTLS upgrade,
-// AUTH LOGIN, submission of one base64 body, and teardown.
+// PURPOSE: Protects the complete STARTTLS submission path from dialog regressions.
 void testStartTlsHappyPath() {
   FakeChannel channel;
   scriptHappySession(channel, true);
@@ -239,9 +246,8 @@ void testStartTlsHappyPath() {
     (void)code;
     ++traceCount;
   });
-  const SmtpSendResult result =
-      client.sendMail(record, "sms-gate.local", "SMS from +79001234567",
-                      "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82");
+  const SmtpSendResult result = client.sendMail(record, "sms-gate.local", "SMS from +79001234567",
+                                                "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82");
   assert(result == SmtpSendResult::kSuccess);
   assert(traceCount > 0);  // Banner, EHLO x2, AUTH x3, MAIL, RCPT, DATA, dot.
   assert(strcmp(client.failedStage(), "") == 0);
@@ -262,7 +268,7 @@ void testStartTlsHappyPath() {
 // #endregion FUNC_testStartTlsHappyPath
 
 // #region FUNC_testImplicitTlsHappyPath
-// PURPOSE: Verifies the 465 shape: TLS at connect and no STARTTLS command.
+// PURPOSE: Protects implicit-TLS submission from accidental STARTTLS negotiation.
 void testImplicitTlsHappyPath() {
   FakeChannel channel;
   scriptHappySession(channel, false);
@@ -283,8 +289,7 @@ void testImplicitTlsHappyPath() {
 // #endregion FUNC_testImplicitTlsHappyPath
 
 // #region FUNC_testStartTlsUnsupported
-// PURPOSE: A server without the STARTTLS extension must never receive
-// credentials over the plain channel.
+// PURPOSE: Prevents credentials from crossing a server connection without TLS.
 void testStartTlsUnsupported() {
   FakeChannel channel;
   channel.enqueueReply("220 smtp.example.com ESMTP ready");
@@ -303,8 +308,7 @@ void testStartTlsUnsupported() {
 // #endregion FUNC_testStartTlsUnsupported
 
 // #region FUNC_testStartTlsRefused
-// PURPOSE: A server that advertises STARTTLS but refuses the upgrade keeps the
-// session unauthenticated.
+// PURPOSE: Keeps authentication blocked when a server refuses STARTTLS.
 void testStartTlsRefused() {
   FakeChannel channel;
   channel.enqueueReply("220 smtp.example.com ESMTP ready");
@@ -324,8 +328,7 @@ void testStartTlsRefused() {
 // #endregion FUNC_testStartTlsRefused
 
 // #region FUNC_testTlsUpgradeFailed
-// PURPOSE: A failed handshake must surface as kTlsFailed before any
-// authentication attempt.
+// PURPOSE: Prevents authentication after a failed TLS handshake.
 void testTlsUpgradeFailed() {
   FakeChannel channel;
   channel.enqueueReply("220 smtp.example.com ESMTP ready");
@@ -347,7 +350,7 @@ void testTlsUpgradeFailed() {
 // #endregion FUNC_testTlsUpgradeFailed
 
 // #region FUNC_testAuthRejected
-// PURPOSE: A 535 after the credentials maps to kAuthRejected.
+// PURPOSE: Keeps rejected credentials distinguishable from transport failures.
 void testAuthRejected() {
   FakeChannel channel;
   channel.enqueueReply("220 smtp.example.com ESMTP ready");
@@ -376,7 +379,7 @@ void testAuthRejected() {
 // #endregion FUNC_testAuthRejected
 
 // #region FUNC_testRecipientRejected
-// PURPOSE: A rejected recipient maps to kMessageRejected after authentication.
+// PURPOSE: Keeps recipient rejection distinct after authentication succeeds.
 void testRecipientRejected() {
   FakeChannel channel;
   channel.enqueueReply("220 smtp.example.com ESMTP ready");
@@ -405,8 +408,6 @@ void testRecipientRejected() {
   printf("testRecipientRejected ok\n");
 }
 // #endregion FUNC_testRecipientRejected
-
-
 
 }  // namespace
 

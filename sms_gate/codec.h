@@ -1,7 +1,5 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Re-exports the split codec modules (base64, MD5, UCS-2) and keeps
-// the small field-validation helpers so existing includes keep compiling
-// while new code can include the narrow headers directly (ISP).
+// PURPOSE: Preserves one codec include while allowing narrower dependencies.
 // SCOPE:
 // - Re-export of codec/codec_base64.h, codec/codec_md5.h, codec/codec_ucs2.h.
 // - Thin helpers isPrintableRange and containsCharacter for checksummed records.

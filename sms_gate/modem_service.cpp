@@ -1,8 +1,13 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements ModemService so sms_gate.ino only drives sync/load/save.
-// INVARIANTS: Volatile concat state marks SMTP acceptance before CMGD and
-// retries only pending cleanup in the same boot; non-cacheable concat parts
-// are forwarded once as explicit incomplete messages without blocking CMGL.
+// PURPOSE: Keeps SIM7670G polling and forwarding out of the firmware shell.
+// SCOPE:
+// - Owns modem profile loading, task gating, polling, SMS forwarding, and web-state projection.
+// - NOT: AT dialog parsing, serial transport ownership, SMTP delivery, and HTTP route handling.
+// INVARIANTS:
+// - Volatile concat state marks SMTP acceptance before CMGD and retries only pending
+//   cleanup in the same boot;
+// - non-cacheable concat parts are forwarded once as explicit incomplete messages
+//   without blocking CMGL.
 // #endregion MODULE_CONTRACT
 
 #include "modem/modem_service.h"
@@ -57,13 +62,25 @@ bool ModemService::save(const RuntimeModemSourceConfig& candidate) {
 }
 // #endregion METHOD_ModemService_save
 
+// #region METHOD_ModemService_shouldRunTask
+// PURPOSE: Gates task creation on a loaded, enabled modem profile.
 bool ModemService::shouldRunTask() const { return loaded_ && stored_.moduleEnabled; }
+// #endregion METHOD_ModemService_shouldRunTask
 
+// #region METHOD_ModemService_shouldPoll
+// PURPOSE: Gates polling on the profile's module and poll switches.
 bool ModemService::shouldPoll() const { return shouldRunTask() && stored_.pollEnabled; }
+// #endregion METHOD_ModemService_shouldPoll
 
+// #region METHOD_ModemService_shouldTimeSync
+// PURPOSE: Gates NITZ feeding on an active modem poll profile.
 bool ModemService::shouldTimeSync() const { return shouldPoll() && stored_.nitzTimeSyncEnabled; }
+// #endregion METHOD_ModemService_shouldTimeSync
 
+// #region METHOD_ModemService_shouldRunSms
+// PURPOSE: Gates SMS polling on the profile's SMS switch.
 bool ModemService::shouldRunSms() const { return shouldPoll() && stored_.smsPollEnabled; }
+// #endregion METHOD_ModemService_shouldRunSms
 
 // #region METHOD_ModemService_webSourceConfig
 // PURPOSE: Projects the stored profile into UI fields, so the JSON API
@@ -183,7 +200,7 @@ WebAsyncOp ModemService::sendStatus() const {
 }
 // #endregion METHOD_ModemService_sendStatus
 
-// #region METHOD_ModemService_shouldRunSms
+// #region METHOD_ModemService_shouldRunSmsForSnapshot
 // PURPOSE: Gates forwarding on SMTP credentials, Wi-Fi and SIM READY, so
 // the poll cycle never starts a delivery it cannot complete.
 bool ModemService::shouldRunSms(const ModemStatus& snapshot) const {
@@ -196,7 +213,7 @@ bool ModemService::shouldRunSms(const ModemStatus& snapshot) const {
   if (sendRunning_) return false;
   return true;
 }
-// #endregion METHOD_ModemService_shouldRunSms
+// #endregion METHOD_ModemService_shouldRunSmsForSnapshot
 
 // #region METHOD_ModemService_forwardSms
 // PURPOSE: Delivers one SMS through the shared SMTP path, so the delete

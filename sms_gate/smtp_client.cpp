@@ -1,9 +1,14 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements the host-testable SMTP submission dialog over any
-// SmtpChannel, following RFC 5321 sequencing and STARTTLS (RFC 3207).
-// INVARIANTS: Every exit path stops the channel; credentials and body content
-// never appear in error classification or stage reports; every failure is
-// traceable to one stage and the last SMTP reply code.
+// PURPOSE: Keeps SMTP delivery sequencing testable without a live socket.
+// SCOPE:
+// - Parses SMTP replies and drives bounded authentication and message-delivery
+//   dialogs over SmtpChannel.
+// - NOT: Socket transport ownership, persisted configuration, email composition,
+//   and task scheduling.
+// INVARIANTS:
+// - Every exit path stops the channel;
+// - credentials and body content never appear in error classification or stage reports;
+// - every failure is traceable to one stage and the last SMTP reply code.
 // #endregion MODULE_CONTRACT
 
 #include "smtp/smtp_client.h"
@@ -29,8 +34,7 @@ bool writeLine(SmtpChannel& channel, const char* line) {
 }
 
 // #region FUNC_readReplyLine
-// PURPOSE: Reads one reply line and returns its three-digit code, or -1 when
-// the line is malformed or the transport failed.
+// PURPOSE: Rejects malformed server replies before they steer SMTP state.
 int readReplyLine(SmtpChannel& channel, char* line, size_t lineSize, char* separator) {
   const int length = channel.readLine(line, lineSize);
   if (length < 0 || static_cast<size_t>(length) >= lineSize) {
@@ -101,7 +105,7 @@ bool equalsIgnoreCase(const char* word, size_t wordLength, const char* expected)
 // #endregion FUNC_equalsIgnoreCase
 
 // #region FUNC_hasExtension
-// PURPOSE: Reports whether the EHLO extension list announces a keyword.
+// PURPOSE: Keeps TLS negotiation dependent on an explicit server capability.
 bool hasExtension(const char* extensions, const char* keyword) {
   size_t start = 0;
   const size_t total = strlen(extensions);
@@ -162,7 +166,7 @@ bool writeBase64Body(SmtpChannel& channel, const char* utf8Body) {
 // #endregion FUNC_writeBase64Body
 
 // #region FUNC_writeAuthCredential
-// PURPOSE: Sends one AUTH LOGIN credential as a single base64 line.
+// PURPOSE: Keeps SMTP credentials encoded and bounded during authentication.
 bool writeAuthCredential(SmtpChannel& channel, const char* credential) {
   char encoded[((kMaxSmtpUserLength / 3) + 2) * 4 + 3];
   const size_t used =
@@ -178,7 +182,10 @@ bool writeAuthCredential(SmtpChannel& channel, const char* credential) {
 
 }  // namespace
 
+// #region METHOD_SmtpClient_SmtpClient
+// PURPOSE: Gives each submission one isolated transport lifetime.
 SmtpClient::SmtpClient(SmtpChannel& channel) : channel_(channel) {}
+// #endregion METHOD_SmtpClient_SmtpClient
 
 void SmtpClient::fail(const char* stage, int code) {
   failedStage_ = stage;
@@ -191,7 +198,7 @@ void SmtpClient::reportStage(const char* stage, int code) {
   }
 }
 
-// #region FUNC_SmtpClient_runDialog
+// #region METHOD_SmtpClient_runDialog
 // PURPOSE: Executes the full submission sequence; every failure is classified
 // and traceable to one stage plus the server's reply code.
 SmtpSendResult SmtpClient::runDialog(const SmtpConfigRecord& config, const char* ehloName,
@@ -361,9 +368,9 @@ SmtpSendResult SmtpClient::runDialog(const SmtpConfigRecord& config, const char*
   readReply(channel_, extensions, sizeof(extensions));
   return SmtpSendResult::kSuccess;
 }
-// #endregion FUNC_SmtpClient_runDialog
+// #endregion METHOD_SmtpClient_runDialog
 
-// #region FUNC_SmtpClient_sendMail
+// #region METHOD_SmtpClient_sendMail
 // PURPOSE: Runs one submission and guarantees the channel is closed afterwards
 // so heap is released before the caller logs the outcome.
 SmtpSendResult SmtpClient::sendMail(const SmtpConfigRecord& config, const char* ehloName,
@@ -378,4 +385,4 @@ SmtpSendResult SmtpClient::sendMail(const SmtpConfigRecord& config, const char* 
   channel_.stop();
   return result;
 }
-// #endregion FUNC_SmtpClient_sendMail
+// #endregion METHOD_SmtpClient_sendMail

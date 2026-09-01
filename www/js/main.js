@@ -1,10 +1,8 @@
 /**
  * #region moduleContract
- * @purpose Shared UI runtime: fetch wrapper with request timeout and
- *   centralized 401 handling, banner and busy state, reachability banner,
- *   visibility-aware polling, template DOM helpers, dependency-driven field
- *   state and one-time session prefetch of sibling pages.
- * @scope imported by every page script; NOT: page-specific markup or logic.
+ * @modulecontract
+ * @purpose Keeps page interactions consistent and recoverable across the device UI.
+ * @scope shared page runtime; NOT: page-specific markup or logic.
  * #endregion moduleContract
  */
 
@@ -39,13 +37,22 @@ function handleUnauthorized() {
 	setBanner("error", "Authentication required. Reload the page to sign in.");
 }
 
+// #region FUNC_setBusy
+/**
+ * @purpose Keeps controls consistent while an operation is in flight.
+ */
 export function setBusy(value) {
 	busy = value;
 	for (const button of document.querySelectorAll("button")) {
 		button.disabled = value;
 	}
 }
+// #endregion FUNC_setBusy
 
+// #region FUNC_setBanner
+/**
+ * @purpose Gives every page one predictable way to report outcomes.
+ */
 export function setBanner(kind, text) {
 	if (!text) {
 		banner.hidden = true;
@@ -56,7 +63,12 @@ export function setBanner(kind, text) {
 	banner.textContent = text;
 	banner.hidden = false;
 }
+// #endregion FUNC_setBanner
 
+// #region FUNC_apiFetch
+/**
+ * @purpose Prevents stalled or unauthorized requests from trapping page state.
+ */
 export async function apiFetch(path, options) {
 	// Bound every request so an unresponsive device cannot park fetches
 	// in the browser queue indefinitely (e.g. right after a reset).
@@ -79,17 +91,27 @@ export async function apiFetch(path, options) {
 	}
 	return { response, payload };
 }
+// #endregion FUNC_apiFetch
 
+// #region FUNC_postForm
+/**
+ * @purpose Gives settings endpoints the form encoding they expect.
+ */
 export function postForm(path, fields) {
 	return apiFetch(path, {
 		method: "POST",
 		body: new URLSearchParams(fields),
 	});
 }
+// #endregion FUNC_postForm
 
 // Creates a poller that pauses while the tab is hidden or the UI is busy
 // and refreshes immediately when the tab becomes visible again. Long-running
 // device operations pass { ignoreBusy: true } to keep polling while busy.
+// #region FUNC_poll
+/**
+ * @purpose Keeps periodic device updates efficient and recoverable in the browser.
+ */
 export function poll(task, intervalMs, { ignoreBusy = false } = {}) {
 	let timer = null;
 	let inFlight = false;
@@ -129,6 +151,7 @@ export function poll(task, intervalMs, { ignoreBusy = false } = {}) {
 	};
 	return controller;
 }
+// #endregion FUNC_poll
 
 document.addEventListener("visibilitychange", () => {
 	if (document.hidden) {
@@ -142,6 +165,10 @@ document.addEventListener("visibilitychange", () => {
 // Posts a settings form and reports the uniform ok/error envelope through
 // the banner; onOk runs only after the device accepted the change. Returns
 // true when the device accepted the submission.
+// #region FUNC_submitSettingsForm
+/**
+ * @purpose Gives settings writes a uniform busy, success, and failure lifecycle.
+ */
 export async function submitSettingsForm(path, fields, onOk) {
 	setBusy(true);
 	setBanner("", "");
@@ -166,10 +193,15 @@ export async function submitSettingsForm(path, fields, onOk) {
 		setBusy(false);
 	}
 }
+// #endregion FUNC_submitSettingsForm
 
 // Starts a long-running device operation (test or SMS send) and polls its
 // status endpoint every 1.5 s until the result envelope arrives; the UI stays
 // busy for the whole dialog.
+// #region FUNC_runAsyncOperation
+/**
+ * @purpose Keeps long device operations observable without blocking the page.
+ */
 export async function runAsyncOperation(path, fields, pollPath = path) {
 	setBusy(true);
 	setBanner("", "");
@@ -215,12 +247,22 @@ export async function runAsyncOperation(path, fields, pollPath = path) {
 	);
 	controller.start();
 }
+// #endregion FUNC_runAsyncOperation
 
+// #region FUNC_cloneTemplate
+/**
+ * @purpose Creates isolated DOM instances for repeated page content.
+ */
 export function cloneTemplate(templateId) {
 	const template = document.getElementById(templateId);
 	return template.content.firstElementChild.cloneNode(true);
 }
+// #endregion FUNC_cloneTemplate
 
+// #region FUNC_fillList
+/**
+ * @purpose Renders repeated records without duplicating page-specific markup.
+ */
 export function fillList(container, templateId, items, bind) {
 	container.replaceChildren();
 	for (const item of items) {
@@ -229,9 +271,14 @@ export function fillList(container, templateId, items, bind) {
 		container.append(node);
 	}
 }
+// #endregion FUNC_fillList
 
 // Fills elements marked with data-field="<name>" from a values map:
 // checkboxes become checked, form controls get value, the rest textContent.
+// #region FUNC_fillFields
+/**
+ * @purpose Synchronizes API values with the page controls that display them.
+ */
 export function fillFields(root, values) {
 	for (const element of root.querySelectorAll("[data-field]")) {
 		const value = values[element.dataset.field];
@@ -252,6 +299,7 @@ export function fillFields(root, values) {
 		element.textContent = value ?? "";
 	}
 }
+// #endregion FUNC_fillFields
 
 // Keeps form controls disabled while the checkbox chain they depend on is
 // off: a field stays editable only while every master checkbox is checked
@@ -261,6 +309,10 @@ export function fillFields(root, values) {
 // the loaded values (checked changes programmatically fire no event).
 // Values are preserved on purpose: disabling never clears stored settings,
 // and submit handlers still read .checked/.value from disabled controls.
+// #region FUNC_bindFieldDependencies
+/**
+ * @purpose Prevents dependent settings from being edited when their prerequisites are off.
+ */
 export function bindFieldDependencies(form, rules) {
 	const elements = form.elements;
 	const mastersOf = new Map(
@@ -303,6 +355,7 @@ export function bindFieldDependencies(form, rules) {
 	sync();
 	return sync;
 }
+// #endregion FUNC_bindFieldDependencies
 
 // Warms the browser cache with all pages and scripts once per session
 // (staggered, silent) so menu navigation renders from cache instead of

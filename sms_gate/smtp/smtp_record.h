@@ -1,10 +1,12 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Defines the portable, checksummed binary record for the SMTP
-// delivery profile so it can be validated independently of Arduino hardware
-// APIs.
-// INVARIANTS: A record is valid only with the expected magic, version,
-// checksum, and complete addresses. TLS trust comes from the firmware's
-// embedded Mozilla root bundle, not from this record.
+// PURPOSE: Keeps SMTP settings verifiable and independent of hardware APIs.
+// SCOPE:
+// - Defines SMTP record layouts, checksums, and validation predicates.
+// - NOT: NVS access, SMTP transport, delivery sequencing, and TLS trust management.
+// INVARIANTS:
+// - A record is valid only with the expected magic, version, checksum,
+//   and complete addresses.
+// - TLS trust comes from the firmware's embedded Mozilla root bundle.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -32,7 +34,7 @@ constexpr uint16_t kSmtpConfigVersion = 2;
 enum class SmtpSecurityMode : uint8_t { kStartTls = 0, kImplicitTls = 1 };
 // #endregion ENUM_SmtpSecurityMode
 
-// #region CLASS_SmtpConfigRecord
+// #region STRUCT_SmtpConfigRecord
 // PURPOSE: Represents one complete SMTP delivery configuration as a single
 // NVS blob, independent of the Wi-Fi record.
 struct SmtpConfigRecord {
@@ -47,7 +49,7 @@ struct SmtpConfigRecord {
   char recipientAddress[kMaxSmtpAddressLength + 1];
   uint32_t checksum;
 };
-// #endregion CLASS_SmtpConfigRecord
+// #endregion STRUCT_SmtpConfigRecord
 
 // #region FUNC_calculateSmtpConfigChecksum
 // PURPOSE: Detects incomplete and incompatible records before their

@@ -1,10 +1,8 @@
 /**
  * #region moduleContract
- * @purpose SMS Send page logic: channel discovery across enabled modems,
- *   client-side recipient validation mirroring firmware rules, the UCS-2
- *   unit/segment counter (335-unit limit, 67 units per segment) and the
- *   unified send operation.
- * @scope /sms only; NOT: shared helpers or other pages.
+ * @modulecontract
+ * @purpose Lets operators send bounded SMS messages through available channels.
+ * @scope /sms page; NOT: shared runtime.
  * #endregion moduleContract
  */
 
@@ -22,6 +20,10 @@ function channelLabel(base, payload) {
 	return payload.label ? `${base} — ${payload.label}` : base;
 }
 
+// #region FUNC_loadChannels
+/**
+ * @purpose Exposes only usable modem routes so sends cannot target disabled channels.
+ */
 async function loadChannels() {
 	const [modem, zte] = await Promise.all([
 		apiFetch("/api/modem/source"),
@@ -50,17 +52,27 @@ async function loadChannels() {
 	});
 	smsForm.hidden = false;
 }
+// #endregion FUNC_loadChannels
 
 // Mirrors firmware smsValidate: the recipient is 3-20 digits with an
 // optional single leading plus.
+// #region FUNC_recipientValid
+/**
+ * @purpose Rejects recipient values the firmware cannot safely deliver to.
+ */
 function recipientValid(value) {
 	const trimmed = value.trim();
 	const digits = trimmed.startsWith("+") ? trimmed.slice(1) : trimmed;
 	return trimmed.length >= 3 && trimmed.length <= 20 && /^\d+$/.test(digits);
 }
+// #endregion FUNC_recipientValid
 
 // Mirrors firmware smsUtf16Units: JS string length already counts UTF-16
 // code units, the unit the modem path bills for UCS-2 payloads.
+// #region FUNC_updateCounter
+/**
+ * @purpose Prevents oversized messages from reaching the send operation.
+ */
 function updateCounter() {
 	const units = textInput.value.length;
 	const segments = units === 0 ? 0 : Math.ceil(units / UNITS_PER_SEGMENT);
@@ -69,6 +81,7 @@ function updateCounter() {
 		` · UCS-2 · limit ${MAX_UNITS} units`;
 	counter.classList.toggle("error", units > MAX_UNITS);
 }
+// #endregion FUNC_updateCounter
 
 smsForm.addEventListener("submit", (event) => {
 	event.preventDefault();

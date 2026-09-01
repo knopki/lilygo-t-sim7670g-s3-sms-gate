@@ -1,13 +1,12 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Provides the single task-stop helper and the portMUX-backed
-// status caches shared by the ZTE and modem poll lifecycles so
-// syncZtePollTask/syncModemTask and publish*/read* stop diverging.
+// PURPOSE: Keeps task shutdown and status snapshots consistent across sources.
 // SCOPE:
 // - stopTask(handle, flag, timeout) with kTaskStopPollMs slices and
 // StatusCache for trivially copyable snapshots.
 // - NOT: HTTP routing, NVS persistence, and SMTP/ZTE/modem dialogs.
-// INVARIANTS: The stop flag is always cleared on return; the cache never
-// exposes its portMUX across String construction.
+// INVARIANTS:
+// - The stop flag is always cleared on return;
+// - the cache never exposes its portMUX across String construction.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -26,8 +25,7 @@ constexpr uint32_t kServiceTaskStack = 16384;
 constexpr unsigned long kPollSliceMs = 250;
 
 // #region FUNC_stopTask
-// PURPOSE: Requests a task to stop via stopFlag and waits at most timeoutMs
-// in kTaskStopPollMs slices until its handle clears.
+// PURPOSE: Bounds task shutdown so shared resources can be reclaimed predictably.
 // cppcheck-suppress constParameterReference
 inline bool stopTask(TaskHandle_t& handle, volatile bool& stopFlag,
                      unsigned long timeoutMs = kTaskStopTimeoutMs) {

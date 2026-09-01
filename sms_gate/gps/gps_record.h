@@ -1,9 +1,10 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Defines the portable, checksummed binary record for the GPS/GNSS
-// polling feature (SIM7670G internal GNSS) so it can be validated independently
-// of Arduino hardware APIs.
-// INVARIANTS: A record is valid only with expected magic, version, checksum,
-// and poll interval 5..300 seconds.
+// PURPOSE: Keeps GNSS settings verifiable and independent of hardware APIs.
+// SCOPE:
+// - Defines GNSS record layouts, checksums, and validation predicates.
+// - NOT: NVS access, GNSS hardware I/O, and polling lifecycle.
+// INVARIANTS:
+// - A record is valid only with expected magic, version, checksum, and poll interval.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -62,6 +63,8 @@ inline uint32_t calculateGpsChecksum(const GpsRecord& record) {
 }
 // #endregion FUNC_calculateGpsChecksum
 
+// #region FUNC_calculateGpsV2Checksum
+// PURPOSE: Checks legacy GNSS data before migration can consume it.
 inline uint32_t calculateGpsV2Checksum(const GpsRecordV2& record) {
   const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
   uint32_t hash = 2166136261UL;
@@ -72,11 +75,18 @@ inline uint32_t calculateGpsV2Checksum(const GpsRecordV2& record) {
   return hash;
 }
 
+// #endregion FUNC_calculateGpsV2Checksum
+
+// #region FUNC_isValidGpsPollInterval
+// PURPOSE: Keeps GNSS polling within the scheduler's safe range.
 inline bool isValidGpsPollInterval(uint16_t value) {
   return value >= kMinGpsPollSec && value <= kMaxGpsPollSec;
 }
 
+// #endregion FUNC_isValidGpsPollInterval
+
 // #region FUNC_isGpsRecordV2Valid
+// PURPOSE: Rejects corrupt legacy GNSS profiles before migration.
 inline bool isGpsRecordV2Valid(const GpsRecordV2& record) {
   if (record.magic != kGpsMagic || record.version != 2 ||
       record.checksum != calculateGpsV2Checksum(record)) {

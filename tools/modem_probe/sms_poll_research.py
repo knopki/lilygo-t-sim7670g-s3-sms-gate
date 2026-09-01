@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+# region MODULE_CONTRACT
+# PURPOSE: Captures modem SMS behavior so implementation decisions follow
+# observed firmware responses.
+# SCOPE:
+# - Drives interactive SIM7670G SMS polling, multipart, PDU, deletion, and
+#   URC research through the modem-probe serial bridge with raw logging.
+# INVARIANTS:
+# - Each command's observed reply is retained in the log;
+# - interactive destructive SMS clearing requires a prompt unless --yes-clear is supplied.
+# endregion MODULE_CONTRACT
+
 """Research probe for SIM7670G SMS poll — CSDH / CMGL / multipart.
 
 Runs over the modem_probe passthrough (tools/modem_probe/modem_probe.ino
@@ -50,6 +61,8 @@ STEP_TIMEOUT_S = 8
 LOG_PATH_DEFAULT = Path("docs/research/modem-sim7670g-sms-poll.raw.log")
 
 
+# region FUNC_ucs2_hex_to_utf8
+# PURPOSE: Makes modem UCS-2 payloads readable while preserving malformed evidence.
 def ucs2_hex_to_utf8(hex_str: str) -> str:
     s = hex_str.strip().replace(" ", "").replace("\r", "").replace("\n", "")
     if len(s) % 4 != 0 or any(c not in "0123456789ABCDEFabcdef" for c in s):
@@ -64,11 +77,21 @@ def ucs2_hex_to_utf8(hex_str: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# endregion FUNC_ucs2_hex_to_utf8
+
+# region CLASS_Modem
+# PURPOSE: Keeps modem I/O, raw logging, and response decoding together for research.
 class Modem:
+    # region METHOD___init__
+    # PURPOSE: Binds the probe to its serial stream and optional raw log.
     def __init__(self, ser: serial.Serial, log_file):
         self.ser = ser
         self.log_file = log_file
 
+    # endregion METHOD___init__
+
+    # region METHOD__log
+    # PURPOSE: Emits one timestamped diagnostic line to console and log.
     def _log(self, msg: str):
         ts = time.strftime("%H:%M:%S")
         line = f"[{ts}] {msg}"
@@ -77,11 +100,19 @@ class Modem:
             self.log_file.write(line + "\n")
             self.log_file.flush()
 
+    # endregion METHOD__log
+
+    # region METHOD__write
+    # PURPOSE: Prevents stale serial bytes from being mistaken for the next reply.
     def _write(self, cmd: str):
         self._log(f">>> {cmd}")
         self.ser.reset_input_buffer()
         self.ser.write((cmd + "\r\n").encode())
 
+    # endregion METHOD__write
+
+    # region METHOD_read_until
+    # PURPOSE: Keeps research exchanges bounded and exposes missing terminal replies.
     def read_until(self, tokens: tuple[bytes, ...], timeout_s: float) -> bytes:
         buf = b""
         deadline = time.monotonic() + timeout_s
@@ -97,6 +128,10 @@ class Modem:
                 time.sleep(0.02)
         return buf
 
+    # endregion METHOD_read_until
+
+    # region METHOD_command
+    # PURPOSE: Preserves each command's raw evidence for repeatable protocol decisions.
     def command(self, cmd: str, timeout_s: float = STEP_TIMEOUT_S) -> str:
         self._write(cmd)
         raw = self.read_until((b"\r\nOK\r\n", b"\r\nERROR\r\n", b"+CMS ERROR", b"+CME ERROR"), timeout_s)
@@ -110,6 +145,10 @@ class Modem:
                 self._log(f"    decoded: {ucs2_hex_to_utf8(s)!r}")
         return text
 
+    # endregion METHOD_command
+
+    # region METHOD_wait_urc
+    # PURPOSE: Waits for an unsolicited SMS indication during interactive research.
     def wait_urc(self, prefix: bytes, timeout_s: float = 30) -> bytes:
         self._log(f"... waiting URC {prefix.decode()} up to {timeout_s:.0f}s (send SMS now)")
         buf = b""
@@ -124,7 +163,11 @@ class Modem:
             time.sleep(0.05)
         return buf
 
+    # endregion METHOD_wait_urc
+# endregion CLASS_Modem
 
+# region FUNC_prompt
+# PURPOSE: Lets an operator continue, skip, or stop interactive research.
 def prompt(msg: str) -> str:
     try:
         return input(f"\n{msg} [Enter=continue, s=skip, q=quit]: ").strip().lower()
@@ -132,6 +175,10 @@ def prompt(msg: str) -> str:
         return "q"
 
 
+# endregion FUNC_prompt
+
+# region FUNC_step_header
+# PURPOSE: Separates research phases in the operator-visible log.
 def step_header(title: str, log: Modem):
     log._log("")
     log._log("=" * 72)
@@ -139,6 +186,10 @@ def step_header(title: str, log: Modem):
     log._log("=" * 72)
 
 
+# endregion FUNC_step_header
+
+# region FUNC_main
+# PURPOSE: Preserves observed SMS behavior so implementation decisions remain evidence-based.
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", default=PORT, help="USB CDC port (default %(default)s)")
@@ -315,6 +366,8 @@ def main() -> int:
         log_file.close()
     return 0
 
+
+# endregion FUNC_main
 
 if __name__ == "__main__":
     sys.exit(main())

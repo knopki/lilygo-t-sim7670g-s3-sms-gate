@@ -1,15 +1,9 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Encodes application/x-www-form-urlencoded values for the ZTE
-// MF79RU goform channel so SEND_SMS and other POST forms always carry the
-// exact bytes the modem expects.
+// PURPOSE: Prevents ZTE form values from changing meaning on the wire.
 // SCOPE:
-// - Percent-escapes every non-unreserved byte (including '+' and ';'), and
-// appends fixed literals, both with bounded buffers and guaranteed
-// termination.
-// - NOT: HTTP framing, JSON scanning, or goform command sequencing.
-// INVARIANTS: Every appended value is terminated; overflow always returns
-// false so no stack bytes leak onto the wire or into Content-Length.
-// DEPENDENCIES: Pure C++.
+// - Percent-escaping and bounded assembly of goform values.
+// - NOT: HTTP framing, JSON scanning, or command sequencing.
+// INVARIANTS: Output is always terminated; overflow fails before writing.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -18,7 +12,18 @@
 
 #include <stddef.h>
 
+// #region FUNC_isUnreservedFormByte
+// PURPOSE: Keeps delimiters from changing form-field meaning.
 bool isUnreservedFormByte(unsigned char ch);
+// #endregion FUNC_isUnreservedFormByte
+
+// #region FUNC_appendFormEscaped
+// PURPOSE: Keeps arbitrary values safe inside bounded form bodies.
 bool appendFormEscaped(const char* value, char* out, size_t outSize, size_t& used);
+// #endregion FUNC_appendFormEscaped
+
+// #region FUNC_appendLiteral
+// PURPOSE: Completes form bodies without risking unterminated output.
 bool appendLiteral(const char* literal, char* out, size_t outSize, size_t& used);
+// #endregion FUNC_appendLiteral
 #endif  // ZTE_ZTE_FORM_CODEC_H

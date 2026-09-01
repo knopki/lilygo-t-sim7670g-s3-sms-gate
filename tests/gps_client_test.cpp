@@ -1,7 +1,13 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Verifies the SIM7670G GNSS startup dialog powers the active antenna
-// on the production Classic board before using the receiver, including when
-// the GNSS engine was already left running.
+// PURPOSE: Verifies the SIM7670G GNSS startup dialog powers the active antenna on the production
+// Classic board before using the receiver, including when the GNSS engine was already left running.
+// SCOPE:
+// - Exercises scripted GNSS AT exchanges, antenna-bias ordering, poll failure reporting
+// - CGNSSINFO satellite parsing.
+// INVARIANTS:
+// - Antenna bias precedes GNSS use;
+// - AT commands follow the scripted order;
+// - satellite fields retain their SIM767xx positional meaning.
 // #endregion MODULE_CONTRACT
 
 #include "../sms_gate/gps/gps_client.h"

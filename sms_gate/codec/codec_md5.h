@@ -1,6 +1,5 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Provides the MD5 message digest (RFC 1321) as lowercase hex for
-// the ZTE goform AD anti-CSRF token, without heap or Arduino dependencies.
+// PURPOSE: Supplies the ZTE anti-CSRF digest without heap or Arduino dependencies.
 // SCOPE:
 // - One-shot Md5 class (reset/update/final) and md5Hex helper that formats
 // the 16-byte digest as 32 hex chars plus terminator.
@@ -27,6 +26,8 @@ class Md5 {
  public:
   Md5() { reset(); }
 
+  // #region METHOD_Md5_reset
+  // PURPOSE: Reinitializes the digest state so one object can start a new hash.
   void reset() {
     state_[0] = 0x67452301;
     state_[1] = 0xefcdab89;
@@ -35,7 +36,10 @@ class Md5 {
     bitCount_ = 0;
     bufferUsed_ = 0;
   }
+  // #endregion METHOD_Md5_reset
 
+  // #region METHOD_Md5_update
+  // PURPOSE: Feeds arbitrary-length input without requiring a full-size buffer.
   void update(const void* data, size_t length) {
     const uint8_t* bytes = static_cast<const uint8_t*>(data);
     bitCount_ += static_cast<uint64_t>(length) * 8;
@@ -52,8 +56,10 @@ class Md5 {
       }
     }
   }
+  // #endregion METHOD_Md5_update
 
-  // Writes the 16-byte digest; reset() is required before reuse.
+  // #region METHOD_Md5_final
+  // PURPOSE: Finalizes the digest into the caller's 16-byte output buffer.
   void final(uint8_t out[16]) {
     uint8_t padding[72];
     size_t paddingLength = (bufferUsed_ < 56 ? 56 : 120) - bufferUsed_;
@@ -73,6 +79,7 @@ class Md5 {
       out[index * 4 + 3] = static_cast<uint8_t>(state_[index] >> 24);
     }
   }
+  // #endregion METHOD_Md5_final
 
  private:
   static uint32_t rotateLeft(uint32_t value, uint32_t shift) {

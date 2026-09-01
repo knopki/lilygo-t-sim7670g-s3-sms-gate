@@ -1,14 +1,13 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Binds HardwareSerial Serial1 to ModemChannel for the Classic
-// LilyGO T-SIM7670G-S3 pin map (ADR-0004). Owns UART, PWRKEY/DTR/RESET
-// sequencing and timeouts; parsing stays in modem_client.*.
+// PURPOSE: Isolates SIM7670G pin sequencing from testable AT protocol logic.
 // SCOPE:
-// - Serial1 begin/end (115200 8N1, RX=GPIO10 TX=GPIO11), DTR LOW=awake,
-//   PWRKEY pulse, RESET handling, ModemChannel::write/readLine/purge.
-// - NOT: AT command sequencing or response parsing (modem_client),
-//   SMTP/HTTP/NVS.
-// INVARIANTS: DTR held LOW while active; every readLine respects timeoutMs
-// and never overruns buffer; purge discards stale URCs before next command.
+// - Serial1 begin/end, DTR LOW=awake, PWRKEY pulse,
+// - RESET handling, ModemChannel::write/readLine/purge.
+// - NOT: AT command sequencing or response parsing (modem_client), SMTP/HTTP/NVS.
+// INVARIANTS:
+// - DTR held LOW while active;
+// - every readLine respects timeoutMs and never overruns buffer;
+// - purge discards stale URCs before next command.
 // DEPENDENCIES: Arduino HardwareSerial, esp32-hal-gpio.
 // #endregion MODULE_CONTRACT
 
@@ -35,6 +34,8 @@ class ModemTransport : public ModemChannel {
  public:
   ModemTransport() = default;
 
+  // #region METHOD_ModemTransport_begin
+  // PURPOSE: Starts the shared modem UART and establishes safe pin states.
   bool begin() {
     if (started_) return true;
     // Pins must be configured even when Serial1 already active (shared bus).
@@ -53,6 +54,10 @@ class ModemTransport : public ModemChannel {
     return true;
   }
 
+  // #endregion METHOD_ModemTransport_begin
+
+  // #region METHOD_ModemTransport_end
+  // PURPOSE: Releases this transport's UART reference without disrupting peers.
   void end() {
     if (!started_) return;
     started_ = false;
@@ -64,6 +69,10 @@ class ModemTransport : public ModemChannel {
   }
 
   // Power-on pulse per LilyGO: PWRKEY LOW 100ms → HIGH 100ms → LOW.
+  // #endregion METHOD_ModemTransport_end
+
+  // #region METHOD_ModemTransport_powerPulse
+  // PURPOSE: Performs the board-specific pulse that wakes the modem.
   void powerPulse() {
     digitalWrite(kModemPinPwrKey, LOW);
     delay(100);
@@ -73,11 +82,19 @@ class ModemTransport : public ModemChannel {
   }
 
   // ModemChannel overrides.
+  // #endregion METHOD_ModemTransport_powerPulse
+
+  // #region METHOD_ModemTransport_write
+  // PURPOSE: Writes one complete AT command only while the UART is active.
   bool write(const char* data, size_t len) override {
     if (!started_) return false;
     return Serial1.write(reinterpret_cast<const uint8_t*>(data), len) == len;
   }
 
+  // #endregion METHOD_ModemTransport_write
+
+  // #region METHOD_ModemTransport_readLine
+  // PURPOSE: Reads one bounded modem line while preserving timeout semantics.
   int readLine(char* buffer, size_t size, unsigned long timeoutMs) override {
     if (size < 2) return -1;
     const unsigned long deadline = millis() + timeoutMs;
@@ -123,10 +140,15 @@ class ModemTransport : public ModemChannel {
     }
   }
 
+  // #endregion METHOD_ModemTransport_readLine
+
+  // #region METHOD_ModemTransport_purge
+  // PURPOSE: Removes stale UART input before the next AT transaction.
   void purge() override {
     if (!started_) return;
     while (Serial1.available() > 0) Serial1.read();
   }
+  // #endregion METHOD_ModemTransport_purge
 
  private:
   bool started_ = false;

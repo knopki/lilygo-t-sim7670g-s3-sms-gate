@@ -1,9 +1,8 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Defines the portable, checksummed binary record for the onboard
-// SIM7670G SMS source (ADR-0004) so it can be validated independently of
-// Arduino hardware APIs.
-// INVARIANTS: A record is valid only with the expected magic, version,
-// checksum, printable label (0..31 chars), and poll interval 5..300 seconds.
+// PURPOSE: Keeps modem-source settings verifiable and independent of hardware APIs.
+// SCOPE:
+// - Defines modem-source record layouts, checksums, and validation predicates.
+// - NOT: NVS access, modem hardware I/O, SMS polling, and forwarding.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -71,6 +70,8 @@ inline uint32_t calculateModemSourceChecksum(const ModemSourceRecord& record) {
 }
 // #endregion FUNC_calculateModemSourceChecksum
 
+// #region FUNC_calculateModemSourceV2Checksum
+// PURPOSE: Checks legacy modem data before migration can consume it.
 inline uint32_t calculateModemSourceV2Checksum(const ModemSourceRecordV2& record) {
   const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
   uint32_t hash = 2166136261UL;
@@ -81,6 +82,8 @@ inline uint32_t calculateModemSourceV2Checksum(const ModemSourceRecordV2& record
   return hash;
 }
 
+// #endregion FUNC_calculateModemSourceV2Checksum
+
 // #region FUNC_isValidModemPollInterval
 // PURPOSE: Centralizes the per-source poll interval contract (PLAN R6).
 inline bool isValidModemPollInterval(uint16_t value) {
@@ -89,6 +92,7 @@ inline bool isValidModemPollInterval(uint16_t value) {
 // #endregion FUNC_isValidModemPollInterval
 
 // #region FUNC_isModemSourceRecordV2Valid
+// PURPOSE: Rejects corrupt legacy modem profiles before migration.
 inline bool isModemSourceRecordV2Valid(const ModemSourceRecordV2& record) {
   if (record.magic != kModemSourceMagic || record.version != 2 ||
       record.checksum != calculateModemSourceV2Checksum(record)) {

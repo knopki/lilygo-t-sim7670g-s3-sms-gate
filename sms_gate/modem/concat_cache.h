@@ -1,13 +1,14 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Keeps a bounded, volatile set of SIM7670G concatenated SMS parts
-// between poll cycles, so the service can wait for a complete message without
-// deleting any source records before SMTP accepts them.
-// SCOPE: Identity/ref/part bookkeeping, complete/expired-set selection, and
-// volatile SMTP-acceptance/CMGD progress for retry-safe cleanup.
-// NOT: AT dialogs, SMTP, persistence, or email rendering.
-// INVARIANTS: At most two sets and five parts per set; parts are keyed by
-// ref+ref-width+sender+total; SMTP acceptance is recorded before a delete;
-// a set remains until every present source record has a successful CMGD.
+// PURPOSE: Delays deletion until multipart SMS assembly and delivery succeed.
+// SCOPE:
+// - Identity/ref/part bookkeeping, complete/expired-set selection
+// - volatile SMTP-acceptance/CMGD progress for retry-safe cleanup.
+// - NOT: AT dialogs, SMTP, persistence, or email rendering.
+// INVARIANTS:
+// - At most two sets and five parts per set;
+// - parts are keyed by ref+ref-width+sender+total;
+// - SMTP acceptance is recorded before a delete;
+// - a set remains until every present source record has a successful CMGD.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -31,6 +32,8 @@ class ModemConcatCache {
   static constexpr size_t kMaxParts = kMaxSmsMultipartParts;
   static constexpr uint8_t kExpirePollCycles = 20;
 
+  // #region METHOD_ModemConcatCache_containsId
+  // PURPOSE: Prevents a cached source record from being read twice.
   bool containsId(const char* id, const char* storage) const {
     if (id == nullptr || storage == nullptr) return false;
     for (size_t set = 0; set < kMaxSets; ++set) {
@@ -43,9 +46,12 @@ class ModemConcatCache {
     }
     return false;
   }
+  // #endregion METHOD_ModemConcatCache_containsId
 
   // Stores one confirmed concat part. False means malformed metadata or no
   // free set; the caller leaves the source SMS untouched for a later retry.
+  // #region METHOD_ModemConcatCache_store
+  // PURPOSE: Retains one validated concat part for later delivery or retry.
   bool store(const ModemSms& sms, const ModemConcatInfo& concat) {
     if (!concat.present || concat.total < 2 || concat.total > kMaxParts || concat.seq == 0 ||
         concat.seq > concat.total || sms.id[0] == '\0' || sms.number[0] == '\0')
@@ -77,13 +83,19 @@ class ModemConcatCache {
     set.age = 0;
     return true;
   }
+  // #endregion METHOD_ModemConcatCache_store
 
+  // #region METHOD_ModemConcatCache_advanceCycle
+  // PURPOSE: Ages incomplete sets so bounded polling can eventually release them.
   void advanceCycle() {
     for (size_t set = 0; set < kMaxSets; ++set) {
       if (sets_[set].used && sets_[set].age < kExpirePollCycles) ++sets_[set].age;
     }
   }
+  // #endregion METHOD_ModemConcatCache_advanceCycle
 
+  // #region METHOD_ModemConcatCache_findComplete
+  // PURPOSE: Selects a fully assembled set ready for one combined delivery.
   bool findComplete(size_t& setIndex) const {
     for (size_t set = 0; set < kMaxSets; ++set) {
       if (!sets_[set].used) continue;
@@ -97,22 +109,31 @@ class ModemConcatCache {
     }
     return false;
   }
+  // #endregion METHOD_ModemConcatCache_findComplete
 
   // True only while a complete set still needs its one SMTP submission.
+  // #region METHOD_ModemConcatCache_completeReadyForSmtp
+  // PURPOSE: Prevents duplicate SMTP submission of an assembled set.
   bool completeReadyForSmtp(size_t setIndex) const {
     return valid(setIndex) && findSetComplete(setIndex) && !sets_[setIndex].completeSmtpAccepted;
   }
+  // #endregion METHOD_ModemConcatCache_completeReadyForSmtp
 
   // Records SMTP 250 before any CMGD, so a failed cleanup cannot resend a
   // complete message during this boot.
+  // #region METHOD_ModemConcatCache_markCompleteSmtpAccepted
+  // PURPOSE: Records SMTP acceptance before any source deletion can begin.
   bool markCompleteSmtpAccepted(size_t setIndex) {
     if (!completeReadyForSmtp(setIndex)) return false;
     sets_[setIndex].completeSmtpAccepted = true;
     return true;
   }
+  // #endregion METHOD_ModemConcatCache_markCompleteSmtpAccepted
 
   // Joins a complete set only while it still needs SMTP. After acceptance,
   // callers must skip SMTP and use partNeedsDelete() for cleanup retries.
+  // #region METHOD_ModemConcatCache_buildComplete
+  // PURPOSE: Joins ordered parts into one bounded SMS for SMTP forwarding.
   bool buildComplete(size_t setIndex, ModemSms& out) const {
     if (!completeReadyForSmtp(setIndex)) return false;
     const Set& set = sets_[setIndex];
@@ -130,7 +151,10 @@ class ModemConcatCache {
     }
     return true;
   }
+  // #endregion METHOD_ModemConcatCache_buildComplete
 
+  // #region METHOD_ModemConcatCache_findExpired
+  // PURPOSE: Selects a stalled set for bounded incomplete-message delivery.
   bool findExpired(size_t& setIndex) const {
     for (size_t set = 0; set < kMaxSets; ++set) {
       if (sets_[set].used && sets_[set].age >= kExpirePollCycles) {
@@ -140,38 +164,62 @@ class ModemConcatCache {
     }
     return false;
   }
+  // #endregion METHOD_ModemConcatCache_findExpired
 
+  // #region METHOD_ModemConcatCache_total
+  // PURPOSE: Gives cleanup and status logic the set size without exposing cache state.
   uint8_t total(size_t setIndex) const { return valid(setIndex) ? sets_[setIndex].total : 0; }
+  // #endregion METHOD_ModemConcatCache_total
+
+  // #region METHOD_ModemConcatCache_part
+  // PURPOSE: Exposes one present source record for delivery or cleanup.
   const ModemSms* part(size_t setIndex, size_t partIndex) const {
     if (!hasPart(setIndex, partIndex)) return nullptr;
     return &sets_[setIndex].parts[partIndex];
   }
+  // #endregion METHOD_ModemConcatCache_part
 
   // Expired fragments use per-part acceptance because each produces a
   // separate incomplete email. Complete sets use completeSmtpAccepted.
+  // #region METHOD_ModemConcatCache_partReadyForSmtp
+  // PURPOSE: Prevents duplicate delivery of one expired fragment.
   bool partReadyForSmtp(size_t setIndex, size_t partIndex) const {
     return hasPart(setIndex, partIndex) && !sets_[setIndex].smtpAccepted[partIndex];
   }
+  // #endregion METHOD_ModemConcatCache_partReadyForSmtp
+
+  // #region METHOD_ModemConcatCache_markPartSmtpAccepted
+  // PURPOSE: Records fragment acceptance before its source record is deleted.
   bool markPartSmtpAccepted(size_t setIndex, size_t partIndex) {
     if (!partReadyForSmtp(setIndex, partIndex)) return false;
     sets_[setIndex].smtpAccepted[partIndex] = true;
     return true;
   }
+  // #endregion METHOD_ModemConcatCache_markPartSmtpAccepted
 
   // A present source record needs CMGD after either its individual expired
   // submission or the complete set's submission has received SMTP 250.
+  // #region METHOD_ModemConcatCache_partNeedsDelete
+  // PURPOSE: Identifies accepted fragments whose source cleanup is still pending.
   bool partNeedsDelete(size_t setIndex, size_t partIndex) const {
     return hasPart(setIndex, partIndex) && !sets_[setIndex].deleted[partIndex] &&
            (sets_[setIndex].completeSmtpAccepted || sets_[setIndex].smtpAccepted[partIndex]);
   }
+  // #endregion METHOD_ModemConcatCache_partNeedsDelete
+
+  // #region METHOD_ModemConcatCache_markPartDeleted
+  // PURPOSE: Records successful CMGD so cleanup retries remain idempotent.
   bool markPartDeleted(size_t setIndex, size_t partIndex) {
     if (!partNeedsDelete(setIndex, partIndex)) return false;
     sets_[setIndex].deleted[partIndex] = true;
     return true;
   }
+  // #endregion METHOD_ModemConcatCache_markPartDeleted
 
   // A cache set may be discarded only when every present source record has
   // received successful CMGD. Missing expired parts require no cleanup.
+  // #region METHOD_ModemConcatCache_removable
+  // PURPOSE: Allows discarded state only after every present record is deleted.
   bool removable(size_t setIndex) const {
     if (!valid(setIndex)) return false;
     for (size_t partIndex = 0; partIndex < sets_[setIndex].total; ++partIndex) {
@@ -179,9 +227,14 @@ class ModemConcatCache {
     }
     return true;
   }
+  // #endregion METHOD_ModemConcatCache_removable
+
+  // #region METHOD_ModemConcatCache_remove
+  // PURPOSE: Releases a fully cleaned set without risking message loss.
   void remove(size_t setIndex) {
     if (removable(setIndex)) sets_[setIndex] = Set{};
   }
+  // #endregion METHOD_ModemConcatCache_remove
 
  private:
   struct Set {

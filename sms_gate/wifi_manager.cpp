@@ -1,7 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Owns the station Wi-Fi lifecycle, the fallback access point with
-// captive DNS, mDNS publication and SNTP wall-clock start so the remaining
-// firmware only calls begin/loop/status/scan.
+// PURPOSE: Keeps network recovery and identity stable across provisioning.
+// SCOPE:
+// - Manages station, access-point, captive-DNS, and mDNS lifecycle from runtime configuration.
+// - NOT: Persisting network credentials or serving HTTP routes.
+// INVARIANTS:
+// - Device-derived AP and mDNS identities remain stable for the station MAC.
+// - A failed station connection retains a provisioning or recovery access path.
 // #endregion MODULE_CONTRACT
 
 #include "system/wifi_manager.h"
@@ -27,8 +31,7 @@ void onSntpSync(struct timeval* tv) {
 }  // namespace
 
 // #region METHOD_WifiManager_buildStationMacAddress
-// PURPOSE: Reads eFuse MAC without starting Wi-Fi, matching the original
-// helper moved from sms_gate.ino.
+// PURPOSE: Establishes device identity before Wi-Fi starts without relying on interface state.
 String WifiManager::buildStationMacAddress() const {
   uint8_t mac[6] = {};
   if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
@@ -42,6 +45,7 @@ String WifiManager::buildStationMacAddress() const {
 // #endregion METHOD_WifiManager_buildStationMacAddress
 
 // #region METHOD_WifiManager_buildDeviceSuffix
+// PURPOSE: Produces stable identifiers for AP and mDNS recovery paths.
 String WifiManager::buildDeviceSuffix() const {
   String compactMac = stationMacAddress_;
   compactMac.replace(":", "");
@@ -50,6 +54,7 @@ String WifiManager::buildDeviceSuffix() const {
 // #endregion METHOD_WifiManager_buildDeviceSuffix
 
 // #region METHOD_WifiManager_initIdentity
+// PURPOSE: Establishes identity before any network interface is started.
 void WifiManager::initIdentity() {
   stationMacAddress_ = buildStationMacAddress();
   const String suffix = buildDeviceSuffix();
@@ -59,6 +64,7 @@ void WifiManager::initIdentity() {
 // #endregion METHOD_WifiManager_initIdentity
 
 // #region METHOD_WifiManager_startMdns
+// PURPOSE: Makes the online device discoverable by its stable name.
 void WifiManager::startMdns() {
   if (mdnsActive_) {
     MDNS.end();
@@ -76,6 +82,7 @@ void WifiManager::startMdns() {
 // #endregion METHOD_WifiManager_startMdns
 
 // #region METHOD_WifiManager_startAccessPoint
+// PURPOSE: Provides provisioning or recovery access when STA is unavailable.
 void WifiManager::startAccessPoint(const RuntimeConfig& config) {
   const bool initialSetup = config.ssid.length() == 0;
   const wifi_mode_t mode = initialSetup ? WIFI_AP : WIFI_AP_STA;
@@ -105,6 +112,7 @@ void WifiManager::startAccessPoint(const RuntimeConfig& config) {
 // #endregion METHOD_WifiManager_startAccessPoint
 
 // #region METHOD_WifiManager_stopAccessPoint
+// PURPOSE: Releases AP resources after station service is established.
 void WifiManager::stopAccessPoint() {
   if (!accessPointActive_) {
     return;
@@ -119,6 +127,7 @@ void WifiManager::stopAccessPoint() {
 // #endregion METHOD_WifiManager_stopAccessPoint
 
 // #region METHOD_WifiManager_beginStationAttempt
+// PURPOSE: Tests saved access without blocking provisioning or recovery services.
 void WifiManager::beginStationAttempt(const RuntimeConfig& config) {
   if (config.ssid.length() == 0) {
     return;
@@ -133,6 +142,7 @@ void WifiManager::beginStationAttempt(const RuntimeConfig& config) {
 // #endregion METHOD_WifiManager_beginStationAttempt
 
 // #region METHOD_WifiManager_startWallClock
+// PURPOSE: Starts the configured fallback clock after station connection.
 void WifiManager::startWallClock(const RuntimeConfig& config) {
   if (timeSync_ != nullptr) {
     gTimeSyncForSntp = timeSync_;
@@ -154,6 +164,7 @@ void WifiManager::startWallClock(const RuntimeConfig& config) {
 // #endregion METHOD_WifiManager_startWallClock
 
 // #region METHOD_WifiManager_onStationConnected
+// PURPOSE: Completes the online transition and dependent clock setup.
 void WifiManager::onStationConnected(const RuntimeConfig& config, bool deferAccessPointShutdown) {
   connectionState_ = ConnectionState::kOnline;
   nextReconnectAt_ = 0;
@@ -172,6 +183,7 @@ void WifiManager::onStationConnected(const RuntimeConfig& config, bool deferAcce
 // #endregion METHOD_WifiManager_onStationConnected
 
 // #region METHOD_WifiManager_onStationFailed
+// PURPOSE: Records failure and enters the protected reconnect path.
 void WifiManager::onStationFailed(const RuntimeConfig& config) {
   lastConnectionError_ = F("Could not connect to the saved Wi-Fi network.");
   if (!accessPointActive_) {
@@ -184,6 +196,7 @@ void WifiManager::onStationFailed(const RuntimeConfig& config) {
 // #endregion METHOD_WifiManager_onStationFailed
 
 // #region METHOD_WifiManager_buildStatus
+// PURPOSE: Produces a secret-free network snapshot for the API.
 WebStatus WifiManager::buildStatus(const RuntimeConfig& config) const {
   WebStatus status;
   status.setupRequired = config.ssid.length() == 0;
@@ -213,6 +226,7 @@ WebStatus WifiManager::buildStatus(const RuntimeConfig& config) const {
 // #endregion METHOD_WifiManager_buildStatus
 
 // #region METHOD_WifiManager_buildScanNetworksJson
+// PURPOSE: Gives provisioning safe, bounded choices from the current scan.
 String WifiManager::buildScanNetworksJson() {
   Serial.println("event=wifi_scan_begin");
   String json;
@@ -252,6 +266,7 @@ String WifiManager::buildScanNetworksJson() {
 // #endregion METHOD_WifiManager_buildScanNetworksJson
 
 // #region METHOD_WifiManager_testStationCandidate
+// PURPOSE: Verifies replacement credentials before they are saved.
 bool WifiManager::testStationCandidate(const RuntimeConfig& candidate,
                                        const RuntimeConfig& previous) {
   Serial.println("event=sta_candidate_test_begin");
@@ -282,6 +297,7 @@ bool WifiManager::testStationCandidate(const RuntimeConfig& candidate,
 // #endregion METHOD_WifiManager_testStationCandidate
 
 // #region METHOD_WifiManager_loop
+// PURPOSE: Advances STA/AP recovery without blocking other services.
 void WifiManager::loop(const RuntimeConfig& config) {
   handleDns();
   const unsigned long now = millis();
@@ -311,6 +327,7 @@ void WifiManager::loop(const RuntimeConfig& config) {
 // #endregion METHOD_WifiManager_loop
 
 // #region METHOD_WifiManager_handleDns
+// PURPOSE: Keeps captive-portal resolution available while AP is active.
 void WifiManager::handleDns() {
   if (accessPointActive_) {
     dnsServer_.processNextRequest();
@@ -319,6 +336,7 @@ void WifiManager::handleDns() {
 // #endregion METHOD_WifiManager_handleDns
 
 // #region METHOD_WifiManager_scheduleAccessPointRestart
+// PURPOSE: Defers AP restart until active HTTP work can finish.
 void WifiManager::scheduleAccessPointRestart() {
   if (accessPointActive_) {
     accessPointRestartAt_ = millis() + kApShutdownDelayMs;

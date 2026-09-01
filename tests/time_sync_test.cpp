@@ -1,3 +1,13 @@
+// #region MODULE_CONTRACT
+// PURPOSE: Protects time-source arbitration so the device publishes trustworthy clock values.
+// SCOPE:
+// - Tests source freshness, priority, quorum quarantine, epoch conversion,
+//   and published synchronization timestamps.
+// INVARIANTS:
+// - Only fresh, non-quarantined samples can win;
+// - published times are UTC wall-clock epochs and source precedence is GNSS, SNTP, then NITZ.
+// #endregion MODULE_CONTRACT
+
 #include <assert.h>
 #include <cstdint>
 #include <cstdio>
@@ -7,6 +17,8 @@
 
 // Host test for TimeSync arbitration, freshness and quorum quarantine (ADR-0005).
 
+// #region FUNC_makeEpochMs
+// PURPOSE: Supplies deterministic UTC epochs for timestamp assertions.
 static int64_t makeEpochMs(int y, int mo, int d, int h, int mi, int s, int ms = 0) {
   auto daysFromCivil = [](int yy, int mm, int dd) -> int64_t {
     yy -= mm <= 2;
@@ -21,6 +33,10 @@ static int64_t makeEpochMs(int y, int mo, int d, int h, int mi, int s, int ms = 
   return sec * 1000LL + ms;
 }
 
+// #endregion FUNC_makeEpochMs
+
+// #region FUNC_testFreshness
+// PURPOSE: Guards source freshness windows so stale samples cannot win arbitration.
 void testFreshness() {
   assert(TimeSync::isGnssFresh(0, 60000));
   assert(TimeSync::isGnssFresh(129000, 60000));  // 2*60+10 =130s window, 129 <130
@@ -37,7 +53,10 @@ void testFreshness() {
   assert(!TimeSync::isNitzFresh(5UL * 60 * 1000));
   puts("testFreshness ok");
 }
+// #endregion FUNC_testFreshness
 
+// #region FUNC_testArbitrationPriority
+// PURPOSE: Pins source precedence so the best available clock source is selected.
 void testArbitrationPriority() {
   TimeSync ts;
   ts.begin();
@@ -57,7 +76,10 @@ void testArbitrationPriority() {
   assert(ts.state().source == TimeSource::kGnss);
   puts("testArbitrationPriority ok");
 }
+// #endregion FUNC_testArbitrationPriority
 
+// #region FUNC_testGnssFreshnessWindow
+// PURPOSE: Ensures GNSS expiry removes an otherwise stale clock source.
 void testGnssFreshnessWindow() {
   TimeSync ts;
   ts.begin();
@@ -72,7 +94,10 @@ void testGnssFreshnessWindow() {
   assert(ts.state().source == TimeSource::kUnsynced);
   puts("testGnssFreshnessWindow ok");
 }
+// #endregion FUNC_testGnssFreshnessWindow
 
+// #region FUNC_testQuarantineGnssOutlier
+// PURPOSE: Ensures an implausible GNSS sample cannot displace agreeing peers.
 void testQuarantineGnssOutlier() {
   TimeSync ts;
   ts.begin();
@@ -107,7 +132,10 @@ void testQuarantineGnssOutlier() {
   assert(ts.isQuarantined(TimeSource::kGnss, nowMs + 10));
   puts("testQuarantineGnssOutlier ok");
 }
+// #endregion FUNC_testQuarantineGnssOutlier
 
+// #region FUNC_testQuorumNoQuarantineWhenPeersDisagree
+// PURPOSE: Preserves availability when peer disagreement provides no quarantine quorum.
 void testQuorumNoQuarantineWhenPeersDisagree() {
   TimeSync ts;
   ts.begin();
@@ -122,7 +150,10 @@ void testQuorumNoQuarantineWhenPeersDisagree() {
   assert(!ts.isQuarantined(TimeSource::kGnss, 4000));
   puts("testQuorumNoQuarantineWhenPeersDisagree ok");
 }
+// #endregion FUNC_testQuorumNoQuarantineWhenPeersDisagree
 
+// #region FUNC_testCclkToEpoch
+// PURPOSE: Prevents modem timezone offsets from corrupting shared clock values.
 void testCclkToEpoch() {
   int64_t ms = 0;
   // 25/08/25,12:34:56+12 -> +12 quarters = +3h => UTC 09:34:56
@@ -136,10 +167,10 @@ void testCclkToEpoch() {
   assert(!cclkToEpochMs("bad", ms));
   puts("testCclkToEpoch ok");
 }
+// #endregion FUNC_testCclkToEpoch
 
-// #region TEST_testPublishedSyncTimes
-// Last sync / now must be wall-clock epochs (UI formats them as UTC dates),
-// never millis() uptime (regression: "1970-01-01 00:00:11 UTC").
+// #region FUNC_testPublishedSyncTimes
+// PURPOSE: Keeps published sync and current time as wall-clock epochs, not uptime.
 void testPublishedSyncTimes() {
   TimeSync ts;
   ts.begin();
@@ -161,7 +192,10 @@ void testPublishedSyncTimes() {
   assert(ts.state().epochMs == e + 30000);
   puts("testPublishedSyncTimes ok");
 }
+// #endregion FUNC_testPublishedSyncTimes
 
+// #region FUNC_testGpsFixMs
+// PURPOSE: Prevents GNSS fractional seconds from being lost during clock conversion.
 void testGpsFixMs() {
   GpsFixFields f{};
   assert(
@@ -181,6 +215,7 @@ void testGpsFixMs() {
   assert(f.timeMs == 500);
   puts("testGpsFixMs ok");
 }
+// #endregion FUNC_testGpsFixMs
 
 int main() {
   testFreshness();

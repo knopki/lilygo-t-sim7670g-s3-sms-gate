@@ -1,18 +1,14 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Owns the SMTP delivery profile and its asynchronous test
-// lifecycle so the firmware can validate form input, persist the record
-// and run STARTTLS/implicit-TLS dialogs without blocking loop().
+// PURPOSE: Keeps SMTP validation and tests from blocking gateway control.
 // SCOPE:
-// - SmtpConfigStore load/save, WebSmtpConfig snapshot, form validation
-//   (host/port/user/password/addresses), security/mode mapping, result
-//   names, stage logging and the smtp_test FreeRTOS task.
-// - NOT: Wi-Fi lifecycle, ZTE/modem dialogs, HTTP route registration
-//   and email rendering.
-// INVARIANTS: The password is never serialized or logged; every dialog
-// failure is traceable to one stage plus reply code; at most one test
-// task runs at a time.
-// DEPENDENCIES: Uses Arduino-ESP32 WebServer, SmtpClient,
-// SecureSmtpChannel, ConfigStore and WebApi helpers.
+// - Profile persistence, form validation, status, stage logging, and
+// the guarded SMTP test task.
+// - NOT: Wi-Fi, modem dialogs, routes, or rendering.
+// INVARIANTS:
+// - Passwords stay private;
+// - failures expose stage and reply only;
+// - at most one test task runs at a time.
+// DEPENDENCIES: WebServer, SmtpClient, SecureSmtpChannel, ConfigStore, WebApi.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -26,7 +22,10 @@
 #include "smtp/smtp_client.h"
 #include "system/web_api.h"
 
+// #region FUNC_logSmtpStage
+// PURPOSE: Emits one secret-free SMTP stage event for diagnostics.
 void logSmtpStage(const char* stage, int code);
+// #endregion FUNC_logSmtpStage
 
 // #region CLASS_SmtpService
 // PURPOSE: Encapsulates the stored SMTP profile and the one-at-a-time
@@ -34,15 +33,40 @@ void logSmtpStage(const char* stage, int code);
 class SmtpService {
  public:
   SmtpService() = default;
+  // #region METHOD_SmtpService_load
+  // PURPOSE: Restores the SMTP profile before tests or forwarding.
   bool load();
+  // #endregion METHOD_SmtpService_load
+
+  // #region METHOD_SmtpService_save
+  // PURPOSE: Persists a validated SMTP profile for future delivery.
   bool save(const RuntimeSmtpConfig& candidate);
+  // #endregion METHOD_SmtpService_save
   bool isLoaded() const { return loaded_; }
   const RuntimeSmtpConfig& config() const { return stored_; }
+  // #region METHOD_SmtpService_webConfig
+  // PURPOSE: Projects stored SMTP settings without exposing the password.
   WebSmtpConfig webConfig() const;
+  // #endregion METHOD_SmtpService_webConfig
+
+  // #region METHOD_SmtpService_parseSmtpPort
+  // PURPOSE: Applies the security mode's valid SMTP port rule.
   bool parseSmtpPort(const String& raw, SmtpSecurityMode mode, uint16_t& port) const;
+  // #endregion METHOD_SmtpService_parseSmtpPort
+
+  // #region METHOD_SmtpService_readSmtpForm
+  // PURPOSE: Validates SMTP form input before persistence or testing.
   bool readSmtpForm(WebServer& server, RuntimeSmtpConfig& candidate, String& error);
+  // #endregion METHOD_SmtpService_readSmtpForm
+  // #region METHOD_SmtpService_startTest
+  // PURPOSE: Keeps SMTP verification isolated from gateway control and route timing.
   bool startTest(const RuntimeSmtpConfig& candidate, const String& ehloName, String& error);
+  // #endregion METHOD_SmtpService_startTest
+
+  // #region METHOD_SmtpService_testStatus
+  // PURPOSE: Lets the UI follow SMTP verification without joining its worker task.
   WebAsyncOp testStatus() const;
+  // #endregion METHOD_SmtpService_testStatus
 
   bool isTestRunning() const { return testRunning_; }
   bool isTestDone() const { return testDone_; }

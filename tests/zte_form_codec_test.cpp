@@ -1,5 +1,13 @@
-// Host test for ZTE form codec: isUnreservedFormByte, appendFormEscaped,
-// appendLiteral — percent-escape rules for application/x-www-form-urlencoded.
+// #region MODULE_CONTRACT
+// PURPOSE: Locks URL-encoding edge cases so ZTE modem requests remain byte-safe.
+// SCOPE:
+// - Tests form-byte classification, escaped and literal appends, capacity
+//   failures, and SEND_SMS form fragments.
+// INVARIANTS:
+// - Unreserved bytes pass unchanged;
+// - reserved bytes use uppercase percent encoding;
+// - failed appends preserve bounded, terminated output.
+// #endregion MODULE_CONTRACT
 #include <assert.h>
 #include <string.h>
 
@@ -9,6 +17,8 @@
 
 namespace {
 
+// #region FUNC_testIsUnreserved
+// PURPOSE: Protects reserved delimiters from bypassing form encoding.
 void testIsUnreserved() {
   assert(isUnreservedFormByte('A'));
   assert(isUnreservedFormByte('Z'));
@@ -28,7 +38,10 @@ void testIsUnreserved() {
   assert(!isUnreservedFormByte('&'));
   puts("testIsUnreserved ok");
 }
+// #endregion FUNC_testIsUnreserved
 
+// #region FUNC_testAppendFormEscapedBasic
+// PURPOSE: Pins exact escapes so modem fields retain their wire meaning.
 void testAppendFormEscapedBasic() {
   char out[64];
   size_t used = 0;
@@ -42,7 +55,10 @@ void testAppendFormEscapedBasic() {
   assert(strcmp(out, "%2B%20%3B%2F%3D") == 0);
   puts("testAppendFormEscapedBasic ok");
 }
+// #endregion FUNC_testAppendFormEscapedBasic
 
+// #region FUNC_testAppendFormEscapedSpecial
+// PURPOSE: Keeps empty and boundary values compatible with form encoding.
 void testAppendFormEscapedSpecial() {
   char out[128];
   size_t used = 0;
@@ -60,14 +76,18 @@ void testAppendFormEscapedSpecial() {
   assert(used == 0);
   puts("testAppendFormEscapedSpecial ok");
 }
+// #endregion FUNC_testAppendFormEscapedSpecial
 
+// #region FUNC_testAppendFormEscapedOverflow
+// PURPOSE: Ensures failed escaping leaves bounded output safely terminated.
 void testAppendFormEscapedOverflow() {
   char out[5];
   size_t used = 0;
   // "ab" fits (2 + terminator within 5)
   assert(appendFormEscaped("ab", out, sizeof(out), used));
   assert(strcmp(out, "ab") == 0);
-  // "+" needs 3 bytes plus terminator; buffer 5 has 2 used, needs 3 more -> total 5 + terminator -> overflow
+  // "+" needs 3 bytes plus terminator; buffer 5 has 2 used, needs 3 more -> total 5 + terminator ->
+  // overflow
   used = 0;
   char small[4];
   size_t s = 0;
@@ -78,7 +98,10 @@ void testAppendFormEscapedOverflow() {
   // but previous content remains terminated.
   puts("testAppendFormEscapedOverflow ok");
 }
+// #endregion FUNC_testAppendFormEscapedOverflow
 
+// #region FUNC_testAppendLiteral
+// PURPOSE: Protects request assembly from capacity-accounting drift.
 void testAppendLiteral() {
   char out[32];
   size_t used = 0;
@@ -96,7 +119,10 @@ void testAppendLiteral() {
   assert(!appendLiteral("X", tiny, sizeof(tiny), t));
   puts("testAppendLiteral ok");
 }
+// #endregion FUNC_testAppendLiteral
 
+// #region FUNC_testCombinedSendFormFragment
+// PURPOSE: Pins SEND_SMS composition so field separators cannot be reinterpreted.
 void testCombinedSendFormFragment() {
   // Reproduce a fragment of SEND_SMS form: Number=%2B... &MessageBody=...
   char out[64];
@@ -108,6 +134,7 @@ void testCombinedSendFormFragment() {
   assert(strcmp(out, "Number=%2B79990000000&ID=-1") == 0);
   puts("testCombinedSendFormFragment ok");
 }
+// #endregion FUNC_testCombinedSendFormFragment
 
 }  // namespace
 

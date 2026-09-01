@@ -1,8 +1,8 @@
 /**
  * #region moduleContract
- * @purpose GPS page logic: GNSS status polling and the module/polling/
- *   time-sync settings form.
- * @scope /gps only; NOT: shared helpers or other pages.
+ * @modulecontract
+ * @purpose Keeps GNSS availability and time-sync settings observable and controlled.
+ * @scope /gps page; NOT: shared runtime.
  * #endregion moduleContract
  */
 
@@ -30,6 +30,10 @@ function text(value) {
 		: String(value);
 }
 
+// #region FUNC_loadStatus
+/**
+ * @purpose Keeps GNSS diagnostics current while the page remains open.
+ */
 async function loadStatus() {
 	const { response, payload } = await apiFetch("/api/gps/status");
 	if (!response.ok || !payload) {
@@ -58,7 +62,12 @@ async function loadStatus() {
 		time: text(time.iso),
 	});
 }
+// #endregion FUNC_loadStatus
 
+// #region FUNC_loadConfig
+/**
+ * @purpose Prevents stale browser values from overwriting saved GNSS settings.
+ */
 async function loadConfig() {
 	const { response, payload } = await apiFetch("/api/gps");
 	if (!response.ok || !payload) {
@@ -72,6 +81,7 @@ async function loadConfig() {
 	});
 	syncForm();
 }
+// #endregion FUNC_loadConfig
 
 gpsForm.addEventListener("submit", (event) => {
 	event.preventDefault();

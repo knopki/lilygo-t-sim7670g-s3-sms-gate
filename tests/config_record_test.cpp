@@ -1,3 +1,16 @@
+// #region MODULE_CONTRACT
+// PURPOSE: Locks persisted-record invariants so schema changes cannot silently
+// accept corrupt settings.
+// SCOPE:
+// - Exercises Config, GPS, and modem record validation, checksums
+// - legacy configuration recognition.
+// INVARIANTS:
+// - Valid records have expected magic/version
+// - bounded fields
+// - valid boolean flags
+// - checksums matching their stored content.
+// #endregion MODULE_CONTRACT
+
 #include <assert.h>
 #include <string.h>
 
@@ -5,6 +18,8 @@
 #include "../sms_gate/gps/gps_record.h"
 #include "../sms_gate/modem/modem_record.h"
 
+// #region FUNC_makeRecord
+// PURPOSE: Provides a valid v2 record for integrity and migration mutations.
 static ConfigRecord makeRecord() {
   ConfigRecord r{};
   r.magic = kConfigMagic;
@@ -19,6 +34,10 @@ static ConfigRecord makeRecord() {
   return r;
 }
 
+// #endregion FUNC_makeRecord
+
+// #region FUNC_makeV1
+// PURPOSE: Provides a valid legacy record to keep v1 migration covered.
 static ConfigRecordV1 makeV1() {
   ConfigRecordV1 r{};
   r.magic = kConfigMagic;
@@ -29,6 +48,8 @@ static ConfigRecordV1 makeV1() {
   r.checksum = calculateConfigV1Checksum(r);
   return r;
 }
+
+// #endregion FUNC_makeV1
 
 int main() {
   // v2 happy path

@@ -1,5 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements ZteService so sms_gate.ino only drives sync/load/save.
+// PURPOSE: Keeps ZTE polling, forwarding and tests out of the firmware shell.
+// SCOPE:
+// - Coordinates stored ZTE policy, polling, SMS forwarding, tests, and cached status.
+// - NOT: Implementing ZTE wire parsing, HTTP transport, or SMTP transport.
+// INVARIANTS:
+// - Saved policy becomes the running policy only after persistence succeeds.
+// - Web configuration and status expose no ZTE password.
 // #endregion MODULE_CONTRACT
 
 #include "zte/zte_service.h"
@@ -31,7 +37,7 @@ constexpr unsigned int kZteOutgoingCleanupMaxAttempts = kZteMaxPages * kZtePageS
 constexpr time_t kEpochSynced = 1577836800;
 
 // #region FUNC_zteResultName
-// PURPOSE: Maps a modem-dialog outcome onto the stable JSON token.
+// PURPOSE: Keeps protocol result names stable across logs and the operator API.
 const char* zteResultName(ZteResult result) {
   switch (result) {
     case ZteResult::kSuccess:
@@ -60,7 +66,7 @@ const char* zteResultName(ZteResult result) {
 ZteService::ZteService() = default;
 
 // #region METHOD_ZteService_load
-// PURPOSE: Loads stored profile from NVS.
+// PURPOSE: Makes stored ZTE policy available before task decisions.
 bool ZteService::load() {
   loaded_ = store_.load(stored_);
   return loaded_;
@@ -68,7 +74,7 @@ bool ZteService::load() {
 // #endregion METHOD_ZteService_load
 
 // #region METHOD_ZteService_save
-// PURPOSE: Persists validated candidate.
+// PURPOSE: Keeps validated ZTE policy consistent across NVS and the running task.
 bool ZteService::save(const RuntimeZteConfig& candidate) {
   if (!store_.save(candidate)) {
     return false;
@@ -98,7 +104,7 @@ WebZteConfig ZteService::webConfig() const {
 // #endregion METHOD_ZteService_webConfig
 
 // #region METHOD_ZteService_readForm
-// PURPOSE: Validates ZTE form into runtime profile.
+// PURPOSE: Rejects invalid ZTE input before persistence or modem use.
 bool ZteService::readForm(WebServer& server, RuntimeZteConfig& out, String& error) {
   out.moduleEnabled = server.arg("module_enabled") == F("1");
   out.forwardEnabled = server.arg("forward_enabled") == F("1");
@@ -138,7 +144,7 @@ bool ZteService::readForm(WebServer& server, RuntimeZteConfig& out, String& erro
 // #endregion METHOD_ZteService_readForm
 
 // #region METHOD_ZteService_readSendForm
-// PURPOSE: Validates outgoing-SMS fields.
+// PURPOSE: Rejects unsafe SMS input before it reaches the modem dialog.
 bool ZteService::readSendForm(WebServer& server, String& to, String& text, String& error) {
   to = server.arg("to");
   to.trim();
@@ -165,7 +171,7 @@ bool ZteService::readSendForm(WebServer& server, String& to, String& text, Strin
 // #endregion METHOD_ZteService_readSendForm
 
 // #region METHOD_ZteService_pollIntervalMs
-// PURPOSE: Returns NVS-backed poll interval as ms.
+// PURPOSE: Protects the scheduler from corrupt persisted intervals.
 unsigned long ZteService::pollIntervalMs() const {
   const uint16_t sec = loaded_ ? stored_.pollIntervalSec : kDefaultZtePollSec;
   if (!isValidZtePollInterval(sec)) return kDefaultZtePollSec * 1000UL;
@@ -173,20 +179,32 @@ unsigned long ZteService::pollIntervalMs() const {
 }
 // #endregion METHOD_ZteService_pollIntervalMs
 
+// #region METHOD_ZteService_lastStatus
+// PURPOSE: Gives the UI the latest secret-free source outcome.
 String ZteService::lastStatus() const { return statusCache_.readString(); }
+// #endregion METHOD_ZteService_lastStatus
 
+// #region METHOD_ZteService_publishStatus
+// PURPOSE: Publishes a ZTE outcome without exposing task internals.
 void ZteService::publishStatus(const char* status) { statusCache_.publish(status); }
+// #endregion METHOD_ZteService_publishStatus
 
+// #region METHOD_ZteService_shouldRunModule
+// PURPOSE: Gates all ZTE work on a loaded, enabled profile.
 bool ZteService::shouldRunModule() const {
   return loaded_ && stored_.moduleEnabled && stored_.host.length() > 0;
 }
+// #endregion METHOD_ZteService_shouldRunModule
 
+// #region METHOD_ZteService_shouldRunPoll
+// PURPOSE: Gates polling on source readiness and forwarding dependencies.
 bool ZteService::shouldRunPoll(bool smtpReady) const {
   return shouldRunModule() && stored_.forwardEnabled && smtpReady;
 }
+// #endregion METHOD_ZteService_shouldRunPoll
 
 // #region METHOD_ZteService_testStatus
-// PURPOSE: Snapshots test progress.
+// PURPOSE: Lets the UI poll connection tests without joining their worker task.
 WebAsyncOp ZteService::testStatus() const {
   WebAsyncOp op;
   op.running = testRunning_;
@@ -200,7 +218,7 @@ WebAsyncOp ZteService::testStatus() const {
 // #endregion METHOD_ZteService_testStatus
 
 // #region METHOD_ZteService_sendStatus
-// PURPOSE: Snapshots send progress.
+// PURPOSE: Lets the UI poll sends without joining their worker task.
 WebAsyncOp ZteService::sendStatus() const {
   WebAsyncOp op;
   op.running = sendRunning_;
@@ -214,7 +232,7 @@ WebAsyncOp ZteService::sendStatus() const {
 // #endregion METHOD_ZteService_sendStatus
 
 // #region METHOD_ZteService_startTest
-// PURPOSE: Starts one connection test.
+// PURPOSE: Keeps connection tests non-blocking and single-flight.
 bool ZteService::startTest(const RuntimeZteConfig& candidate, String& error) {
   if (testRunning_) {
     error = F("A connection test is already in progress.");
@@ -244,7 +262,7 @@ bool ZteService::startTest(const RuntimeZteConfig& candidate, String& error) {
 // #endregion METHOD_ZteService_startTest
 
 // #region METHOD_ZteService_startSend
-// PURPOSE: Starts one outgoing send.
+// PURPOSE: Keeps sends non-blocking and exclusive with polling and tests.
 bool ZteService::startSend(const String& to, const String& text, String& error) {
   if (!shouldRunModule()) {
     error = F("The ZTE modem module is disabled.");
@@ -306,7 +324,7 @@ void ZteService::syncPollTask(bool shouldRun) {
 // #endregion METHOD_ZteService_syncPollTask
 
 // #region METHOD_ZteService_replySnippet
-// PURPOSE: Reduces modem reply to snippet.
+// PURPOSE: Keeps diagnostic replies bounded and safe for operator messages.
 String ZteService::replySnippet(const char* body) const {
   String snippet;
   for (const char* p = body; *p != '\0' && snippet.length() < 96; ++p) {
@@ -318,7 +336,7 @@ String ZteService::replySnippet(const char* body) const {
 // #endregion METHOD_ZteService_replySnippet
 
 // #region METHOD_ZteService_forwardSms
-// PURPOSE: Delivers one SMS via SMTP.
+// PURPOSE: Makes SMTP acceptance the gate for deleting the source SMS.
 bool ZteService::forwardSms(const ZteSms& sms) {
   const unsigned long startedAt = millis();
   Serial.printf("event=zte_forward_begin id=%s number=%s heap=%u\n", sms.id, sms.number,
@@ -342,7 +360,7 @@ bool ZteService::forwardSms(const ZteSms& sms) {
 // #endregion METHOD_ZteService_forwardSms
 
 // #region METHOD_ZteService_runPollCycle
-// PURPOSE: One login-scan-forward-delete cycle.
+// PURPOSE: Completes one at-least-once forwarding cycle without losing failed deliveries.
 void ZteService::runPollCycle(ZteModem& modem) {
   // #region BLOCK_login
   Serial.printf("event=zte_poll_begin host=%s heap=%u\n", stored_.host.c_str(),
@@ -405,7 +423,7 @@ void ZteService::runPollCycle(ZteModem& modem) {
 // #endregion METHOD_ZteService_runPollCycle
 
 // #region METHOD_ZteService_pollTask
-// PURPOSE: Long-lived poll loop.
+// PURPOSE: Keeps ZTE polling alive while yielding to shared modem work.
 void ZteService::pollTask(void* param) {
   auto* self = static_cast<ZteService*>(param);
   if (self != nullptr) self->runPollTask();
@@ -462,7 +480,7 @@ void ZteService::runPollTask() {
 }
 
 // #region METHOD_ZteService_testTask
-// PURPOSE: Connection test task.
+// PURPOSE: Provides the worker entry point for a non-blocking connection test.
 void ZteService::testTask(void* param) {
   auto* self = static_cast<ZteService*>(param);
   if (self != nullptr) self->runTest();
@@ -498,7 +516,7 @@ void ZteService::runTest() {
 }
 
 // #region METHOD_ZteService_sendTask
-// PURPOSE: Outgoing send task.
+// PURPOSE: Provides the worker entry point for a non-blocking SMS send.
 void ZteService::sendTask(void* param) {
   auto* self = static_cast<ZteService*>(param);
   if (self != nullptr) self->runSend();

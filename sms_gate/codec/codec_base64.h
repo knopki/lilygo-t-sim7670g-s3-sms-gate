@@ -1,7 +1,5 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Provides RFC 4648 base64 encoding primitives for SMTP AUTH LOGIN
-// and other dialogs so they can stream long inputs without a second full-size
-// buffer.
+// PURPOSE: Streams modem and SMTP credentials without a second full-size buffer.
 // SCOPE:
 // - Padded base64 encode: single 3-byte chunk (encodeBase64Chunk) and full
 // buffer (encodeBase64) with terminator.

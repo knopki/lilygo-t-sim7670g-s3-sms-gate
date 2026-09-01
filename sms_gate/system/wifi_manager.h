@@ -1,20 +1,14 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Owns the station Wi-Fi lifecycle, the fallback access point with
-// captive DNS, mDNS publication and SNTP wall-clock start so the remaining
-// firmware only calls begin/loop/status/scan.
+// PURPOSE: Keeps network recovery and device identity stable across provisioning.
 // SCOPE:
-// - Station MAC and device suffix, AP SSID and mDNS hostname, AP/STA mode
-//   selection, connection attempts, MDNS, SNTP, scan and the reconnect state
-//   machine with bounded timeouts.
-// - NOT: HTTP route registration, NVS persistence, SMTP/ZTE/modem dialogs and
-//   the boot trace.
-// INVARIANTS: Access-point mode respects initial-setup vs protected fallback;
-// mDNS is restarted on every station connect; lastConnectionError is the
-// single operator-facing failure reason and never holds credentials; DNS is
-// served only while the AP is active.
-// DEPENDENCIES: Uses Arduino-ESP32 WiFi, ESPmDNS, DNSServer, esp_mac and
-// Preferences; reads RuntimeConfig for SSID/password and emits WebStatus for
-// the UI.
+// - Owns AP/STA transitions, identity, mDNS, DNS, scanning, and retries.
+// - NOT: HTTP routes, persistence, protocol dialogs, or boot tracing.
+// INVARIANTS:
+// - Fallback AP is protected;
+// - mDNS follows station connection;
+// - DNS is served only while AP is active;
+// - errors never contain credentials.
+// DEPENDENCIES: WiFi, ESPmDNS, DNSServer, esp_mac, Preferences, WebStatus.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -40,29 +34,85 @@ constexpr uint16_t kHttpPort = 80;
 // sms_gate.ino only drives setup/loop and delegates network behaviour.
 class WifiManager {
  public:
+  // #region METHOD_WifiManager_initIdentity
+  // PURPOSE: Establishes stable per-device names before networking starts.
   void initIdentity();
+  // #endregion METHOD_WifiManager_initIdentity
+
+  // #region METHOD_WifiManager_startMdns
+  // PURPOSE: Publishes the device name after station networking is ready.
   void startMdns();
+  // #endregion METHOD_WifiManager_startMdns
+
+  // #region METHOD_WifiManager_startAccessPoint
+  // PURPOSE: Provides provisioning or recovery access when STA is unavailable.
   void startAccessPoint(const RuntimeConfig& config);
+  // #endregion METHOD_WifiManager_startAccessPoint
+
+  // #region METHOD_WifiManager_stopAccessPoint
+  // PURPOSE: Releases AP resources after station service is established.
   void stopAccessPoint();
+  // #endregion METHOD_WifiManager_stopAccessPoint
+
+  // #region METHOD_WifiManager_beginStationAttempt
+  // PURPOSE: Tests saved access without blocking provisioning or recovery services.
   void beginStationAttempt(const RuntimeConfig& config);
+  // #endregion METHOD_WifiManager_beginStationAttempt
+
+  // #region METHOD_WifiManager_startWallClock
+  // PURPOSE: Starts configured SNTP fallback when station service is online.
   void startWallClock(const RuntimeConfig& config);
+  // #endregion METHOD_WifiManager_startWallClock
+
+  // #region METHOD_WifiManager_onStationConnected
+  // PURPOSE: Completes the online transition and refreshes dependent services.
   void onStationConnected(const RuntimeConfig& config, bool deferAccessPointShutdown);
+  // #endregion METHOD_WifiManager_onStationConnected
+
+  // #region METHOD_WifiManager_onStationFailed
+  // PURPOSE: Records failure and schedules protected fallback recovery.
   void onStationFailed(const RuntimeConfig& config);
+  // #endregion METHOD_WifiManager_onStationFailed
   void setTimeSync(TimeSync* timeSync) { timeSync_ = timeSync; }
+  // #region METHOD_WifiManager_buildStatus
+  // PURPOSE: Projects network state into the operator API snapshot.
   WebStatus buildStatus(const RuntimeConfig& config) const;
+  // #endregion METHOD_WifiManager_buildStatus
+
+  // #region METHOD_WifiManager_buildScanNetworksJson
+  // PURPOSE: Gives provisioning a bounded network list without exposing scan internals.
   String buildScanNetworksJson();
+  // #endregion METHOD_WifiManager_buildScanNetworksJson
+
+  // #region METHOD_WifiManager_testStationCandidate
+  // PURPOSE: Verifies replacement credentials before they are persisted.
   bool testStationCandidate(const RuntimeConfig& candidate, const RuntimeConfig& previous);
+  // #endregion METHOD_WifiManager_testStationCandidate
+
+  // #region METHOD_WifiManager_loop
+  // PURPOSE: Advances STA/AP recovery without blocking other services.
   void loop(const RuntimeConfig& config);
+  // #endregion METHOD_WifiManager_loop
+
+  // #region METHOD_WifiManager_handleDns
+  // PURPOSE: Keeps captive-portal resolution available while AP is active.
   void handleDns();
+  // #endregion METHOD_WifiManager_handleDns
 
   const String& stationMacAddress() const { return stationMacAddress_; }
   const String& accessPointSsid() const { return accessPointSsid_; }
   const String& mdnsHostname() const { return mdnsHostname_; }
   const String& lastConnectionError() const { return lastConnectionError_; }
   void setLastConnectionError(const String& error) { lastConnectionError_ = error; }
+  // #region METHOD_WifiManager_scheduleAccessPointRestart
+  // PURPOSE: Schedules a protected AP restart after station recovery fails.
   void scheduleAccessPointRestart();
+  // #endregion METHOD_WifiManager_scheduleAccessPointRestart
 
+  // #region ENUM_ConnectionState
+  // PURPOSE: Names the Wi-Fi lifecycle states used by recovery logic.
   enum class ConnectionState { kInitialSetup, kConnecting, kOnline, kFallbackAp };
+  // #endregion ENUM_ConnectionState
   ConnectionState connectionState() const { return connectionState_; }
   void setConnectionState(ConnectionState state) { connectionState_ = state; }
   bool accessPointActive() const { return accessPointActive_; }

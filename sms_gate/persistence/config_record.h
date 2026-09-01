@@ -1,9 +1,9 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Defines the portable, checksummed binary record for the one saved
-// network profile so it can be validated independently of Arduino hardware
-// APIs.
-// INVARIANTS: A record is valid only with the expected magic, version,
-// and checksum.
+// PURPOSE: Keeps the saved network profile verifiable across recovery and boots.
+// SCOPE:
+// - Defines network record layouts, checksums, and validation predicates.
+// - NOT: NVS access, Wi-Fi connection management, and HTTP authentication.
+// INVARIANTS: A record is valid only with the expected magic, version, and checksum.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -68,6 +68,7 @@ inline uint32_t calculateConfigChecksum(const ConfigRecord& record) {
 // #endregion FUNC_calculateConfigChecksum
 
 // #region FUNC_calculateConfigV1Checksum
+// PURPOSE: Validates legacy blobs before migration can use their fields.
 inline uint32_t calculateConfigV1Checksum(const ConfigRecordV1& record) {
   const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
   uint32_t hash = 2166136261UL;
@@ -80,6 +81,7 @@ inline uint32_t calculateConfigV1Checksum(const ConfigRecordV1& record) {
 // #endregion FUNC_calculateConfigV1Checksum
 
 // #region FUNC_isConfigRecordV1Valid
+// PURPOSE: Rejects corrupt legacy profiles before migration.
 inline bool isConfigRecordV1Valid(const ConfigRecordV1& record) {
   if (record.magic != kConfigMagic || record.version != 1 ||
       record.checksum != calculateConfigV1Checksum(record)) {
@@ -95,6 +97,7 @@ inline bool isConfigRecordV1Valid(const ConfigRecordV1& record) {
 // #endregion FUNC_isConfigRecordV1Valid
 
 // #region FUNC_isConfigRecordValid
+// PURPOSE: Rejects corrupt current profiles before credentials are used.
 inline bool isConfigRecordValid(const ConfigRecord& record) {
   if (record.magic != kConfigMagic || record.version != kConfigVersion ||
       record.checksum != calculateConfigChecksum(record)) {

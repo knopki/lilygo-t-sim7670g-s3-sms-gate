@@ -1,6 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements the shared credential and poll-interval helpers used by
-// every configuration store and HTTP form validator.
+// PURPOSE: Keeps validation rules identical across persistence and HTTP forms.
+// SCOPE:
+//   - Validates printable credentials, constant-time equality, and bounded poll intervals.
+//   - NOT: Persisting configuration records or handling HTTP requests.
+// INVARIANTS:
+//   - Accepted passwords remain within the shared printable-ASCII length limits.
+//   - Secret comparisons inspect both inputs through their longest length.
 // #endregion MODULE_CONTRACT
 
 #include "persistence/config_store_common.h"
@@ -8,7 +13,7 @@
 #include "persistence/config_record.h"
 
 // #region FUNC_isPrintableAscii
-// PURPOSE: Returns true when every character is in 32..126.
+// PURPOSE: Rejects non-printable text before records and forms can diverge.
 bool isPrintableAscii(const String& value) {
   for (size_t index = 0; index < value.length(); ++index) {
     const char character = value[index];
@@ -21,7 +26,7 @@ bool isPrintableAscii(const String& value) {
 // #endregion FUNC_isPrintableAscii
 
 // #region FUNC_isValidPassword
-// PURPOSE: Returns true when length is 8..63 and isPrintableAscii holds.
+// PURPOSE: Enforces one printable credential rule before values reach storage or auth.
 bool isValidPassword(const String& value) {
   return value.length() >= kMinPasswordLength && value.length() <= kMaxPasswordLength &&
          isPrintableAscii(value);
@@ -29,7 +34,7 @@ bool isValidPassword(const String& value) {
 // #endregion FUNC_isValidPassword
 
 // #region FUNC_constantTimeEquals
-// PURPOSE: Compares two strings in constant time over the longer length.
+// PURPOSE: Keeps secret comparisons from revealing length or content through timing.
 bool constantTimeEquals(const String& left, const String& right) {
   const size_t longestLength = max(left.length(), right.length());
   uint8_t difference = static_cast<uint8_t>(left.length() ^ right.length());
@@ -43,8 +48,7 @@ bool constantTimeEquals(const String& left, const String& right) {
 // #endregion FUNC_constantTimeEquals
 
 // #region FUNC_parsePollInterval
-// PURPOSE: Parses poll_interval as decimal 5..300 (or caller-supplied
-// min/max) into out; on failure sets error to the operator message.
+// PURPOSE: Rejects unsafe scheduler intervals before they reach persisted source profiles.
 bool parsePollInterval(const String& raw, uint16_t& out, uint16_t min, uint16_t max,
                        String& error) {
   String trimmed = raw;

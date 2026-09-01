@@ -1,7 +1,13 @@
-// Host test for the ZTE MF79RU goform dialog (ADR-0003): scripts a fake
-// modem through the ZteChannel interface and asserts the exact request
-// contract, session handling, AD token, paging/scan semantics, decoding,
-// and record validation.
+// #region MODULE_CONTRACT
+// PURPOSE: Keeps the ZTE modem dialog and record rules reproducible without hardware.
+// SCOPE:
+// - Tests ZTE record migration and validation
+// - Tests scripted HTTP login, SMS, deletion, cleanup, and send-status flows.
+// INVARIANTS:
+// - Requests follow scripted wire order;
+// - malformed modem responses yield explicit failures;
+// - successful deletion is verified by a later listing.
+// #endregion MODULE_CONTRACT
 #include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -17,9 +23,7 @@
 namespace {
 
 // #region CLASS_FakeZteChannel
-// PURPOSE: Scripts the modem side of the dialog as a byte stream and
-// records every byte the client writes, so tests assert the exact request
-// contract of the goform API.
+// PURPOSE: Keeps one deterministic modem stream so exact goform requests remain testable.
 class FakeZteChannel : public ZteChannel {
  public:
   void enqueue(const std::string& response) { stream += response; }
@@ -84,33 +88,29 @@ class FakeZteChannel : public ZteChannel {
 // #endregion CLASS_FakeZteChannel
 
 // #region FUNC_httpResponse
-// PURPOSE: Builds one complete modem HTTP response with optional extra
-// headers (Set-Cookie) before Connection: close.
+// PURPOSE: Supplies realistic HTTP framing so response parsing stays covered.
 std::string httpResponse(const std::string& body, const std::string& extraHeaders = "") {
-  return "HTTP/1.1 200 OK\r\n" + extraHeaders + "Content-Length: " +
-         std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+  return "HTTP/1.1 200 OK\r\n" + extraHeaders + "Content-Length: " + std::to_string(body.size()) +
+         "\r\nConnection: close\r\n\r\n" + body;
 }
 // #endregion FUNC_httpResponse
 
 // #region FUNC_loginResponse
-// PURPOSE: Builds the successful LOGIN response that installs the stok
-// cookie the later requests must send.
+// PURPOSE: Supplies a session cookie so authenticated requests remain testable.
 std::string loginResponse() {
   return httpResponse("{\"result\":\"0\"}", "Set-Cookie: stok=ABC123; Path=/\r\n");
 }
 // #endregion FUNC_loginResponse
 
 // #region FUNC_versionsResponse
-// PURPOSE: Builds the firmware-version answer whose concatenation feeds
-// the AD token.
+// PURPOSE: Supplies the version input required to make AD-token checks deterministic.
 std::string versionsResponse() {
   return httpResponse("{\"cr_version\":\"\",\"wa_inner_version\":\"BD_MF79RUV1.0.0B02\"}");
 }
 // #endregion FUNC_versionsResponse
 
 // #region FUNC_smsResponse
-// PURPOSE: Builds one sms_data_total answer; each entry is a raw JSON
-// object fragment so tests control id, tag, and content precisely.
+// PURPOSE: Keeps SMS listing fixtures controllable so paging decisions remain testable.
 std::string smsResponse(const std::vector<std::string>& entries) {
   std::string body = "{\"messages\":[";
   for (size_t index = 0; index < entries.size(); ++index) {
@@ -125,8 +125,7 @@ std::string smsResponse(const std::vector<std::string>& entries) {
 // #endregion FUNC_smsResponse
 
 // #region FUNC_smsEntry
-// PURPOSE: Builds one messages[] element; content defaults to a short
-// UCS-2 hex text ("OK") unless overridden.
+// PURPOSE: Keeps message fixtures concise while allowing precise field mutations.
 std::string smsEntry(const char* id, const char* tag, const char* content = "004F004B",
                      const char* receivedAll = "1", const char* concatTotal = "1",
                      const char* concatReceived = "1") {
@@ -136,8 +135,9 @@ std::string smsEntry(const char* id, const char* tag, const char* content = "004
   entry += content;
   entry += "\",\"tag\":\"";
   entry += tag;
-  entry += "\",\"date\":\"26,01,02,03,04,05,+12\",\"draft_group_id\":\"\","
-           "\"received_all_concat_sms\":\"";
+  entry +=
+      "\",\"date\":\"26,01,02,03,04,05,+12\",\"draft_group_id\":\"\","
+      "\"received_all_concat_sms\":\"";
   entry += receivedAll;
   entry += "\",\"concat_sms_total\":\"";
   entry += concatTotal;
@@ -149,8 +149,7 @@ std::string smsEntry(const char* id, const char* tag, const char* content = "004
 // #endregion FUNC_smsEntry
 
 // #region FUNC_countOccurrences
-// PURPOSE: Counts substring occurrences to assert how often the dialog
-// relogged in.
+// PURPOSE: Makes repeated request behavior directly assertable in the wire trace.
 int countOccurrences(const std::string& text, const std::string& needle) {
   int count = 0;
   for (size_t position = text.find(needle); position != std::string::npos;
@@ -162,8 +161,7 @@ int countOccurrences(const std::string& text, const std::string& needle) {
 // #endregion FUNC_countOccurrences
 
 // #region FUNC_makeRecord
-// PURPOSE: Builds one known-good ZTE record as the baseline for every
-// mutation.
+// PURPOSE: Supplies a valid baseline so each record mutation isolates one rule.
 ZteConfigRecord makeRecord() {
   ZteConfigRecord record{};
   record.magic = kZteConfigMagic;
@@ -180,8 +178,7 @@ ZteConfigRecord makeRecord() {
 // #endregion FUNC_makeRecord
 
 // #region FUNC_testCodecVectors
-// PURPOSE: Proves the shared MD5 and base64 encoders against RFC vectors
-// before any dialog output can depend on them.
+// PURPOSE: Prevents codec regressions from invalidating later dialog assertions.
 void testCodecVectors() {
   char hex[33];
   codec::md5Hex("", 0, hex);
@@ -205,7 +202,7 @@ void testCodecVectors() {
 // #endregion FUNC_testCodecVectors
 
 // #region FUNC_makeV3Record
-// PURPOSE: Builds one known-good v3 record as migration sample (older removed).
+// PURPOSE: Supplies a legacy blob so migration validation remains reproducible.
 ZteConfigRecordV3 makeV3Record() {
   ZteConfigRecordV3 record{};
   record.magic = kZteConfigMagic;
@@ -227,9 +224,7 @@ ZteConfigRecordV3 makeV3Record() {
 // #endregion FUNC_makeV3Record
 
 // #region FUNC_testRecordValidation
-// PURPOSE: Gates load/save on the shared predicate: corrupt, foreign, and
-// non-printable records never reach the modem dialog; the label is optional
-// but must be printable when present.
+// PURPOSE: Prevents invalid records from reaching the modem dialog.
 void testRecordValidation() {
   ZteConfigRecord record = makeRecord();
   assert(isZteConfigRecordValid(record));
@@ -287,7 +282,7 @@ void testRecordValidation() {
 
   record = makeRecord();
   record.moduleEnabled = 0;
-  record.forwardEnabled = 1; // module off but forward on is still valid record
+  record.forwardEnabled = 1;  // module off but forward on is still valid record
   record.checksum = calculateZteConfigChecksum(record);
   assert(isZteConfigRecordValid(record));
 
@@ -326,8 +321,7 @@ void testRecordValidation() {
 // #endregion FUNC_testRecordValidation
 
 // #region FUNC_testV3MigrationValidation
-// PURPOSE: Proves v3 recognition accepts an original record and rejects
-// corrupted blobs before migration to v4 (sample kept).
+// PURPOSE: Protects legacy-record recognition before migration to v4.
 void testV3MigrationValidation() {
   assert(isZteConfigRecordV3Valid(makeV3Record()));
   ZteConfigRecordV3 record = makeV3Record();
@@ -353,8 +347,7 @@ void testV3MigrationValidation() {
 // #endregion FUNC_testV3MigrationValidation
 
 // #region FUNC_testLoginSuccess
-// PURPOSE: Proves the LOGIN request contract (base64 password, Referer,
-// cookie capture) and the version concatenation the AD token needs.
+// PURPOSE: Protects session setup and AD-token inputs from request regressions.
 void testLoginSuccess() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -372,15 +365,15 @@ void testLoginSuccess() {
 
   // The version GET carries the captured session cookie.
   assert(countOccurrences(channel.written, "Cookie: stok=ABC123") == 1);
-  assert(countOccurrences(channel.written, "GET /goform/goform_get_cmd_process?isTest=false&"
-                                           "cmd=cr_version,wa_inner_version&multi_data=1") == 1);
+  assert(countOccurrences(channel.written,
+                          "GET /goform/goform_get_cmd_process?isTest=false&"
+                          "cmd=cr_version,wa_inner_version&multi_data=1") == 1);
   puts("testLoginSuccess ok");
 }
 // #endregion FUNC_testLoginSuccess
 
 // #region FUNC_testLoginRejected
-// PURPOSE: Separates a wrong password (rejected) from a missing cookie
-// (also rejected) so the operator sees the true cause.
+// PURPOSE: Keeps password and session-cookie failures diagnostically distinct.
 void testLoginRejected() {
   FakeZteChannel channel;
   channel.enqueue(httpResponse("{\"result\":\"1\"}", "Set-Cookie: stok=ABC123; Path=/\r\n"));
@@ -399,16 +392,14 @@ void testLoginRejected() {
 // #endregion FUNC_testLoginRejected
 
 // #region FUNC_testFindOldestAscending
-// PURPOSE: Captures the oldest incoming SMS on an ascending page (the
-// requested order), including decoded text and request query shape.
+// PURPOSE: Protects oldest-message selection and decoded listing semantics.
 void testFindOldestAscending() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
   channel.enqueue(versionsResponse());
   // Entries: sent, unread incoming 101, draft, read incoming 103, sent.
-  channel.enqueue(smsResponse({smsEntry("100", "2"), smsEntry("101", "1"),
-                               smsEntry("102", "4"), smsEntry("103", "0"),
-                               smsEntry("104", "2")}));
+  channel.enqueue(smsResponse({smsEntry("100", "2"), smsEntry("101", "1"), smsEntry("102", "4"),
+                               smsEntry("103", "0"), smsEntry("104", "2")}));
   std::vector<char> scratch(4096);
   ZteModem modem(channel, scratch.data(), scratch.size());
   ZteSms sms{};
@@ -431,17 +422,15 @@ void testFindOldestAscending() {
 // #endregion FUNC_testFindOldestAscending
 
 // #region FUNC_testFindOldestDescending
-// PURPOSE: Auto-detects a firmware that ignores the ascending request and
-// still selects the oldest incoming SMS after the final page.
+// PURPOSE: Protects oldest-message selection when firmware reverses page order.
 void testFindOldestDescending() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
   channel.enqueue(versionsResponse());
   // Descending page 0 (5 entries, count equals page size, so the scan must
   // continue) and an empty final page.
-  channel.enqueue(smsResponse({smsEntry("104", "2"), smsEntry("103", "1"),
-                               smsEntry("102", "2"), smsEntry("101", "0"),
-                               smsEntry("100", "2")}));
+  channel.enqueue(smsResponse({smsEntry("104", "2"), smsEntry("103", "1"), smsEntry("102", "2"),
+                               smsEntry("101", "0"), smsEntry("100", "2")}));
   channel.enqueue(smsResponse({}));
   std::vector<char> scratch(4096);
   ZteModem modem(channel, scratch.data(), scratch.size());
@@ -457,15 +446,13 @@ void testFindOldestDescending() {
 // #endregion FUNC_testFindOldestDescending
 
 // #region FUNC_testFindOldestContinuesPages
-// PURPOSE: Skips a page without incoming entries and finds the target on
-// the next page when entries are ascending.
+// PURPOSE: Protects scans that must continue past pages without incoming SMS.
 void testFindOldestContinuesPages() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
   channel.enqueue(versionsResponse());
-  channel.enqueue(smsResponse({smsEntry("100", "2"), smsEntry("101", "2"),
-                               smsEntry("102", "2"), smsEntry("103", "2"),
-                               smsEntry("104", "2")}));
+  channel.enqueue(smsResponse({smsEntry("100", "2"), smsEntry("101", "2"), smsEntry("102", "2"),
+                               smsEntry("103", "2"), smsEntry("104", "2")}));
   channel.enqueue(smsResponse({smsEntry("105", "1"), smsEntry("106", "2")}));
   std::vector<char> scratch(4096);
   ZteModem modem(channel, scratch.data(), scratch.size());
@@ -480,8 +467,7 @@ void testFindOldestContinuesPages() {
 // #endregion FUNC_testFindOldestContinuesPages
 
 // #region FUNC_testFindOldestEmpty
-// PURPOSE: Reports an empty inbox without any error so the poll cycle can
-// stay quiet.
+// PURPOSE: Keeps an empty inbox a quiet, successful poll result.
 void testFindOldestEmpty() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -499,8 +485,7 @@ void testFindOldestEmpty() {
 // #endregion FUNC_testFindOldestEmpty
 
 // #region FUNC_testIncompleteConcatAndDecode
-// PURPOSE: Carries the incomplete-concat warning fields and proves the
-// UCS-2 decoder (Cyrillic, surrogate pair, and non-hex fallback).
+// PURPOSE: Protects incomplete-message diagnostics and UCS-2 decoding fallbacks.
 void testIncompleteConcatAndDecode() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -518,8 +503,8 @@ void testIncompleteConcatAndDecode() {
   assert(!sms.concatComplete);
   assert(strcmp(sms.concatTotal, "5") == 0);
   assert(strcmp(sms.concatReceived, "1") == 0);
-  const unsigned char expected[] = {0xD0, 0x92, 0x20, 0xD1, 0x81, 0xD0, 0xB2, 0xD1,
-                                    0x8F, 0xD0, 0xB7, 0xD0, 0xB8, 0xF0, 0x9F, 0x98, 0x80};
+  const unsigned char expected[] = {0xD0, 0x92, 0x20, 0xD1, 0x81, 0xD0, 0xB2, 0xD1, 0x8F,
+                                    0xD0, 0xB7, 0xD0, 0xB8, 0xF0, 0x9F, 0x98, 0x80};
   assert(strlen(sms.textUtf8) == sizeof(expected));
   assert(memcmp(sms.textUtf8, expected, sizeof(expected)) == 0);
   puts("testIncompleteConcatAndDecode ok");
@@ -527,8 +512,7 @@ void testIncompleteConcatAndDecode() {
 // #endregion FUNC_testIncompleteConcatAndDecode
 
 // #region FUNC_testNonHexContentFallback
-// PURPOSE: Falls back to the raw string when the content is not UCS-2 hex,
-// matching the reference forwarder.
+// PURPOSE: Keeps non-hex modem content forwardable without lossy decoding.
 void testNonHexContentFallback() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -547,8 +531,7 @@ void testNonHexContentFallback() {
 // #endregion FUNC_testNonHexContentFallback
 
 // #region FUNC_testControlCharactersInNumber
-// PURPOSE: Keeps raw control characters inside string values scannable
-// (B02 firmware behavior a strict parser rejects).
+// PURPOSE: Preserves scanability of firmware replies containing raw controls.
 void testControlCharactersInNumber() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -571,8 +554,7 @@ void testControlCharactersInNumber() {
 // #endregion FUNC_testControlCharactersInNumber
 
 // #region FUNC_testStaleSessionRelogin
-// PURPOSE: Recognizes the stale empty sms_data_total answer, relogs in
-// exactly once, and completes the scan.
+// PURPOSE: Keeps stale sessions recoverable without duplicate login loops.
 void testStaleSessionRelogin() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -595,8 +577,7 @@ void testStaleSessionRelogin() {
 // #endregion FUNC_testStaleSessionRelogin
 
 // #region FUNC_testDeleteFlow
-// PURPOSE: Proves the DELETE_SMS request contract (msg_id with %3B, fresh
-// AD token) and the verified absence afterwards.
+// PURPOSE: Protects deletion requests and confirms the message is truly gone.
 void testDeleteFlow() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -618,8 +599,8 @@ void testDeleteFlow() {
   // AD = md5(md5("BD_MF79RUV1.0.0B02") + "AB12CD34"), precomputed vector.
   assert(modem.deleteSms(sms) == ZteResult::kSuccess);
   assert(modem.failedStage()[0] == '\0');
-  assert(countOccurrences(channel.written, "GET /goform/goform_get_cmd_process?isTest=false&cmd=RD") ==
-         1);
+  assert(countOccurrences(channel.written,
+                          "GET /goform/goform_get_cmd_process?isTest=false&cmd=RD") == 1);
   assert(countOccurrences(channel.written,
                           "isTest=false&goformId=DELETE_SMS&msg_id=600%3B&notCallback=true&"
                           "AD=02bb862c133c79826efbe952c8a57c34") == 1);
@@ -628,8 +609,7 @@ void testDeleteFlow() {
 // #endregion FUNC_testDeleteFlow
 
 // #region FUNC_testDeleteRejected
-// PURPOSE: Surfaces a refused delete as a protocol error so the message is
-// retained for the next poll instead of assumed gone.
+// PURPOSE: Keeps refused deletions visible so messages remain retryable.
 void testDeleteRejected() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -648,8 +628,7 @@ void testDeleteRejected() {
 // #endregion FUNC_testDeleteRejected
 
 // #region FUNC_testDeleteUnverified
-// PURPOSE: Detects an id that survived the delete request, which would
-// otherwise re-forward the same message forever.
+// PURPOSE: Prevents a surviving message from being falsely treated as deleted.
 void testDeleteUnverified() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -669,23 +648,19 @@ void testDeleteUnverified() {
 // #endregion FUNC_testDeleteUnverified
 
 // #region FUNC_testCleanupOutgoing
-// PURPOSE: Reclaims both completed (tag 2) and failed (tag 3) outgoing
-// records, re-scanning from page zero after each verified deletion so the
-// modem's paging shift cannot skip either record; incoming SMS stays intact.
+// PURPOSE: Keeps outgoing cleanup complete despite paging shifts and protects incoming SMS.
 void testCleanupOutgoing() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
   channel.enqueue(versionsResponse());
   // B02 ignores page, so each tag-specific page zero becomes the work
   // queue: deleting 701 exposes the next matching record on the next scan.
-  channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("701", "2"),
-                               smsEntry("703", "4")}));
+  channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("701", "2"), smsEntry("703", "4")}));
   channel.enqueue(httpResponse("{\"RD\":\"AB12CD34\"}"));
   channel.enqueue(httpResponse("{\"result\":\"success\"}"));
   channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("703", "4")}));
   channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("703", "4")}));
-  channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("702", "3"),
-                               smsEntry("703", "4")}));
+  channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("702", "3"), smsEntry("703", "4")}));
   channel.enqueue(httpResponse("{\"RD\":\"AB12CD34\"}"));
   channel.enqueue(httpResponse("{\"result\":\"success\"}"));
   channel.enqueue(smsResponse({smsEntry("700", "1"), smsEntry("703", "4")}));
@@ -707,8 +682,7 @@ void testCleanupOutgoing() {
 // #endregion FUNC_testCleanupOutgoing
 
 // #region FUNC_testCleanupOutgoingDeleteRejected
-// PURPOSE: Keeps an outgoing record visible when the modem refuses its
-// delete, reports the precise delete stage, and never claims a deletion.
+// PURPOSE: Prevents failed outgoing cleanup from being reported as complete.
 void testCleanupOutgoingDeleteRejected() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -729,16 +703,17 @@ void testCleanupOutgoingDeleteRejected() {
 // #endregion FUNC_testCleanupOutgoingDeleteRejected
 
 // #region FUNC_testInboxStatus
-// PURPOSE: Reads the device-storage occupancy for the operator test route.
+// PURPOSE: Keeps storage occupancy reporting aligned with the operator route.
 void testInboxStatus() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
   channel.enqueue(versionsResponse());
-  channel.enqueue(httpResponse("{\"sms_nv_total\":\"100\",\"sms_sim_total\":\"15\","
-                               "\"sms_nvused_total\":\"3\",\"sms_nv_rev_total\":\"3\","
-                               "\"sms_nv_send_total\":\"0\",\"sms_nv_draftbox_total\":\"0\","
-                               "\"sms_sim_rev_total\":\"0\",\"sms_sim_send_total\":\"0\","
-                               "\"sms_sim_draftbox_total\":\"0\"}"));
+  channel.enqueue(
+      httpResponse("{\"sms_nv_total\":\"100\",\"sms_sim_total\":\"15\","
+                   "\"sms_nvused_total\":\"3\",\"sms_nv_rev_total\":\"3\","
+                   "\"sms_nv_send_total\":\"0\",\"sms_nv_draftbox_total\":\"0\","
+                   "\"sms_sim_rev_total\":\"0\",\"sms_sim_send_total\":\"0\","
+                   "\"sms_sim_draftbox_total\":\"0\"}"));
   std::vector<char> scratch(4096);
   ZteModem modem(channel, scratch.data(), scratch.size());
   assert(modem.login("192.168.0.1", "admin") == ZteResult::kSuccess);
@@ -751,8 +726,7 @@ void testInboxStatus() {
 // #endregion FUNC_testInboxStatus
 
 // #region FUNC_testHttpFailures
-// PURPOSE: Classifies transport and framing failures to one stable stage
-// each so Serial events name the true cause.
+// PURPOSE: Keeps transport and framing failures diagnostically distinct.
 void testHttpFailures() {
   std::vector<char> scratch(4096);
 
@@ -790,8 +764,7 @@ void testHttpFailures() {
 // #endregion FUNC_testHttpFailures
 
 // #region FUNC_testBodyWithoutContentLength
-// PURPOSE: Accepts a body terminated by connection close when the modem
-// omits Content-Length.
+// PURPOSE: Preserves compatibility with modem responses lacking Content-Length.
 void testBodyWithoutContentLength() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -809,9 +782,7 @@ void testBodyWithoutContentLength() {
 // #endregion FUNC_testBodyWithoutContentLength
 
 // #region FUNC_testSendSmsFlow
-// PURPOSE: Proves the SEND_SMS request contract (escaped Number and
-// sms_time, UCS-2-hex body with surrogate pair, ID=-1, UNICODE, fresh AD
-// token) and the send-status query shape.
+// PURPOSE: Protects byte-exact SMS submission and status polling requests.
 void testSendSmsFlow() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -824,8 +795,7 @@ void testSendSmsFlow() {
   assert(modem.login("192.168.0.1", "admin") == ZteResult::kSuccess);
 
   // "Привет " + U+1F600 as raw UTF-8 bytes.
-  const char* text =
-      "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82 \xF0\x9F\x98\x80";
+  const char* text = "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82 \xF0\x9F\x98\x80";
   assert(modem.sendSms("+79990000000", text) == ZteResult::kSuccess);
   assert(modem.failedStage()[0] == '\0');
   assert(countOccurrences(channel.written,
@@ -852,19 +822,16 @@ void testSendSmsFlow() {
   // The request must END exactly with the form: no bytes may follow the
   // AD before the next request begins (an unterminated body once leaked
   // stack bytes onto the wire).
-  const std::string expectedTail =
-      "&ID=-1&encode_type=UNICODE&AD=02bb862c133c79826efbe952c8a57c34";
-  assert(countOccurrences(channel.written,
-                          expectedTail + "GET /goform/goform_get_cmd_process?isTest=false&"
-                                         "cmd=sms_cmd_status_info&sms_cmd=4") == 1);
+  const std::string expectedTail = "&ID=-1&encode_type=UNICODE&AD=02bb862c133c79826efbe952c8a57c34";
+  assert(countOccurrences(channel.written, expectedTail +
+                                               "GET /goform/goform_get_cmd_process?isTest=false&"
+                                               "cmd=sms_cmd_status_info&sms_cmd=4") == 1);
   puts("testSendSmsFlow ok");
 }
 // #endregion FUNC_testSendSmsFlow
 
 // #region FUNC_testSendSmsAsciiUsesGsm7
-// PURPOSE: Mirrors the modem web UI's proven request: printable-ASCII text
-// carries encode_type=GSM7_default with the same UTF-16-hex body (captured
-// browser request for "test": 0074006500730074).
+// PURPOSE: Protects the UI-compatible GSM7 request shape used by the modem.
 void testSendSmsAsciiUsesGsm7() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -877,8 +844,7 @@ void testSendSmsAsciiUsesGsm7() {
   assert(modem.sendSms("+79685557161", "test") == ZteResult::kSuccess);
   assert(strstr(modem.lastSendForm(), "encode_type=GSM7_default") != nullptr);
   assert(strstr(modem.lastSendForm(), "Number=%2B79685557161") != nullptr);
-  assert(countOccurrences(channel.written,
-                          "Number=%2B79685557161&") == 1);
+  assert(countOccurrences(channel.written, "Number=%2B79685557161&") == 1);
   assert(countOccurrences(channel.written,
                           "&MessageBody=0074006500730074&ID=-1&encode_type=GSM7_default&") == 1);
   // Exact boundary again for the ASCII path.
@@ -888,8 +854,7 @@ void testSendSmsAsciiUsesGsm7() {
 // #endregion FUNC_testSendSmsAsciiUsesGsm7
 
 // #region FUNC_testSendSmsEmptyReply
-// PURPOSE: Names the modem's empty-200-body rejection signature distinctly
-// so a hardware log identifies a malformed form without guessing.
+// PURPOSE: Keeps empty successful HTTP bodies diagnostically distinct.
 void testSendSmsEmptyReply() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -907,8 +872,7 @@ void testSendSmsEmptyReply() {
 // #endregion FUNC_testSendSmsEmptyReply
 
 // #region FUNC_testSendSmsRejected
-// PURPOSE: Separates a refused send command from transport and protocol
-// failures so the operator sees the true cause.
+// PURPOSE: Keeps send refusal distinct from transport and protocol failures.
 void testSendSmsRejected() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -926,8 +890,7 @@ void testSendSmsRejected() {
 // #endregion FUNC_testSendSmsRejected
 
 // #region FUNC_testSendStatusSamples
-// PURPOSE: Maps every sms_cmd_status_info answer onto one sampled outcome,
-// treating the field's absence as still in progress.
+// PURPOSE: Keeps sampled send status outcomes stable, including missing fields.
 void testSendStatusSamples() {
   FakeZteChannel channel;
   channel.enqueue(loginResponse());
@@ -954,8 +917,7 @@ void testSendStatusSamples() {
 // #endregion FUNC_testSendStatusSamples
 
 // #region FUNC_testSendSmsInputValidation
-// PURPOSE: Rejects empty, oversize, non-printable, and malformed-UTF-8
-// input before any byte reaches the modem.
+// PURPOSE: Prevents invalid SMS input from reaching the modem.
 void testSendSmsInputValidation() {
   FakeZteChannel channel;
   std::vector<char> scratch(4096);
@@ -978,8 +940,7 @@ void testSendSmsInputValidation() {
 // #endregion FUNC_testSendSmsInputValidation
 
 // #region FUNC_testZteSmsUtf16Units
-// PURPOSE: Proves the shared length rule: BMP characters count one unit,
-// astral codepoints two, and malformed UTF-8 is rejected.
+// PURPOSE: Protects the shared UTF-16 length boundary used for SMS limits.
 void testZteSmsUtf16Units() {
   assert(zteSmsUtf16Units("") == 0);
   assert(zteSmsUtf16Units("abc") == 3);
@@ -987,8 +948,8 @@ void testZteSmsUtf16Units() {
   assert(zteSmsUtf16Units("\xF0\x9F\x98\x80") == 2);
   assert(zteSmsUtf16Units("hi \xF0\x9F\x98\x80!") == 6);
   assert(zteSmsUtf16Units("\xFF") == kZteSmsInvalidUnits);
-  assert(zteSmsUtf16Units("\xC3\x28") == kZteSmsInvalidUnits);   // Bad continuation.
-  assert(zteSmsUtf16Units("\xC0\xAF") == kZteSmsInvalidUnits);   // Overlong '/'.
+  assert(zteSmsUtf16Units("\xC3\x28") == kZteSmsInvalidUnits);      // Bad continuation.
+  assert(zteSmsUtf16Units("\xC0\xAF") == kZteSmsInvalidUnits);      // Overlong '/'.
   assert(zteSmsUtf16Units("\xED\xA0\x80") == kZteSmsInvalidUnits);  // Encoded surrogate.
   assert(zteSmsUtf16Units("\xF0\x9F\x98") == kZteSmsInvalidUnits);  // Truncated.
   puts("testZteSmsUtf16Units ok");
@@ -996,8 +957,7 @@ void testZteSmsUtf16Units() {
 // #endregion FUNC_testZteSmsUtf16Units
 
 // #region FUNC_testFormatZteDate
-// PURPOSE: Covers the timestamp rendering, quarter-hour offsets, and the
-// verbatim fallback for unexpected firmware formats.
+// PURPOSE: Keeps modem timestamps readable while preserving unexpected input.
 void testFormatZteDate() {
   char out[64];
   assert(formatZteDate("26,08,24,13,48,05,+12", out, sizeof(out)));

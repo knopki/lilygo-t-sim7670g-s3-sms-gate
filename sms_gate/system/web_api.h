@@ -1,13 +1,12 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Serves the gzipped browser UI from PROGMEM and serializes the JSON
-// API responses consumed by that UI, keeping presentation out of firmware
-// control flow.
+// PURPOSE: Keeps browser presentation and JSON safety out of control flow.
 // SCOPE:
 // - Asset lookup and serving, JSON escaping, and status/result JSON.
 // - NOT: Wi-Fi lifecycle, HTTP route registration, authentication, scans,
 //   and persistence.
-// INVARIANTS: Every dynamic string is JSON-escaped before serialization and
-// credentials are never serialized.
+// INVARIANTS:
+// - Every dynamic string is JSON-escaped before serialization and
+//   credentials are never serialized.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -18,7 +17,7 @@
 #include <WebServer.h>
 
 // #region STRUCT_WebStatus
-// PURPOSE: Snapshot for GET /api/status; stationIp null when disconnected.
+// PURPOSE: Carries a secret-free network snapshot so the UI can distinguish recovery states.
 struct WebStatus {
   bool setupRequired;
   String mode;
@@ -33,8 +32,7 @@ struct WebStatus {
 // #endregion STRUCT_WebStatus
 
 // #region STRUCT_WebNtpConfig
-// PURPOSE: Snapshot for GET /api/ntp; servers already trimmed, defaults
-// applied when enabled and empty.
+// PURPOSE: Carries normalized clock settings so setup and settings share one API shape.
 struct WebNtpConfig {
   bool ntpEnabled = true;
   String ntpServer1;
@@ -43,7 +41,7 @@ struct WebNtpConfig {
 // #endregion STRUCT_WebNtpConfig
 
 // #region STRUCT_WebSmtpConfig
-// PURPOSE: Snapshot for GET /api/smtp without password; security is starttls/implicit.
+// PURPOSE: Carries editable SMTP state without returning the stored password to the browser.
 struct WebSmtpConfig {
   bool present;
   String host;
@@ -57,7 +55,7 @@ struct WebSmtpConfig {
 // #endregion STRUCT_WebSmtpConfig
 
 // #region STRUCT_WebZteConfig
-// PURPOSE: Snapshot for GET /api/zte without password; pollIntervalSec 5..300 s.
+// PURPOSE: Carries editable ZTE state while keeping modem credentials out of the browser.
 struct WebZteConfig {
   bool present;
   bool moduleEnabled = false;
@@ -71,8 +69,7 @@ struct WebZteConfig {
 // #endregion STRUCT_WebZteConfig
 
 // #region STRUCT_WebModemSourceConfig
-// PURPOSE: Snapshot for GET /api/modem/source without exposing credentials;
-// pollIntervalSec is the per-source SMS poll period (5–300 s).
+// PURPOSE: Carries editable modem-source state without exposing credentials to the browser.
 struct WebModemSourceConfig {
   bool present = false;
   bool moduleEnabled = false;
@@ -86,7 +83,7 @@ struct WebModemSourceConfig {
 // #endregion STRUCT_WebModemSourceConfig
 
 // #region STRUCT_WebSourceConfigCommon
-// PURPOSE: Common poll/label/status slice shared by ZTE and modem-source JSON.
+// PURPOSE: Keeps source pages aligned on shared poll, alias, and outcome fields.
 struct WebSourceConfigCommon {
   bool present = false;
   uint16_t pollIntervalSec = 15;
@@ -96,8 +93,7 @@ struct WebSourceConfigCommon {
 // #endregion STRUCT_WebSourceConfigCommon
 
 // #region STRUCT_WebModemStatus
-// PURPOSE: Snapshot for GET /api/modem/status without exposing credentials;
-// RSSI/RSRP already converted to dBm, unknown → 0.
+// PURPOSE: Carries modem diagnostics without exposing credentials or raw transport state.
 struct WebModemStatus {
   bool present = false;
   String cpin;
@@ -121,8 +117,7 @@ struct WebModemStatus {
 // #endregion STRUCT_WebModemStatus
 
 // #region STRUCT_WebGpsConfig
-// PURPOSE: Snapshot for GET /api/gps without exposing credentials;
-// pollIntervalSec 5..300 s, default 60 s.
+// PURPOSE: Carries GNSS controls and outcome state without exposing modem internals.
 struct WebGpsConfig {
   bool present = false;
   bool moduleEnabled = false;
@@ -134,7 +129,7 @@ struct WebGpsConfig {
 // #endregion STRUCT_WebGpsConfig
 
 // #region STRUCT_WebTimeStatus
-// PURPOSE: Snapshot for GET /api/time — TimeSync arbitration result.
+// PURPOSE: Carries clock quality so clients can tell whether displayed time is trustworthy.
 struct WebTimeStatus {
   String source;  // unsynced/sntp/nitz/gnss
   uint8_t stratum = 0;
@@ -147,8 +142,7 @@ struct WebTimeStatus {
 // #endregion STRUCT_WebTimeStatus
 
 // #region STRUCT_WebWatchdogStatus
-// PURPOSE: Snapshot for GET /api/watchdog — WDT timeout, boot-loop count,
-// safe-mode and last reset reason.
+// PURPOSE: Carries recovery state so operators can diagnose boot loops without hardware access.
 struct WebWatchdogStatus {
   bool safeMode = false;
   uint32_t bootCount = 0;
@@ -159,7 +153,7 @@ struct WebWatchdogStatus {
 // #endregion STRUCT_WebWatchdogStatus
 
 // #region STRUCT_WebGpsStatus
-// PURPOSE: Snapshot for GET /api/gps/status — fix, coords, sats and UTC.
+// PURPOSE: Carries one GNSS snapshot so operators can distinguish fix and time state.
 struct WebGpsStatus {
   bool present = false;
   bool powered = false;
@@ -184,7 +178,7 @@ struct WebGpsStatus {
 // #endregion STRUCT_WebGpsStatus
 
 // #region STRUCT_WebAsyncOp
-// PURPOSE: Snapshot for one-shot async routes (SMTP/ZTE/modem test/send).
+// PURPOSE: Carries non-blocking operation state so one-shot routes can be polled uniformly.
 struct WebAsyncOp {
   bool running;
   bool done;
@@ -193,27 +187,86 @@ struct WebAsyncOp {
 };
 // #endregion STRUCT_WebAsyncOp
 
+// #region FUNC_escapeJson
+// PURPOSE: Prevents dynamic text from breaking JSON responses.
 String escapeJson(const String& value);
+// #endregion FUNC_escapeJson
+
+// #region FUNC_appendJsonString
+// PURPOSE: Prevents untrusted text from changing API field structure.
 void appendJsonString(String& out, const String& value);
+// #endregion FUNC_appendJsonString
+
+// #region FUNC_renderStatusJson
+// PURPOSE: Gives the UI a stable network-status response.
 String renderStatusJson(const WebStatus& status);
+// #endregion FUNC_renderStatusJson
+
+// #region FUNC_renderNtpConfigJson
+// PURPOSE: Gives the UI a safe view of clock-source configuration.
 String renderNtpConfigJson(const WebNtpConfig& config);
+// #endregion FUNC_renderNtpConfigJson
+
+// #region FUNC_renderSmtpConfigJson
+// PURPOSE: Lets the UI manage SMTP without exposing credentials.
 String renderSmtpConfigJson(const WebSmtpConfig& config);
+// #endregion FUNC_renderSmtpConfigJson
+
+// #region FUNC_renderZteConfigJson
+// PURPOSE: Lets the UI manage ZTE without exposing credentials.
 String renderZteConfigJson(const WebZteConfig& config);
-// #region FUNC_renderModemStatusJson
-// PURPOSE: Serializes WebModemStatus into the /api/modem/status envelope.
+// #endregion FUNC_renderZteConfigJson
+// #region FUNC_renderTimeStatusJson
+// PURPOSE: Lets clients observe clock quality and source arbitration.
 String renderTimeStatusJson(const WebTimeStatus& status);
+// #endregion FUNC_renderTimeStatusJson
+
+// #region FUNC_renderWatchdogStatusJson
+// PURPOSE: Lets operators see recovery state without hardware access.
 String renderWatchdogStatusJson(const WebWatchdogStatus& status);
+// #endregion FUNC_renderWatchdogStatusJson
+
+// #region FUNC_renderModemStatusJson
+// PURPOSE: Lets the UI diagnose modem state without credentials.
 String renderModemStatusJson(const WebModemStatus& status);
 // #endregion FUNC_renderModemStatusJson
+
 // #region FUNC_renderModemSourceJson
-// PURPOSE: Serializes WebModemSourceConfig into the /api/modem/source envelope.
+// PURPOSE: Lets the UI manage the modem source without credentials.
 String renderModemSourceJson(const WebModemSourceConfig& config);
 // #endregion FUNC_renderModemSourceJson
+// #region FUNC_renderGpsConfigJson
+// PURPOSE: Lets the UI manage GNSS without exposing device internals.
 String renderGpsConfigJson(const WebGpsConfig& config);
+// #endregion FUNC_renderGpsConfigJson
+
+// #region FUNC_renderGpsStatusJson
+// PURPOSE: Lets operators diagnose GNSS state from one snapshot.
 String renderGpsStatusJson(const WebGpsStatus& status);
+// #endregion FUNC_renderGpsStatusJson
+
+// #region FUNC_renderAsyncOpJson
+// PURPOSE: Lets clients follow one-shot operations without blocking.
 String renderAsyncOpJson(const WebAsyncOp& op);
+// #endregion FUNC_renderAsyncOpJson
+
+// #region FUNC_renderMessageJson
+// PURPOSE: Keeps successful route responses uniform for clients.
 String renderMessageJson(const String& message);
+// #endregion FUNC_renderMessageJson
+
+// #region FUNC_renderErrorJson
+// PURPOSE: Keeps validation and operation failures uniform for clients.
 String renderErrorJson(const String& error);
+// #endregion FUNC_renderErrorJson
+
+// #region FUNC_sendJson
+// PURPOSE: Ensures routes return the API's declared JSON contract.
 void sendJson(WebServer& server, int code, const String& json);
+// #endregion FUNC_sendJson
+
+// #region FUNC_sendAsset
+// PURPOSE: Lets the UI load assets without filesystem access.
 void sendAsset(WebServer& server, const String& path);
+// #endregion FUNC_sendAsset
 #endif  // SYSTEM_WEB_API_H

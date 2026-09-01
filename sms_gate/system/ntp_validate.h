@@ -1,16 +1,14 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Shared NTP-server form sanitizing so POST /api/setup and
-// POST /api/ntp apply one rule for ADR-0005 ntpServer1/2 + ntpEnabled.
+// PURPOSE: Keeps NTP form validation identical across setup and settings.
 // SCOPE:
-// - Trim, 0..kMaxNtpServerLength printable-ASCII validation, and the
-//   enabled-but-empty defaults rule as one pure function with a result
-//   code; an Arduino String wrapper maps codes to operator messages.
-// - NOT: SNTP runtime, TimeSync arbitration, HTTP routing, persistence.
-// INVARIANTS: Output buffers are always NUL-terminated; validation order
-// matches the historical form path (length before printability); defaults
-// are applied only when NTP is enabled and both trimmed servers are empty.
-// DEPENDENCIES: Pure C++ (stddef); kMaxNtpServerLength from the portable
-// config record; the String wrapper requires the Arduino core.
+// - Trims and validates bounded server fields, applies enabled defaults,
+// and maps results to form errors.
+// - NOT: SNTP runtime, TimeSync, HTTP, or NVS.
+// INVARIANTS:
+// - Outputs are terminated;
+// - length checks precede printability;
+// - defaults apply only when enabled and both fields are empty.
+// DEPENDENCIES: Pure C++, config record limits, Arduino String wrapper.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -22,7 +20,7 @@
 #include "persistence/config_record.h"
 
 // #region ENUM_NtpSanitizeResult
-// PURPOSE: Tells the HTTP layer which operator message to emit.
+// PURPOSE: Keeps validation failures mapped to stable operator feedback.
 enum class NtpSanitizeResult {
   kOk,
   kTooLong,
@@ -40,8 +38,7 @@ inline bool ntpValidateIsSpace(char character) {
 // #endregion FUNC_ntpValidateIsSpace
 
 // #region FUNC_ntpValidateTrimmedLength
-// PURPOSE: Returns the length of raw with leading/trailing whitespace removed
-// so over-length input is rejected before any copy.
+// PURPOSE: Rejects over-length input before trimming can hide the true field size.
 inline size_t ntpValidateTrimmedLength(const char* raw) {
   if (raw == nullptr) {
     return 0;
@@ -62,9 +59,7 @@ inline size_t ntpValidateTrimmedLength(const char* raw) {
 // #endregion FUNC_ntpValidateTrimmedLength
 
 // #region FUNC_ntpValidateCopyTrimmed
-// PURPOSE: Copies raw into out (at least kMaxNtpServerLength + 1 bytes)
-// with leading/trailing whitespace removed; raw must already pass the
-// length rule.
+// PURPOSE: Produces normalized server fields after the shared length gate has passed.
 inline void ntpValidateCopyTrimmed(const char* raw, char* out) {
   if (raw == nullptr) {
     out[0] = '\0';

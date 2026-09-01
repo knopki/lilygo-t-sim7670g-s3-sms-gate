@@ -1,18 +1,12 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Binds the host-testable ZTE goform dialog to the bundled
-// NetworkClient transport on the modem's LAN segment (plain HTTP; see
-// ADR-0003 for the trust discussion).
+// PURPOSE: Isolates ZTE LAN transport from testable goform protocol logic.
 // SCOPE:
-// - TCP connect with deadline, line reads for HTTP headers, exact and
-// best-effort body reads, and clean teardown.
-// - NOT: The goform protocol, JSON scanning, persistence, and HTTP route
-// handling.
-// INVARIANTS: Plain reads never touch the core's lwIP select path
-// (available() there does a zero-timeout select that returns spurious
-// -1/EINTR under concurrent selects on core 3.x, confirmed on hardware in
-// ADR-0002); reads use bounded recv() instead. EAGAIN/EWOULDBLOCK/EINTR
-// mean "no data yet" and the loop waits until the deadline.
-// DEPENDENCIES: Uses Arduino-ESP32 NetworkClient and lwIP sockets.
+// - Bounded TCP connect, HTTP line/body reads, and teardown.
+// - NOT: goform protocol, JSON scanning, persistence, or HTTP routes.
+// INVARIANTS:
+// - Reads avoid the unreliable select path;
+// - transient socket errors wait until the deadline and all buffers remain bounded.
+// DEPENDENCIES: NetworkClient and lwIP sockets.
 // #endregion MODULE_CONTRACT
 
 #pragma once

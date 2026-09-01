@@ -1,3 +1,14 @@
+// #region MODULE_CONTRACT
+// PURPOSE: Makes GNSS power, antenna, and fix behavior observable for board bring-up.
+// SCOPE:
+// - Detects board pin maps, drives SIM7670G GNSS and antenna commands,
+//   logs poll diagnostics, and bridges USB CDC to the modem UART.
+// INVARIANTS:
+// - The active antenna is configured before GNSS power-on;
+// - every AT transaction emits a sanitized structured reply;
+//   passthrough remains active.
+// #endregion MODULE_CONTRACT
+
 // GPS probe for LilyGO T-SIM7670G-S3 (SIM7670G internal GNSS).
 // Tries to power on the modem, enable active antenna bias, start GNSS
 // and continuously logs every AT step as structured Serial events.
@@ -59,6 +70,8 @@ bool gGnssPowered = false;
 
 // --- helpers ---------------------------------------------------------------
 
+// #region FUNC_readModemResponse
+// PURPOSE: Keeps probe exchanges bounded and prevents stale noise from masking results.
 String readModemResponse(unsigned long timeoutMs) {
   String response;
   const unsigned long deadline = millis() + timeoutMs;
@@ -83,6 +96,10 @@ String readModemResponse(unsigned long timeoutMs) {
   return response;
 }
 
+// #endregion FUNC_readModemResponse
+
+// #region FUNC_sanitizeReply
+// PURPOSE: Makes raw modem replies safe and compact for structured logs.
 String sanitizeReply(const String& raw) {
   String s = raw;
   s.replace("\r", "");
@@ -95,6 +112,10 @@ String sanitizeReply(const String& raw) {
   return s;
 }
 
+// #endregion FUNC_sanitizeReply
+
+// #region FUNC_atTransaction
+// PURPOSE: Makes each GNSS bring-up step traceable in structured logs.
 String atTransaction(const char* cmd, unsigned long timeoutMs = kAtTimeoutMs) {
   SerialAT.print(cmd);
   SerialAT.print("\r\n");
@@ -104,11 +125,18 @@ String atTransaction(const char* cmd, unsigned long timeoutMs = kAtTimeoutMs) {
   return reply;
 }
 
+// #endregion FUNC_atTransaction
+
+// #region FUNC_atOk
+// PURPOSE: Lets setup fallbacks distinguish accepted modem commands consistently.
 bool atOk(const String& reply) {
   return reply.indexOf("\r\nOK\r\n") >= 0 || reply.endsWith("OK") || reply.indexOf(" OK") >= 0;
 }
 
-// Try one variant: pulse PWRKEY, open Serial1, poll AT.
+// #endregion FUNC_atOk
+
+// #region FUNC_tryVariant
+// PURPOSE: Prevents GNSS setup from using the wrong board pin map.
 bool tryVariant(const BoardVariant& v) {
   pinMode(v.dtrPin, OUTPUT);
   digitalWrite(v.dtrPin, LOW); // keep modem awake
@@ -161,12 +189,20 @@ bool tryVariant(const BoardVariant& v) {
   return false;
 }
 
+// #endregion FUNC_tryVariant
+
+// #region FUNC_queryAndLog
+// PURPOSE: Keeps bring-up queries searchable without duplicating logging logic.
 void queryAndLog(const char* label, const char* cmd, unsigned long timeoutMs = kAtTimeoutMs) {
   Serial.printf("event=at_send cmd=\"%s\" label=%s\n", cmd, label);
   String reply = atTransaction(cmd, timeoutMs);
   (void)reply;
 }
 
+// #endregion FUNC_queryAndLog
+
+// #region FUNC_logGnssPoll
+// PURPOSE: Polls GNSS state and announces the first usable fix.
 void logGnssPoll(unsigned long elapsedMs) {
   // Raw queries — every reply already logged as at_reply.
   // Additionally emit a compact poll summary for quick scan.
@@ -212,6 +248,10 @@ void logGnssPoll(unsigned long elapsedMs) {
   }
 }
 
+// #endregion FUNC_logGnssPoll
+
+// #region FUNC_runGnssInitSequence
+// PURPOSE: Powers antenna and GNSS in order so receiver bring-up is diagnosable.
 void runGnssInitSequence() {
   Serial.println("event=gnss_init_begin");
   // Basic modem setup
@@ -290,6 +330,10 @@ void runGnssInitSequence() {
       "label-down with sky view; Classic H707 has no PPS indicator\"");
 }
 
+// #endregion FUNC_runGnssInitSequence
+
+// #region FUNC_setup
+// PURPOSE: Makes board-level GNSS startup observable before firmware integration.
 void setup() {
   Serial.begin(115200);
   unsigned long usbDeadline = millis() + kUsbWaitMs;
@@ -313,6 +357,10 @@ void setup() {
   runGnssInitSequence();
 }
 
+// #endregion FUNC_setup
+
+// #region FUNC_loop
+// PURPOSE: Keeps GNSS diagnosis and manual recovery available after startup.
 void loop() {
   // Periodic GNSS poll
   if (gActiveVariant && gGnssPowered && millis() - gLastPollMs >= kGnssPollIntervalMs) {
@@ -329,3 +377,4 @@ void loop() {
   // (no delay needed, but avoid busy loop)
   delay(1);
 }
+// #endregion FUNC_loop

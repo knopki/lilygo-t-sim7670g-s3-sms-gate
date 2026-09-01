@@ -1,34 +1,14 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Host-testable AT dialog for the onboard SIM7670G modem (see
-// ADR-0004 and docs/research/modem-sim7670g.md). Owns status polling and
-// the SMS lifecycle (receive/delete over AT+CMGL/CMGR/CMGD and send over
-// AT+CMGS/CSCS/CMGF), over an abstract ModemChannel so logic stays testable
-// without hardware.
+// PURPOSE: Keeps SIM7670G SMS dialogs testable and bounded off hardware.
 // SCOPE:
-// - Status init and poll (AT, ATE0, CMEE, CPIN, CSQ, CESQ, CEREG, CREG,
-//   CGATT, COPS, CPMS, CCLK, CGMR/GSN), line parsing, stable ModemResult and
-//   failedStage, ModemSms lifecycle (CMGL/CMGR/CMGD/CMGS/CNMI): bounded
-//   CMGL="ALL" scan that drains to terminal OK before CMGR, candidate-list
-//   scans for cached concat siblings, full text body via CMGR plus a
-//   CMGF=0/CMGR UDH probe that restores CMGF=1 on every outcome, and send
-//   (AT+CMGS with ">" prompt, +CMGS/+CMS ERROR handling): single-segment
-//   texts take raw GSM only for the GSM-03.38-identical
-//   ASCII subset and UCS2-hex otherwise, while longer texts go out as UCS2
-//   concat SMS-SUBMIT PDU parts (CMGF=0, TP-UDHI, ≤6×67 units) with text
-//   mode restored on every outcome. Inbound UDH parsing retains its full
-//   8-/16-bit reference width for cache identity.
-// - NOT: HardwareSerial ownership and pin control (modem_transport.h),
-//   SMTP delivery, HTTP routes, NVS persistence.
-// INVARIANTS: Every public method leaves the channel in a stopped/idle state
-// on return; credentials never appear in stage names; SMS are deleted only
-// after SMTP acceptance; storage switching touches only mem1 (mem2/mem3
-// stay "ME" so incoming messages keep landing there); PDU probes and a
-// multipart send restore text mode (CMGF=1) on every outcome; parsing tolerates 99/255
-// unknown sentinels and +CMS/+CME ERROR; all public entities have GRACE
-// contracts.
-// DEPENDENCIES: Pure C++ (codec.h for UCS2 encode/decode, sms_validate.h for
-// 335-unit limit); device channel lives in modem_transport.h; tests use
-// FakeModemChannel.
+// - AT status polling, text/PDU SMS read/send/delete, concat metadata,
+// - pure response parsers.
+// - NOT: transport ownership, SMTP, HTTP, or NVS.
+// INVARIANTS:
+// - Channel is idle on return;
+// - deletes follow SMTP acceptance;
+// - read storage may switch but receive storage stays ME;
+// - text mode is restored.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -39,9 +19,7 @@
 #include <stdint.h>
 
 // #region ENUM_ModemResult
-// PURPOSE: One stable outcome vocabulary for Serial events and the UI
-// (like ZteResult/SmtpSendResult), so failures classify into fixed tokens
-// instead of quoting modem replies.
+// PURPOSE: Keeps modem failures classifiable without exposing raw replies.
 enum class ModemResult {
   kSuccess,
   kNotPresent,     // No AT OK within timeout
@@ -53,10 +31,7 @@ enum class ModemResult {
 // #endregion ENUM_ModemResult
 
 // #region STRUCT_ModemStatus
-// PURPOSE: Moves the connectivity/storage snapshot from the poll task to
-// the JSON API through the portMUX cache, so HTTP reads never touch
-// Serial1. Strings are NUL-terminated bounded buffers; RSSI/RSRP use dBm,
-// unknown → 99/255 sentinels.
+// PURPOSE: Gives HTTP and poll tasks one safe, consistent modem snapshot.
 struct ModemStatus {
   bool present = false;  // AT OK seen
   char cpin[32] = "";    // e.g. READY, SIM PIN, NOT INSERTED
@@ -82,8 +57,7 @@ struct ModemStatus {
 // #endregion STRUCT_ModemStatus
 
 // #region STRUCT_ModemSms
-// PURPOSE: One SMS in the forward pipeline; mirrors the ZteSms shape so
-// buildSmsEmail stays shared and both sources forward identically.
+// PURPOSE: Keeps modem SMS compatible with the shared forwarding pipeline.
 struct ModemSms {
   char id[16] = "";  // storage index as string
   char number[32] = "";
@@ -97,10 +71,7 @@ struct ModemSms {
 // #endregion STRUCT_ModemSms
 
 // #region CONST_sendSegmentLimits
-// PURPOSE: Gates send routing at the carrier segment the peer actually
-// bills: a text beyond one segment is silently truncated by text mode
-// (measured on device), so it must go out as UCS2 concat PDU parts within
-// the shared 335-unit cap.
+// PURPOSE: Prevents send paths from silently truncating long SMS.
 constexpr size_t kGsmSingleSegmentUnits = 160;
 constexpr size_t kUcs2TextSegmentUnits = 70;
 constexpr size_t kUcs2PduPartUnits = 67;  // 140 TP-UD octets: 6 UDH + 134 data
@@ -112,8 +83,7 @@ constexpr size_t kMaxSmsSendMultipartParts = 6;
 // #endregion CONST_sendSegmentLimits
 
 // #region CLASS_ModemChannel
-// PURPOSE: Abstracts the AT byte transport so tests can script a modem and
-// the device can bind HardwareSerial (Serial1). Mirrors ZteChannel style.
+// PURPOSE: Keeps AT protocol tests independent from Serial1 hardware.
 class ModemChannel {
  public:
   virtual ~ModemChannel() = default;
@@ -128,34 +98,64 @@ class ModemChannel {
 // #endregion CLASS_ModemChannel
 
 // #region CLASS_ModemClient
-// PURPOSE: Sequences the AT dialog (init, pollStatus, and the SMS ops)
-// and exposes failedStage/lastReply for observable Serial contracts.
+// PURPOSE: Keeps modem dialogs bounded, observable, and hardware-independent.
 class ModemClient {
  public:
+  // #region METHOD_ModemClient_ModemClient
+  // PURPOSE: Gives each dialog an isolated channel and bounded workspace.
   ModemClient(ModemChannel& channel, char* scratch, size_t scratchSize);
+  // #endregion METHOD_ModemClient_ModemClient
 
-  // Bring-up: AT → ATE0 → ATV1 → AT+CMEE=2 → wait SMS DONE (bounded).
+  // #region METHOD_ModemClient_init
+  // PURPOSE: Establishes the modem state required for reliable SMS work.
   ModemResult init();
+  // #endregion METHOD_ModemClient_init
 
-  // Polls all status commands into out; present=false when AT not seen.
+  // #region METHOD_ModemClient_pollStatus
+  // PURPOSE: Supplies status consumers without sharing live AT I/O.
   ModemResult pollStatus(ModemStatus& out);
+  // #endregion METHOD_ModemClient_pollStatus
 
-  // SMS lifecycle: bounded inbox scan, full-body read, delete, mixed send.
+  // #region METHOD_ModemClient_findOldestUnread
+  // PURPOSE: Lets forwarding inspect the oldest message before deletion.
   ModemResult findOldestUnread(ModemSms& out, bool& found);
+  // #endregion METHOD_ModemClient_findOldestUnread
+
   // Lists incoming records after draining CMGL to terminal OK; does not
   // issue CMGR, so callers can skip concat parts already held in RAM.
+  // #region METHOD_ModemClient_findUnreadCandidates
+  // PURPOSE: Lets concat assembly avoid rereading cached message parts.
   ModemResult findUnreadCandidates(struct ModemInboxCandidate* out, size_t capacity, size_t& count);
+  // #endregion METHOD_ModemClient_findUnreadCandidates
+
+  // #region METHOD_ModemClient_readSms
+  // PURPOSE: Supplies forwarding with one complete message snapshot.
   ModemResult readSms(const char* id, ModemSms& out);
+  // #endregion METHOD_ModemClient_readSms
   // Temporarily enters PDU mode to inspect the SMS-DELIVER UDH, then
   // restores text mode on every outcome. The body remains text-mode CMGR.
+  // #region METHOD_ModemClient_probeConcat
+  // PURPOSE: Enables multipart assembly without leaving the modem in PDU mode.
   ModemResult probeConcat(const char* id, struct ModemConcatInfo& out);
+  // #endregion METHOD_ModemClient_probeConcat
+
+  // #region METHOD_ModemClient_deleteSms
+  // PURPOSE: Prevents loss by deleting only an accepted message.
   ModemResult deleteSms(const char* id);
+  // #endregion METHOD_ModemClient_deleteSms
+
+  // #region METHOD_ModemClient_sendSms
+  // PURPOSE: Sends text without carrier-side truncation or encoding loss.
   ModemResult sendSms(const char* number, const char* textUtf8);
+  // #endregion METHOD_ModemClient_sendSms
   // Keeps incoming SMS landing in ME while the inbox scan may work on the
   // small SIM store: selects only the read/delete storage (mem1) for
   // CMGL/CMGR/CMGD ("ME" or "SM"); write and new-message storages
   // (mem2/mem3) always stay "ME".
+  // #region METHOD_ModemClient_selectReadStorage
+  // PURPOSE: Supports store fallback without redirecting incoming messages.
   ModemResult selectReadStorage(const char* mem);
+  // #endregion METHOD_ModemClient_selectReadStorage
 
   const char* failedStage() const { return failedStage_; }
   const char* lastReply() const { return scratch_ ? scratch_ : ""; }
@@ -180,17 +180,57 @@ class ModemClient {
 // #endregion CLASS_ModemClient
 
 // Pure parsers exposed for host tests (like zte_client helpers).
+// #region FUNC_parseCpinLine
+// PURPOSE: Exposes SIM readiness without leaking raw modem replies.
 bool parseCpinLine(const char* line, char* out, size_t outSize);
+// #endregion FUNC_parseCpinLine
+
+// #region FUNC_parseCsqLine
+// PURPOSE: Normalizes signal readings for status and retry decisions.
 bool parseCsqLine(const char* line, int& rssi, int& ber);
+// #endregion FUNC_parseCsqLine
+
+// #region FUNC_parseCesqLine
+// PURPOSE: Normalizes LTE signal readings while preserving unknown sentinels.
 bool parseCesqLine(const char* line, int& rsrpDbm, int& rsrqDb);
+// #endregion FUNC_parseCesqLine
+
+// #region FUNC_parseCregLine
+// PURPOSE: Exposes registration state in a stable numeric form.
 bool parseCregLine(const char* line, int& stat);
+// #endregion FUNC_parseCregLine
+
+// #region FUNC_parseCopsLine
+// PURPOSE: Extracts operator identity without retaining modem buffers.
 bool parseCopsLine(const char* line, char* op, size_t opSize, int& act);
+// #endregion FUNC_parseCopsLine
+
+// #region FUNC_parseCpmsLine
+// PURPOSE: Exposes storage occupancy for safe inbox polling.
 bool parseCpmsLine(const char* line, uint16_t& used, uint16_t& total);
+// #endregion FUNC_parseCpmsLine
+
+// #region FUNC_parseCclkLine
+// PURPOSE: Preserves the modem clock text for status and time sync.
 bool parseCclkLine(const char* line, char* out, size_t outSize);
-// Parses +CCLK raw value "yy/MM/dd,hh:mm:ss+zz" to UTC epoch ms (tz quarters → UTC).
+// #endregion FUNC_parseCclkLine
+
+// #region FUNC_cclkToEpochMs
+// PURPOSE: Converts modem clock text into UTC for time-source arbitration.
 bool cclkToEpochMs(const char* cclk, int64_t& epochMsOut);
+// #endregion FUNC_cclkToEpochMs
+
+// #region FUNC_parseImeiLine
+// PURPOSE: Extracts a bounded device identity for operator diagnostics.
 bool parseImeiLine(const char* line, char* out, size_t outSize);
+// #endregion FUNC_parseImeiLine
+
+// #region FUNC_parseFwLine
+// PURPOSE: Extracts bounded firmware identity for operator diagnostics.
 bool parseFwLine(const char* line, char* out, size_t outSize);
+// #endregion FUNC_parseFwLine
+// #region STRUCT_ModemCmglInfo
+// PURPOSE: Carries parsed CMGL metadata without retaining modem buffers.
 struct ModemCmglInfo {
   uint16_t idx = 0;
   char stat[16] = "";
@@ -200,9 +240,14 @@ struct ModemCmglInfo {
   int tooa = -1;
   int msgLen = -1;
 };
+// #endregion STRUCT_ModemCmglInfo
+
+// #region STRUCT_ModemInboxCandidate
+// PURPOSE: Carries one bounded inbox ID into concat discovery.
 struct ModemInboxCandidate {
   char id[16] = "";
 };
+// #endregion STRUCT_ModemInboxCandidate
 // #region STRUCT_ModemConcatInfo
 // PURPOSE: Carries concat metadata from the PDU probe to the bounded cache,
 // so 8-bit and 16-bit UDH references remain distinct identities.
@@ -214,6 +259,9 @@ struct ModemConcatInfo {
   bool refIs16Bit = false;
 };
 // #endregion STRUCT_ModemConcatInfo
+
+// #region STRUCT_ModemCmgrInfo
+// PURPOSE: Carries parsed CMGR metadata for SMS reconstruction.
 struct ModemCmgrInfo {
   char stat[16] = "";
   char oa[64] = "";
@@ -227,26 +275,51 @@ struct ModemCmgrInfo {
   int tosca = -1;
   int msgLen = -1;
 };
+// #endregion STRUCT_ModemCmgrInfo
+
+// #region FUNC_parseCmglHeader
+// PURPOSE: Preserves inbox metadata needed before a body read.
 bool parseCmglHeader(const char* line, ModemCmglInfo& out);
+// #endregion FUNC_parseCmglHeader
+
+// #region FUNC_parseCmgrHeader
+// PURPOSE: Preserves body metadata needed for SMS reconstruction.
 bool parseCmgrHeader(const char* line, ModemCmgrInfo& out);
+// #endregion FUNC_parseCmgrHeader
+
+// #region FUNC_parseCmglEntry
+// PURPOSE: Keeps CMGL-derived SMS metadata bounded before a full body read.
 bool parseCmglEntry(const char* headerLine, const char* bodyLine, ModemSms& out);
+// #endregion FUNC_parseCmglEntry
+
+// #region FUNC_parseCmgrEntry
+// PURPOSE: Preserves the complete body for forwarding without trusting truncated listing text.
 bool parseCmgrEntry(const char* headerLine, const char* bodyLine, ModemSms& out);
+// #endregion FUNC_parseCmgrEntry
+
+// #region FUNC_decodeModemText
+// PURPOSE: Converts modem text into the shared UTF-8 SMS representation.
 bool decodeModemText(const char* encoded, char* out, size_t outSize);
-// True only when every byte sits in the ASCII subset whose codes equal
-// GSM 03.38; gates the raw send path (everything else goes UCS2).
+// #endregion FUNC_decodeModemText
+
+// #region FUNC_isDirectGsmAsciiText
+// PURPOSE: Selects the lossless single-segment GSM send path.
 bool isDirectGsmAsciiText(const char* text);
-// Builds one UCS2 SMS-SUBMIT PDU (TP-UDHI) for one concat part; writes the
-// hex form into out and the TPDU octet count (SCA field excluded — the
-// value AT+CMGS expects in PDU mode) into pduOctetsOut. Returns false on
-// invalid input or when out is too small.
+// #endregion FUNC_isDirectGsmAsciiText
+
+// #region FUNC_buildUcs2SubmitPdu
+// PURPOSE: Keeps long SMS submission bounded and reassemblable.
 bool buildUcs2SubmitPdu(const char* number, const char* partUcs2Hex, uint8_t ref, uint8_t total,
                         uint8_t seq, char* out, size_t outSize, size_t& pduOctetsOut);
-// Parses exactly one UDH encoded as hex, walking bounded IEI/IEDL/data
-// entries. Returns true only for one valid concat IE; out retains full
-// reference width and total/sequence metadata.
+// #endregion FUNC_buildUcs2SubmitPdu
+
+// #region FUNC_parsePduConcat
+// PURPOSE: Extracts concat metadata while preserving reference width.
 bool parsePduConcat(const char* udhHex, ModemConcatInfo& out);
-// Walks a complete SMS-DELIVER PDU to its TP-UDH and extracts only a real
-// concatenation IE. Returns false for malformed PDU; a valid single-part PDU
-// returns true with out.present=false.
+// #endregion FUNC_parsePduConcat
+
+// #region FUNC_extractConcatFromDeliverPdu
+// PURPOSE: Finds concat metadata in a complete SMS-DELIVER PDU.
 bool extractConcatFromDeliverPdu(const char* pduHex, ModemConcatInfo& out);
+// #endregion FUNC_extractConcatFromDeliverPdu
 #endif  // MODEM_MODEM_CLIENT_H

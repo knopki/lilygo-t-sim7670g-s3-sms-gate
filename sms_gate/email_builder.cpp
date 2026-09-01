@@ -1,7 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Renders one incoming SMS (ZTE MF79RU or SIM7670G) into the
-// shared email subject and body shape so both sources produce the same
-// operator-facing message with alias, INCOMPLETE flag and modem date.
+// PURPOSE: Gives every SMS source one consistent operator-facing email shape.
+// SCOPE:
+// - Renders SMS metadata and content into shared SMTP subjects and bodies.
+// - NOT: Reading modem messages or sending email.
+// INVARIANTS:
+// - Sender text in subjects is printable ASCII and capped at 40 characters.
+// - ZTE and SIM7670G messages use the same subject/body layout.
 // #endregion MODULE_CONTRACT
 
 #include "system/email_builder.h"

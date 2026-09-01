@@ -1,19 +1,12 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Host-testable GNSS dialog for the SIM7670G internal receiver.
-// Extracts power state, fix, satellite counts, coordinates, altitude and
-// UTC time over abstract ModemChannel so logic stays testable without
-// hardware (mirrors modem_client.h style).
+// PURPOSE: Keeps GNSS parsing testable and hardware access bounded.
 // SCOPE:
-// - GpsStatus snapshot, GpsFix helpers, GpsResult stable outcome,
-//   GpsClient restart/ensurePowered/poll with scratch and failedStage,
-//   pure parsers for +CGNSSPWR/+CGPSINFO/+CGNSSINFO/CGPSSAT.
-// - NOT: HardwareSerial ownership and pin control (modem_transport.h),
-//   NVS persistence, HTTP/JSON rendering and system clock sync.
-// INVARIANTS: Every public method leaves channel idle on return;
-// credentials never appear in stage names; parsing tolerates empty
-// fields and 99/255 sentinels; all public entities have GRACE contracts.
-// DEPENDENCIES: Pure C++; device channel lives in modem_transport.h;
-// tests use FakeModemChannel.
+// - GNSS snapshots, AT dialog, fix/time conversion, and response parsers.
+// - NOT: Hardware transport, persistence, HTTP rendering, or clock arbitration.
+// INVARIANTS:
+// - Dialogs leave the channel idle;
+// - buffers stay bounded;
+// - unknown modem sentinels remain distinguishable.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -24,7 +17,7 @@
 #include <stdint.h>
 
 // #region ENUM_GpsResult
-// PURPOSE: Stable outcome per failure class for Serial events and HTTP.
+// PURPOSE: Keeps GNSS failures classifiable for logs and HTTP.
 enum class GpsResult {
   kSuccess,
   kNotPresent,     // No AT OK within timeout
@@ -34,8 +27,7 @@ enum class GpsResult {
 // #endregion ENUM_GpsResult
 
 // #region STRUCT_GpsSatsInfo
-// PURPOSE: Satellite counts from +CGNSSINFO kept per constellation so the
-// UI can show the breakdown instead of only a combined total.
+// PURPOSE: Preserves constellation detail for operator diagnosis.
 struct GpsSatsInfo {
   int gps = 0;      // <GPS-SVs> visible
   int glonass = 0;  // <GLONASS-SVs> visible
@@ -47,8 +39,7 @@ struct GpsSatsInfo {
 // #endregion STRUCT_GpsSatsInfo
 
 // #region STRUCT_GpsStatus
-// PURPOSE: Snapshot for the portMUX cache and GET /api/gps/status. All strings
-// are bounded NUL-terminated buffers; lat/lon are decimal degrees, 0 when no fix.
+// PURPOSE: Gives consumers one bounded GNSS snapshot without live AT access.
 struct GpsStatus {
   bool present = false;  // AT OK seen
   bool powered = false;  // +CGNSSPWR: 1
@@ -70,17 +61,33 @@ struct GpsStatus {
 };
 // #endregion STRUCT_GpsStatus
 
-// #region CLASS_ModemChannel_fwd
-// PURPOSE: Forward declare ModemChannel to avoid include cycle; real
-// definition lives in modem/modem_client.h and modem_transport.h reuses it.
+// Forward declaration avoids an include cycle; the definition lives in
+// modem/modem_client.h and modem_transport.h reuses it.
 class ModemChannel;
+
+// #region CLASS_GpsClient
+// PURPOSE: Keeps GNSS polling independent from hardware transport details.
 class GpsClient {
  public:
+  // #region METHOD_GpsClient_GpsClient
+  // PURPOSE: Gives each GNSS dialog an isolated channel and workspace.
   GpsClient(ModemChannel& channel, char* scratch, size_t scratchSize);
+  // #endregion METHOD_GpsClient_GpsClient
 
+  // #region METHOD_GpsClient_restart
+  // PURPOSE: Restores receiver state needed for fix acquisition.
   GpsResult restart();
+  // #endregion METHOD_GpsClient_restart
+
+  // #region METHOD_GpsClient_ensurePowered
+  // PURPOSE: Ensures polling starts with a usable receiver state.
   GpsResult ensurePowered();
+  // #endregion METHOD_GpsClient_ensurePowered
+
+  // #region METHOD_GpsClient_poll
+  // PURPOSE: Supplies the service with one bounded receiver snapshot.
   GpsResult poll(GpsStatus& out);
+  // #endregion METHOD_GpsClient_poll
 
   const char* failedStage() const { return failedStage_; }
   const char* lastReply() const { return scratch_ ? scratch_ : ""; }
@@ -96,11 +103,20 @@ class GpsClient {
   const char* failedStage_ = "";
   size_t replyLen_ = 0;
 };
-// #endregion CLASS_ModemChannel_fwd
+// #endregion CLASS_GpsClient
 
-// Pure parsers exposed for host tests.
+// #region FUNC_parseCgnssPwrLine
+// PURPOSE: Lets polling track receiver availability from AT replies.
 bool parseCgnssPwrLine(const char* line, bool& powered);
+// #endregion FUNC_parseCgnssPwrLine
+
+// #region FUNC_parseCgnssModeLine
+// PURPOSE: Keeps receiver-mode reporting stable across AT replies.
 bool parseCgnssModeLine(const char* line, int& mode);
+// #endregion FUNC_parseCgnssModeLine
+
+// #region STRUCT_GpsFixFields
+// PURPOSE: Keeps parsed fix data consistent across GNSS consumers.
 struct GpsFixFields {
   double lat = 0.0;
   double lon = 0.0;
@@ -116,15 +132,34 @@ struct GpsFixFields {
   char rawLat[24] = "";
   char rawLon[24] = "";
 };
+// #endregion STRUCT_GpsFixFields
+
+// #region FUNC_parseCgpsInfoLine
+// PURPOSE: Makes one receiver fix safe for status and clock consumers.
 bool parseCgpsInfoLine(const char* line, GpsFixFields& out);
+// #endregion FUNC_parseCgpsInfoLine
 // Parses +CGNSSINFO by the SIM767xx manual V1.02 field order
 // (<mode>,<GPS-SVs>,<GLONASS-SVs>,<GALILEO-SVs>,<BEIDOU-SVs>,...,<NoSV>) into
 // per-constellation counts; field 0 is the fix mode (2=2D/3=3D) and is not
 // part of the output because GpsStatus.mode is sourced from AT+CGNSSMODE?.
+// #region FUNC_parseCgnssInfoLine
+// PURPOSE: Preserves satellite detail for operator diagnosis.
 bool parseCgnssInfoLine(const char* line, GpsSatsInfo& out);
+// #endregion FUNC_parseCgnssInfoLine
+
+// #region FUNC_gpsFixToIso
+// PURPOSE: Gives status and email one interoperable fix timestamp.
 bool gpsFixToIso(const GpsFixFields& fix, char* out, size_t outSize);
-// Converts fix date+time (with ms) to UTC epoch milliseconds; false on malformed.
+// #endregion FUNC_gpsFixToIso
+
+// #region FUNC_gpsFixToEpochMs
+// PURPOSE: Makes trusted GNSS time usable by clock arbitration.
 bool gpsFixToEpochMs(const GpsFixFields& fix, int64_t& epochMsOut);
+// #endregion FUNC_gpsFixToEpochMs
+
+// #region FUNC_nmeaToDecimal
+// PURPOSE: Makes receiver coordinates usable by status consumers.
 double nmeaToDecimal(const char* nmea, char dir);
+// #endregion FUNC_nmeaToDecimal
 
 #endif  // GPS_GPS_CLIENT_H

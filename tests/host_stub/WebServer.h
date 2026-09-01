@@ -9,8 +9,8 @@ class WebServer {
   String arg(const char*) { return String(""); }
   bool authenticate(const char*, const char*) { return true; }
   void requestAuthentication(int, const char*) {}
-  void on(const char*, int, void(*)()) {}
-  void onNotFound(void(*)()) {}
+  void on(const char*, int, void (*)()) {}
+  void onNotFound(void (*)()) {}
   void begin() {}
   void handleClient() {}
 };

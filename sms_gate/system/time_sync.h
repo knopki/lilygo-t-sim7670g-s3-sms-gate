@@ -1,19 +1,13 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Owns wall-clock arbitration (GNSS > SNTP > NITZ), SNTP lifecycle,
-// forward-only discipline and NTP stratum so the rest of the firmware only
-// feeds samples (ADR-0005).
+// PURPOSE: Keeps the shared clock monotonic while selecting the best source.
 // SCOPE:
-// - TimeSource/TimeState, sample feeding (GNSS/NITZ/SNTP), freshness
-//   check (GNSS 2×poll+10s, SNTP <2h, NITZ <5min), quorum quarantine
-//   (|agree|<10s, outlier >300s → 15min quarantine), adjtime/settimeofday
-//   forward-only, SNTP start/stop and NTP server stratum/dispersion.
-// - NOT: Wi-Fi STA/AP state machine, modem AT, GNSS AT, HTTP routes, NVS
-//   persistence (config flags live in ConfigStore/GpsStore/ModemStore).
-// INVARIANTS: Only TimeSync calls settimeofday/adjtime; clock never steps
-// backward in normal operation; quarantined sources are ignored for
-// discipline; NTP stratum 0/16 when unsynced.
-// DEPENDENCIES: Uses <time.h>/<sys/time.h>, esp_sntp, Wi-Fi poll intervals
-// for freshness windows; no credential handling.
+// - Source arbitration, freshness/quarantine, forward-only discipline,
+// SNTP lifecycle, and NTP quality publication.
+// - NOT: Wi-Fi state, modem/GNSS dialogs, HTTP routes, or persistence.
+// INVARIANTS:
+// - Only TimeSync disciplines time;
+// - backward steps are rejected;
+// - unsynchronized state reports stratum 0.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -24,13 +18,18 @@
 #include <stdint.h>
 #include <sys/time.h>
 
+// #region ENUM_TimeSource
+// PURPOSE: Keeps source selection order explicit and reviewable.
 enum class TimeSource : uint8_t {
   kUnsynced = 0,
   kSntp = 1,
   kNitz = 2,
   kGnss = 3,
 };
+// #endregion ENUM_TimeSource
 
+// #region STRUCT_TimeSample
+// PURPOSE: Gives arbitration one comparable source observation.
 struct TimeSample {
   TimeSource source = TimeSource::kUnsynced;
   int64_t epochMs = 0;      // UTC ms since epoch
@@ -38,7 +37,10 @@ struct TimeSample {
   uint32_t accuracyMs = 0;  // estimated 1σ (GNSS ~100, SNTP ~50, NITZ ~1500)
   bool valid = false;
 };
+// #endregion STRUCT_TimeSample
 
+// #region STRUCT_TimeState
+// PURPOSE: Gives consumers time quality without exposing arbitration state.
 struct TimeState {
   TimeSource source = TimeSource::kUnsynced;
   int64_t epochMs = 0;          // extrapolated UTC now (sample epoch + age)
@@ -48,47 +50,102 @@ struct TimeState {
   bool quarantined = false;
   int64_t quarantinedUntilEpochMs = 0;  // UTC epoch when quarantine lifts
 };
+// #endregion STRUCT_TimeState
 
 // #region CLASS_TimeSync
-// PURPOSE: Single owner of the system clock and NTP stratum (ADR-0005).
+// PURPOSE: Prevents competing services from disagreeing about system time.
 class TimeSync {
  public:
+  // #region METHOD_TimeSync_begin
+  // PURPOSE: Starts synchronization from a known source state.
   void begin();
+  // #endregion METHOD_TimeSync_begin
 
-  // Feeders — called from GNSS/modem/Wi-Fi pollers (portMUX protected inside).
+  // #region METHOD_TimeSync_feedGnssSample
+  // PURPOSE: Makes a live GNSS observation available to arbitration.
   void feedGnssSample(int64_t epochMs, uint32_t accuracyMs);
-  void feedNitzSample(int64_t epochMs, uint32_t accuracyMs);
-  void feedSntpSync(int64_t epochMs);
-  // Test hooks with explicit nowMs (host-testable).
-  void feedGnssSampleAt(int64_t epochMs, uint32_t accuracyMs, uint32_t nowMs);
-  void feedNitzSampleAt(int64_t epochMs, uint32_t accuracyMs, uint32_t nowMs);
-  void feedSntpSyncAt(int64_t epochMs, uint32_t nowMs);
+  // #endregion METHOD_TimeSync_feedGnssSample
 
-  // Periodic arbitration + discipline (called from loop or dedicated task).
+  // #region METHOD_TimeSync_feedNitzSample
+  // PURPOSE: Makes a live NITZ observation available to arbitration.
+  void feedNitzSample(int64_t epochMs, uint32_t accuracyMs);
+  // #endregion METHOD_TimeSync_feedNitzSample
+
+  // #region METHOD_TimeSync_feedSntpSync
+  // PURPOSE: Makes a live SNTP observation available to arbitration.
+  void feedSntpSync(int64_t epochMs);
+  // #endregion METHOD_TimeSync_feedSntpSync
+
+  // #region METHOD_TimeSync_feedGnssSampleAt
+  // PURPOSE: Makes GNSS arbitration tests deterministic.
+  void feedGnssSampleAt(int64_t epochMs, uint32_t accuracyMs, uint32_t nowMs);
+  // #endregion METHOD_TimeSync_feedGnssSampleAt
+  // #region METHOD_TimeSync_feedNitzSampleAt
+  // PURPOSE: Makes NITZ arbitration tests deterministic.
+  void feedNitzSampleAt(int64_t epochMs, uint32_t accuracyMs, uint32_t nowMs);
+  // #endregion METHOD_TimeSync_feedNitzSampleAt
+  // #region METHOD_TimeSync_feedSntpSyncAt
+  // PURPOSE: Makes SNTP arbitration tests deterministic.
+  void feedSntpSyncAt(int64_t epochMs, uint32_t nowMs);
+  // #endregion METHOD_TimeSync_feedSntpSyncAt
+
+  // #region METHOD_TimeSync_loop
+  // PURPOSE: Keeps the wall clock aligned with the best fresh source.
   void loop();
+  // #endregion METHOD_TimeSync_loop
+  // #region METHOD_TimeSync_loopAt
+  // PURPOSE: Makes arbitration and clock discipline reproducible in tests.
   void loopAt(uint32_t nowMs, int64_t wallMs);
+  // #endregion METHOD_TimeSync_loopAt
 
   // NTP server helpers.
   const TimeState& state() const { return published_; }
+  // #region METHOD_TimeSync_stratum
+  // PURPOSE: Gives NTP consumers the current synchronization quality.
   uint8_t stratum() const;
+  // #endregion METHOD_TimeSync_stratum
+  // #region METHOD_TimeSync_sourceName
+  // PURPOSE: Gives operators a stable token for the selected source.
   const char* sourceName() const;
+  // #endregion METHOD_TimeSync_sourceName
+  // #region METHOD_TimeSync_sourceName_TimeSource
+  // PURPOSE: Gives logs and APIs stable names for every source.
   const char* sourceName(TimeSource s) const;
+  // #endregion METHOD_TimeSync_sourceName_TimeSource
 
-  // SNTP lifecycle (WifiManager delegates here per ADR-0005).
+  // #region METHOD_TimeSync_startSntp
+  // PURPOSE: Provides a network fallback when stronger time sources are absent.
   void startSntp(const char* server1, const char* server2);
+  // #endregion METHOD_TimeSync_startSntp
+
+  // #region METHOD_TimeSync_stopSntp
+  // PURPOSE: Prevents inactive SNTP from competing with selected time.
   void stopSntp();
+  // #endregion METHOD_TimeSync_stopSntp
 
   // Poll interval for GNSS freshness (default 60s).
   void setGpsPollMs(uint32_t ms) { gpsPollMs_ = ms; }
   void setModemPollMs(uint32_t ms) { modemPollMs_ = ms; }
 
-  // Freshness windows (exposed for tests).
+  // #region METHOD_TimeSync_isGnssFresh
+  // PURPOSE: Keeps stale GNSS observations out of arbitration.
   static bool isGnssFresh(uint32_t ageMs, uint32_t gpsPollMs);
-  static bool isSntpFresh(uint32_t ageMs);
-  static bool isNitzFresh(uint32_t ageMs);
+  // #endregion METHOD_TimeSync_isGnssFresh
 
-  // For host tests: inspect quarantine.
+  // #region METHOD_TimeSync_isSntpFresh
+  // PURPOSE: Keeps stale SNTP observations out of arbitration.
+  static bool isSntpFresh(uint32_t ageMs);
+  // #endregion METHOD_TimeSync_isSntpFresh
+
+  // #region METHOD_TimeSync_isNitzFresh
+  // PURPOSE: Keeps stale NITZ observations out of arbitration.
+  static bool isNitzFresh(uint32_t ageMs);
+  // #endregion METHOD_TimeSync_isNitzFresh
+
+  // #region METHOD_TimeSync_isQuarantined
+  // PURPOSE: Lets callers observe quarantine before using a source.
   bool isQuarantined(TimeSource s, uint32_t nowMs) const;
+  // #endregion METHOD_TimeSync_isQuarantined
 
  private:
   TimeSource arbitrateAt(uint32_t nowMs) const;

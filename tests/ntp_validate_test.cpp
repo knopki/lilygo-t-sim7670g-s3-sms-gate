@@ -1,7 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Host test for the shared NTP form sanitizer — trim, 64-character
-// printable-ASCII rule, error precedence and the enabled-but-empty defaults
-// shared by POST /api/setup and POST /api/ntp (ADR-0005).
+// PURPOSE: Locks shared NTP form rules so setup and settings cannot drift.
+// SCOPE:
+// - Tests NTP-server normalization, defaults, length limits,
+//   and printable ASCII validation for both form inputs.
+// INVARIANTS:
+// - Accepted output is trimmed, NUL-terminated, within the configured
+//   limit, and defaults apply only when NTP is enabled with no servers.
 // #endregion MODULE_CONTRACT
 #include <cassert>
 #include <cstdio>
@@ -12,14 +16,14 @@
 static int tests_run = 0;
 static int tests_pass = 0;
 
-#define EXPECT(cond, msg) \
-  do { \
-    ++tests_run; \
-    if (cond) { \
-      ++tests_pass; \
-    } else { \
+#define EXPECT(cond, msg)                                 \
+  do {                                                    \
+    ++tests_run;                                          \
+    if (cond) {                                           \
+      ++tests_pass;                                       \
+    } else {                                              \
       printf("FAIL %s:%d %s\n", __FILE__, __LINE__, msg); \
-    } \
+    }                                                     \
   } while (0)
 
 // #region FUNC_runSanitize
@@ -36,8 +40,7 @@ int main() {
   char out2[kMaxNtpServerLength + 1];
 
   // Plain values are preserved.
-  EXPECT(runSanitize(true, "pool.ntp.org", "time.nist.gov", out1, out2) ==
-             NtpSanitizeResult::kOk,
+  EXPECT(runSanitize(true, "pool.ntp.org", "time.nist.gov", out1, out2) == NtpSanitizeResult::kOk,
          "plain values ok");
   EXPECT(strcmp(out1, "pool.ntp.org") == 0, "server1 preserved");
   EXPECT(strcmp(out2, "time.nist.gov") == 0, "server2 preserved");
@@ -54,8 +57,7 @@ int main() {
   EXPECT(strcmp(out2, "d2.example") == 0, "default2 applied");
 
   // Enabled + one server set keeps it and leaves the other slot empty.
-  EXPECT(runSanitize(true, "ntp.local", "", out1, out2) == NtpSanitizeResult::kOk,
-         "one server ok");
+  EXPECT(runSanitize(true, "ntp.local", "", out1, out2) == NtpSanitizeResult::kOk, "one server ok");
   EXPECT(strcmp(out1, "ntp.local") == 0, "set server kept");
   EXPECT(strcmp(out2, "") == 0, "empty slot stays empty");
 

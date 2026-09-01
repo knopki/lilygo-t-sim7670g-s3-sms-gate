@@ -1,22 +1,14 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Runs the proven ZTE MF79RU HiLink goform dialog (LOGIN, inbox
-// paging, DELETE_SMS and SEND_SMS with the AD token; see ADR-0003) over an
-// abstract channel so the protocol logic stays host-testable.
+// PURPOSE: Keeps ZTE SMS dialogs testable and bounded off hardware.
 // SCOPE:
-// - One HTTP/1.1 request per command with Connection: close, the mandatory
-// Referer header, the stok session cookie, a lenient fixed-shape JSON
-// scanner, UCS-2-hex SMS decoding and encoding, modem timestamp formatting,
-// one stale-session relogin per command, bounded device-storage paging with
-// order auto-detection, delete verification, outgoing-record cleanup, and
-// one send-status query sample.
-// - NOT: Sockets, TLS, NVS persistence, SMTP delivery, send-status polling
-// pacing, and HTTP route handling.
-// INVARIANTS: Credentials are never copied into error paths or stage names;
-// the channel is stopped before every return; incoming SMS stay on the modem
-// until SMTP acceptance; cleanup deletes only final outgoing tags 2 and 3;
-// outgoing message bodies never exceed the modem web UI's own send limit.
-// DEPENDENCIES: Pure C++ (zte_record.h field limits, codec.h base64/MD5);
-// the device channel lives in zte_transport.h.
+// - HTTP/goform session, bounded JSON/SMS parsing, inbox cleanup, and
+// send/status operations.
+// - NOT: sockets, TLS, NVS, SMTP, or HTTP routes.
+// INVARIANTS:
+// - Channel stops on return;
+// - incoming SMS survive until SMTP acceptance;
+// - cleanup removes only terminal outgoing records.
+// DEPENDENCIES: zte_record.h, codec.h; device channel in zte_transport.h.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -79,7 +71,7 @@ enum class ZteResult {
 };
 // #endregion ENUM_ZteResult
 
-// #region CLASS_ZteSms
+// #region STRUCT_ZteSms
 // PURPOSE: Carries one complete incoming SMS out of the dialog so the
 // caller can build an email and then delete exactly this message.
 struct ZteSms {
@@ -91,21 +83,33 @@ struct ZteSms {
   bool concatComplete;
   char textUtf8[kMaxZteSmsTextBytes + 1];
 };
-// #endregion CLASS_ZteSms
+// #endregion STRUCT_ZteSms
 
+// #region FUNC_formatZteDate
+// PURPOSE: Keeps modem timestamps readable in operator-facing messages.
 bool formatZteDate(const char* raw, char* out, size_t outSize);
+// #endregion FUNC_formatZteDate
 
 // Counts the UTF-16 code units a UTF-8 text occupies once encoded as the
 // modem's UCS-2-hex MessageBody; returns kZteSmsInvalidUnits on malformed
 // UTF-8 so both the web form and sendSms share one length rule.
+// #region FUNC_zteSmsUtf16Units
+// PURPOSE: Keeps ZTE message limits aligned with the shared send validation.
 size_t zteSmsUtf16Units(const char* utf8);
+// #endregion FUNC_zteSmsUtf16Units
 
+// #region STRUCT_ZteInboxStatus
+// PURPOSE: Carries modem storage occupancy to the status API.
 struct ZteInboxStatus {
   uint16_t used;
   uint16_t total;
 };
+// #endregion STRUCT_ZteInboxStatus
 
+// #region ENUM_ZteSendStatus
+// PURPOSE: Lets callers distinguish accepted, failed, and still-pending sends.
 enum class ZteSendStatus { kInProgress, kDone, kFailed };
+// #endregion ENUM_ZteSendStatus
 
 // #region CLASS_ZteModem
 // PURPOSE: Owns one modem session (login, cookie, and firmware version) and
@@ -113,35 +117,45 @@ enum class ZteSendStatus { kInProgress, kDone, kFailed };
 // scratch buffer, and credentials, and always learn which stage failed.
 class ZteModem {
  public:
+  // #region METHOD_ZteModem_ZteModem
+  // PURPOSE: Binds the dialog to a channel and bounded scratch buffer.
   ZteModem(ZteChannel& channel, char* scratch, size_t scratchSize);
+  // #endregion METHOD_ZteModem_ZteModem
 
-  // Stores the credentials, connects, and logs in with the base64 password,
-  // then reads the firmware versions the AD token depends on.
+  // #region METHOD_ZteModem_login
+  // PURPOSE: Establishes the session required by all goform operations.
   ZteResult login(const char* host, const char* password);
+  // #endregion METHOD_ZteModem_login
 
-  // Finds the oldest incoming (tag 0 or 1) SMS with bounded paging; found
-  // is false when the inbox holds no incoming messages.
+  // #region METHOD_ZteModem_findOldestIncoming
+  // PURPOSE: Finds the oldest incoming SMS without deleting it.
   ZteResult findOldestIncoming(ZteSms& out, bool& found);
+  // #endregion METHOD_ZteModem_findOldestIncoming
 
-  // Deletes exactly one incoming message after a fresh RD token and verifies
-  // the ID disappeared; the message is retained for retry on any failure.
+  // #region METHOD_ZteModem_deleteSms
+  // PURPOSE: Deletes one incoming SMS only after forwarding succeeds.
   ZteResult deleteSms(const ZteSms& sms);
+  // #endregion METHOD_ZteModem_deleteSms
 
-  // Deletes every final outgoing device record (tag 2 sent or tag 3 failed),
-  // verifying each ID disappeared; incoming (0/1) and draft (4) messages
-  // remain untouched. Returns the number of verified deletions.
+  // #region METHOD_ZteModem_cleanupOutgoing
+  // PURPOSE: Reclaims terminal outgoing records without touching inbox data.
   ZteResult cleanupOutgoing(uint16_t& deleted);
+  // #endregion METHOD_ZteModem_cleanupOutgoing
 
-  // Reads sms_capacity_info for the device storage.
+  // #region METHOD_ZteModem_readInboxStatus
+  // PURPOSE: Gives operators bounded storage health without exposing modem internals.
   ZteResult readInboxStatus(ZteInboxStatus& out);
+  // #endregion METHOD_ZteModem_readInboxStatus
 
-  // Sends one SMS (SEND_SMS with a fresh AD token, UCS-2-hex body, always
-  // UNICODE encoding); success means the modem accepted the command, and
-  // the caller confirms delivery with readSendStatus samples.
+  // #region METHOD_ZteModem_sendSms
+  // PURPOSE: Submits one bounded SMS through the modem web UI.
   ZteResult sendSms(const char* number, const char* textUtf8);
+  // #endregion METHOD_ZteModem_sendSms
 
-  // Reads one send-command status sample in the current session.
+  // #region METHOD_ZteModem_readSendStatus
+  // PURPOSE: Samples the asynchronous send result after submission.
   ZteResult readSendStatus(ZteSendStatus& out);
+  // #endregion METHOD_ZteModem_readSendStatus
 
   // Exact form body of the last SEND_SMS attempt ("" before the first
   // send), so callers can log the request bytes for byte-level protocol

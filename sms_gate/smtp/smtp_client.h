@@ -1,13 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Runs the SMTP submission dialog (EHLO, STARTTLS, AUTH LOGIN, MAIL,
-// DATA) over an abstract channel so the protocol logic stays host-testable.
+// PURPOSE: Keeps SMTP delivery sequencing testable without a live socket.
 // SCOPE:
-// - One mail submission per sendMail call, base64 body encoding, multi-line
-// reply parsing, STARTTLS upgrade ordering, and stage-level failure tracing.
-// - NOT: Sockets, TLS handshakes, NVS persistence, and HTML rendering.
-// INVARIANTS: No credential or message content is logged or formatted into
-// error paths; the channel is always stopped before returning.
-// DEPENDENCIES: Pure C++; the device channel lives in smtp_transport.h.
+// - Submission dialog, reply parsing, TLS upgrade, and failure tracing.
+// - NOT: Socket ownership, TLS implementation, persistence, or rendering.
+// INVARIANTS:
+// - Channels stop on return;
+// - credentials and message content stay out of logs and error classification.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -19,8 +17,7 @@
 #include "smtp/smtp_record.h"
 
 // #region CLASS_SmtpChannel
-// PURPOSE: Abstracts the byte transport and TLS upgrade point so tests can
-// script a server and the device can bind NetworkClientSecure.
+// PURPOSE: Keeps SMTP protocol tests independent from socket and TLS hardware.
 class SmtpChannel {
  public:
   virtual ~SmtpChannel() = default;
@@ -40,8 +37,7 @@ class SmtpChannel {
 // #endregion CLASS_SmtpChannel
 
 // #region ENUM_SmtpSendResult
-// PURPOSE: Gives the caller one stable outcome per failure class for Serial
-// events and future retry decisions.
+// PURPOSE: Keeps delivery failures classifiable for logs and retries.
 enum class SmtpSendResult {
   kSuccess,
   kConnectFailed,
@@ -54,8 +50,7 @@ enum class SmtpSendResult {
 // #endregion ENUM_SmtpSendResult
 
 // #region FUNC_smtpSendResultName
-// PURPOSE: Maps SmtpSendResult onto the stable JSON/log token so smtp_service,
-// zte_service and modem_service share one mapping (P1 dedup).
+// PURPOSE: Keeps SMTP result names consistent across services.
 inline const char* smtpSendResultName(SmtpSendResult result) {
   switch (result) {
     case SmtpSendResult::kSuccess:
@@ -79,20 +74,22 @@ inline const char* smtpSendResultName(SmtpSendResult result) {
 using SmtpStageListener = void (*)(const char* stage, int code);
 
 // #region CLASS_SmtpClient
-// PURPOSE: Owns the protocol sequencing for one submission so callers only
-// provide a channel and a validated record, and reports exactly which dialog
-// stage failed and with which SMTP reply code.
+// PURPOSE: Keeps SMTP submission sequencing bounded and observable.
 class SmtpClient {
  public:
+  // #region METHOD_SmtpClient_SmtpClient
+  // PURPOSE: Gives each submission one isolated transport lifetime.
   explicit SmtpClient(SmtpChannel& channel);
+  // #endregion METHOD_SmtpClient_SmtpClient
 
   // Optional per-stage trace; fires once for every completed protocol step.
   void setStageListener(SmtpStageListener listener) { stageListener_ = listener; }
 
-  // Sends one message. subject must be printable ASCII; utf8Body is
-  // base64-encoded by the dialog itself. ehloName identifies the client.
+  // #region METHOD_SmtpClient_sendMail
+  // PURPOSE: Keeps SMTP protocol sequencing out of service and route logic.
   SmtpSendResult sendMail(const SmtpConfigRecord& config, const char* ehloName, const char* subject,
                           const char* utf8Body);
+  // #endregion METHOD_SmtpClient_sendMail
 
   // Stage at which the last sendMail attempt failed ("" on success).
   const char* failedStage() const { return failedStage_; }

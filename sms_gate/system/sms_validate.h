@@ -1,17 +1,14 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Shared SMS-send validation so the ZTE MF79RU and SIM7670G paths
-// use one recipient rule and one 335-unit limit; the future unified
-// POST /api/sms/send {via:"zte"|"modem"} needs no storage change.
+// PURPOSE: Keeps recipient and message limits identical across SMS paths.
 // SCOPE:
-// - Recipient validation (3-20 digits with optional leading +), UTF-16 unit
-// counting for UCS-2/UNICODE payloads, and the 335-unit modem UI limit
-// shared by both modems.
-// - NOT: Transport, AT/goform dialogs, NVS, HTTP routing, and GNSS.
-// INVARIANTS: Malformed UTF-8 is never counted as valid text; the same
-// limit gates the web form and the send path so an accepted form always
-// fits the modem request; no credentials are inspected.
-// DEPENDENCIES: Pure C++ (stddef, stdint, string); Arduino String overload
-// is guarded so host tests compile without Arduino headers.
+// - Validates recipients and counts UTF-16 units within the shared send
+// limit.
+// - NOT: transports, modem dialogs, NVS, HTTP routes, or GNSS.
+// INVARIANTS:
+// - Malformed UTF-8 is rejected;
+// - accepted text fits both send paths;
+// - no credentials are inspected.
+// DEPENDENCIES: Pure C++; optional Arduino String overload.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -26,14 +23,14 @@
 #include <WString.h>
 #endif
 
-// #region STRUCT_SmsValidateConstants
+// #region CONST_SmsValidateConstants
 // PURPOSE: One limit for every SMS source, matching the modem web UI's
 // UNICODE send limit (five concatenated UCS-2 parts).
 constexpr size_t kMaxSmsSendUnits = 335;
 constexpr size_t kSmsInvalidUnits = SIZE_MAX;
 constexpr size_t kMinSmsRecipientLength = 3;
 constexpr size_t kMaxSmsRecipientLength = 20;
-// #endregion STRUCT_SmsValidateConstants
+// #endregion CONST_SmsValidateConstants
 
 // #region FUNC_smsValidateDecodeUtf8One
 // PURPOSE: Decodes one UTF-8 codepoint for unit counting, rejecting overlong

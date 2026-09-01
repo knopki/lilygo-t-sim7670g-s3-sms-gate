@@ -1,8 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Persists verified records in a dedicated NVS partition so USB
-// recovery can erase them without touching future independent settings.
-// INVARIANTS: Credentials are stored and retrieved only as whole checksummed
-// records. Schema changes must migrate stored data (see AGENTS.md).
+// PURPOSE: Preserves SMTP settings so recovery can clear them independently.
+// SCOPE:
+// - Reads, validates, and writes the SMTP profile in appcfg.
+// - NOT: SMTP delivery, socket transport, and HTTP rendering.
+// INVARIANTS:
+// - Credentials are stored and retrieved only as whole checksummed records.
+// - Schema changes must migrate stored data.
 // DEPENDENCIES: Uses Preferences partition label appcfg.
 // #endregion MODULE_CONTRACT
 
@@ -16,10 +19,8 @@ constexpr char kSmtpNamespace[] = "smtp";
 constexpr uint16_t kDefaultSmtpPort = 587;
 }  // namespace
 
-// #region FUNC_SmtpConfigStore_load
-// PURPOSE: Restores the SMTP profile only as a whole validated record so a
-// corrupt or partial blob can never reach the delivery path. Schema changes
-// must migrate stored data (see AGENTS.md); nothing here upgrades records.
+// #region METHOD_SmtpConfigStore_load
+// PURPOSE: Keeps corrupt or partial SMTP policy out of the delivery path.
 bool SmtpConfigStore::load(RuntimeSmtpConfig& config) const {
   Serial.printf("event=smtp_load_begin partition=%s\n", kAppCfgPartition);
   Preferences preferences;
@@ -48,11 +49,10 @@ bool SmtpConfigStore::load(RuntimeSmtpConfig& config) const {
   Serial.println("event=smtp_load_complete valid=true");
   return true;
 }
-// #endregion FUNC_SmtpConfigStore_load
+// #endregion METHOD_SmtpConfigStore_load
 
 // #region FUNC_buildSmtpConfigRecord
-// PURPOSE: Converts the runtime profile into its checksummed binary record so
-// persistence and test delivery always exercise the same field limits.
+// PURPOSE: Gives persistence one bounded SMTP representation shared with delivery tests.
 SmtpConfigRecord buildSmtpConfigRecord(const RuntimeSmtpConfig& config) {
   SmtpConfigRecord record{};
   record.magic = kSmtpConfigMagic;
@@ -69,9 +69,8 @@ SmtpConfigRecord buildSmtpConfigRecord(const RuntimeSmtpConfig& config) {
 }
 // #endregion FUNC_buildSmtpConfigRecord
 
-// #region FUNC_SmtpConfigStore_save
-// PURPOSE: Persists the SMTP profile only after the full record passes the
-// shared validation predicate, so web input and NVS content agree.
+// #region METHOD_SmtpConfigStore_save
+// PURPOSE: Commits only shared-valid SMTP policy so forms and NVS cannot diverge.
 bool SmtpConfigStore::save(const RuntimeSmtpConfig& config) const {
   Serial.println("event=smtp_save_begin");
   const SmtpConfigRecord record = buildSmtpConfigRecord(config);
@@ -92,4 +91,4 @@ bool SmtpConfigStore::save(const RuntimeSmtpConfig& config) const {
                 static_cast<unsigned>(writtenLength));
   return saved;
 }
-// #endregion FUNC_SmtpConfigStore_save
+// #endregion METHOD_SmtpConfigStore_save

@@ -1,3 +1,13 @@
+// #region MODULE_CONTRACT
+// PURPOSE: Keeps the shared clock monotonic while selecting the best source.
+// SCOPE:
+// - Arbitrates GNSS, SNTP, and NITZ samples and disciplines the shared clock.
+// - NOT: Polling GNSS or modem hardware, or serving NTP packets.
+// INVARIANTS:
+// - Clock updates never move the published time backwards.
+// - A disagreeing source is quarantined only after fresh peers form a quorum.
+// #endregion MODULE_CONTRACT
+
 #include "system/time_sync.h"
 
 #ifdef ARDUINO
@@ -18,6 +28,7 @@ inline void esp_sntp_stop() {}
 #endif
 
 // #region CONST_timeSyncThresholds
+// PURPOSE: Keeps source freshness and quarantine decisions consistent.
 namespace {
 constexpr uint32_t kQuorumAgreeMs = 10UL * 1000UL;
 constexpr int64_t kQuarantineDiffMs = 300LL * 1000LL;
@@ -30,15 +41,27 @@ constexpr uint32_t kDisciplineIgnoreLogIntervalMs =
 }  // namespace
 // #endregion CONST_timeSyncThresholds
 
+// #region METHOD_TimeSync_isGnssFresh
+// PURPOSE: Applies the GNSS freshness window used by source arbitration.
 bool TimeSync::isGnssFresh(uint32_t ageMs, uint32_t gpsPollMs) {
   const uint32_t window = 2 * gpsPollMs + 10UL * 1000UL;
   return ageMs < window;
 }
 
+// #endregion METHOD_TimeSync_isGnssFresh
+
+// #region METHOD_TimeSync_isSntpFresh
+// PURPOSE: Applies the SNTP freshness window used by source arbitration.
 bool TimeSync::isSntpFresh(uint32_t ageMs) { return ageMs < kSntpFreshMs; }
+// #endregion METHOD_TimeSync_isSntpFresh
 
+// #region METHOD_TimeSync_isNitzFresh
+// PURPOSE: Applies the NITZ freshness window used by source arbitration.
 bool TimeSync::isNitzFresh(uint32_t ageMs) { return ageMs < kNitzFreshMs; }
+// #endregion METHOD_TimeSync_isNitzFresh
 
+// #region METHOD_TimeSync_begin
+// PURPOSE: Resets samples and quarantine state before synchronization starts.
 void TimeSync::begin() {
   // cppcheck-suppress useStlAlgorithm
   for (auto& s : samples_) s = TimeSample{};
@@ -52,13 +75,18 @@ void TimeSync::begin() {
   gpsPollMs_ = 60UL * 1000UL;
   modemPollMs_ = 15UL * 1000UL;
 }
+// #endregion METHOD_TimeSync_begin
 
+// #region METHOD_TimeSync_isQuarantined
+// PURPOSE: Reports whether a source is temporarily excluded from arbitration.
 bool TimeSync::isQuarantined(TimeSource s, uint32_t nowMs) const {
   uint8_t idx = static_cast<uint8_t>(s);
   return quarantineUntilMs_[idx] != 0 && nowMs < quarantineUntilMs_[idx];
 }
+// #endregion METHOD_TimeSync_isQuarantined
 
 // #region METHOD_TimeSync_shouldQuarantineAt
+// PURPOSE: Quarantines a source only when two fresh peers establish a quorum.
 bool TimeSync::shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs) {
   uint8_t idx = static_cast<uint8_t>(sample.source);
   if (quarantineUntilMs_[idx] != 0 && nowMs < quarantineUntilMs_[idx]) return true;
@@ -117,11 +145,17 @@ bool TimeSync::shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs) {
   return false;
 }
 
+// #endregion METHOD_TimeSync_shouldQuarantineAt
+
+// #region METHOD_TimeSync_shouldQuarantine
+// PURPOSE: Applies quorum quarantine using the device monotonic clock.
 bool TimeSync::shouldQuarantine(const TimeSample& sample) {
   return shouldQuarantineAt(sample, millis());
 }
-// #endregion METHOD_TimeSync_shouldQuarantineAt
+// #endregion METHOD_TimeSync_shouldQuarantine
 
+// #region METHOD_TimeSync_feedGnssSampleAt
+// PURPOSE: Records a GNSS sample after applying quorum quarantine.
 void TimeSync::feedGnssSampleAt(int64_t epochMs, uint32_t accuracyMs, uint32_t nowMs) {
   TimeSample s;
   s.source = TimeSource::kGnss;
@@ -133,6 +167,10 @@ void TimeSync::feedGnssSampleAt(int64_t epochMs, uint32_t accuracyMs, uint32_t n
   samples_[static_cast<uint8_t>(TimeSource::kGnss)] = s;
 }
 
+// #endregion METHOD_TimeSync_feedGnssSampleAt
+
+// #region METHOD_TimeSync_feedNitzSampleAt
+// PURPOSE: Records a NITZ sample after applying quorum quarantine.
 void TimeSync::feedNitzSampleAt(int64_t epochMs, uint32_t accuracyMs, uint32_t nowMs) {
   TimeSample s;
   s.source = TimeSource::kNitz;
@@ -144,6 +182,10 @@ void TimeSync::feedNitzSampleAt(int64_t epochMs, uint32_t accuracyMs, uint32_t n
   samples_[static_cast<uint8_t>(TimeSource::kNitz)] = s;
 }
 
+// #endregion METHOD_TimeSync_feedNitzSampleAt
+
+// #region METHOD_TimeSync_feedSntpSyncAt
+// PURPOSE: Records an SNTP sample after applying quorum quarantine.
 void TimeSync::feedSntpSyncAt(int64_t epochMs, uint32_t nowMs) {
   TimeSample s;
   s.source = TimeSource::kSntp;
@@ -155,17 +197,31 @@ void TimeSync::feedSntpSyncAt(int64_t epochMs, uint32_t nowMs) {
   samples_[static_cast<uint8_t>(TimeSource::kSntp)] = s;
 }
 
+// #endregion METHOD_TimeSync_feedSntpSyncAt
+
+// #region METHOD_TimeSync_feedGnssSample
+// PURPOSE: Records a GNSS sample using the current monotonic time.
 void TimeSync::feedGnssSample(int64_t epochMs, uint32_t accuracyMs) {
   feedGnssSampleAt(epochMs, accuracyMs, millis());
 }
 
+// #endregion METHOD_TimeSync_feedGnssSample
+
+// #region METHOD_TimeSync_feedNitzSample
+// PURPOSE: Records a NITZ sample using the current monotonic time.
 void TimeSync::feedNitzSample(int64_t epochMs, uint32_t accuracyMs) {
   feedNitzSampleAt(epochMs, accuracyMs, millis());
 }
 
+// #endregion METHOD_TimeSync_feedNitzSample
+
+// #region METHOD_TimeSync_feedSntpSync
+// PURPOSE: Records an SNTP sample using the current monotonic time.
 void TimeSync::feedSntpSync(int64_t epochMs) { feedSntpSyncAt(epochMs, millis()); }
+// #endregion METHOD_TimeSync_feedSntpSync
 
 // #region METHOD_TimeSync_arbitrateAt
+// PURPOSE: Selects the highest-priority fresh source that is not quarantined.
 TimeSource TimeSync::arbitrateAt(uint32_t nowMs) const {
   const TimeSource order[] = {TimeSource::kGnss, TimeSource::kSntp, TimeSource::kNitz};
   for (TimeSource src : order) {
@@ -185,11 +241,12 @@ TimeSource TimeSync::arbitrateAt(uint32_t nowMs) const {
   }
   return TimeSource::kUnsynced;
 }
-
-TimeSource TimeSync::arbitrate() { return arbitrateAt(millis()); }
 // #endregion METHOD_TimeSync_arbitrateAt
 
+TimeSource TimeSync::arbitrate() { return arbitrateAt(millis()); }
+
 // #region METHOD_TimeSync_disciplineAt
+// PURPOSE: Advances or slews the clock without applying backward corrections.
 int64_t TimeSync::disciplineAt(const TimeSample& chosen, int64_t wallMs, uint32_t nowMs) {
   uint32_t ageMs = nowMs - chosen.receivedMs;
   int64_t expectedMs = chosen.epochMs + (int64_t)ageMs;
@@ -249,6 +306,7 @@ int64_t TimeSync::disciplineAt(const TimeSample& chosen, int64_t wallMs, uint32_
   }
   return diffMs;
 }
+// #endregion METHOD_TimeSync_disciplineAt
 
 void TimeSync::discipline(const TimeSample& chosen) {
 #ifdef ARDUINO
@@ -261,8 +319,9 @@ void TimeSync::discipline(const TimeSample& chosen) {
   (void)chosen;
 #endif
 }
-// #endregion METHOD_TimeSync_disciplineAt
 
+// #region METHOD_TimeSync_loopAt
+// PURPOSE: Publishes the selected source and disciplines the wall clock.
 void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
   // Clear expired quarantines and reset backoff once quarantine lifts.
   for (uint8_t i = 1; i < 4; ++i) {
@@ -317,7 +376,10 @@ void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
     published_.quarantinedUntilEpochMs = any ? published_.epochMs + (int64_t)(maxQ - nowMs) : 0;
   }
 }
+// #endregion METHOD_TimeSync_loopAt
 
+// #region METHOD_TimeSync_loop
+// PURPOSE: Runs one arbitration tick against the device wall clock.
 void TimeSync::loop() {
   uint32_t nowMs = millis();
 #ifdef ARDUINO
@@ -329,9 +391,15 @@ void TimeSync::loop() {
 #endif
   loopAt(nowMs, wallMs);
 }
+// #endregion METHOD_TimeSync_loop
 
+// #region METHOD_TimeSync_stratum
+// PURPOSE: Gives NTP consumers the current synchronization quality.
 uint8_t TimeSync::stratum() const { return published_.stratum; }
+// #endregion METHOD_TimeSync_stratum
 
+// #region METHOD_TimeSync_sourceName_TimeSource
+// PURPOSE: Maps a source enum to its stable operator-facing token.
 const char* TimeSync::sourceName(TimeSource s) const {
   switch (s) {
     case TimeSource::kGnss:
@@ -344,9 +412,15 @@ const char* TimeSync::sourceName(TimeSource s) const {
       return "unsynced";
   }
 }
+// #endregion METHOD_TimeSync_sourceName_TimeSource
 
+// #region METHOD_TimeSync_sourceName
+// PURPOSE: Gives operators a stable token for the selected time source.
 const char* TimeSync::sourceName() const { return sourceName(published_.source); }
+// #endregion METHOD_TimeSync_sourceName
 
+// #region METHOD_TimeSync_startSntp
+// PURPOSE: Starts SNTP against the validated operator server list.
 void TimeSync::startSntp(const char* server1, const char* server2) {
   if (server1 == nullptr || server1[0] == '\0') return;
 #ifdef ARDUINO
@@ -359,6 +433,10 @@ void TimeSync::startSntp(const char* server1, const char* server2) {
 #endif
 }
 
+// #endregion METHOD_TimeSync_startSntp
+
+// #region METHOD_TimeSync_stopSntp
+// PURPOSE: Stops SNTP so it cannot compete with the selected clock source.
 void TimeSync::stopSntp() {
   if (!sntpRunning_) return;
 #ifdef ARDUINO
@@ -367,3 +445,4 @@ void TimeSync::stopSntp() {
 #endif
   sntpRunning_ = false;
 }
+// #endregion METHOD_TimeSync_stopSntp

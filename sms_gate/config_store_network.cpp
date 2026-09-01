@@ -1,6 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements network NVS store for the verified Wi-Fi and
-// administrator profile in the isolated appcfg partition.
+// PURPOSE: Preserves network access so recovery can clear it independently.
+// SCOPE:
+//   - Loads, validates, migrates, and saves the network and NTP profile in its NVS namespace.
+//   - NOT: Connecting Wi-Fi or synchronizing time.
+// INVARIANTS:
+//   - Runtime configuration is populated only from a complete, checksummed record.
+//   - Valid legacy records migrate with default NTP servers and enabled NTP.
 // #endregion MODULE_CONTRACT
 
 #include "persistence/config_store_network.h"
@@ -12,6 +17,7 @@ constexpr char kConfigNamespace[] = "network";
 }  // namespace
 
 // #region METHOD_ConfigStore_migrateV1Record
+// PURPOSE: Upgrades a valid legacy network blob without losing credentials.
 bool ConfigStore::migrateV1Record(size_t readLength) const {
   if (readLength != sizeof(ConfigRecordV1)) return false;
   Preferences preferences;

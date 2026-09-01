@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+# region MODULE_CONTRACT
+# PURPOSE: Exercises one real SMS path so modem setup and payload failures are observable.
+# SCOPE:
+# - Sends one GSM SMS through the modem-probe serial bridge, configures
+#   text-mode storage, and prints the resulting modem dialog.
+# INVARIANTS:
+# - Each command starts with a cleared input buffer;
+# - text is limited to a single 160-byte GSM payload
+# - no credentials are handled or printed.
+# endregion MODULE_CONTRACT
+
 """One-shot SMS send test over the modem_probe bridge (run OUTSIDE the nono
 sandbox: it opens /dev/ttyACM0 directly).
 
@@ -20,6 +31,8 @@ PORT = "/dev/ttyACM0"
 BAUD = 115200
 
 
+# region FUNC_read_until
+# PURPOSE: Waits for a modem result without hiding timeout or error replies.
 def read_until(ser, token=b"OK\r\n", timeout_s=10):
     buf = b""
     deadline = time.monotonic() + timeout_s
@@ -32,6 +45,10 @@ def read_until(ser, token=b"OK\r\n", timeout_s=10):
     return buf.decode(errors="replace").strip()
 
 
+# endregion FUNC_read_until
+
+# region FUNC_command
+# PURPOSE: Keeps each probe exchange bounded and visible for modem diagnosis.
 def command(ser, cmd, timeout_s=10, expect=b"OK\r\n"):
     ser.reset_input_buffer()
     ser.write((cmd + "\r\n").encode())
@@ -40,6 +57,10 @@ def command(ser, cmd, timeout_s=10, expect=b"OK\r\n"):
     return reply
 
 
+# endregion FUNC_command
+
+# region FUNC_main
+# PURPOSE: Makes one-shot SMS failures visible to operators and automation.
 def main():
     if len(sys.argv) != 3:
         print(__doc__)
@@ -77,6 +98,8 @@ def main():
         command(ser, 'AT+CMGL="ALL"', timeout_s=15)
         return 0 if ok else 2
 
+
+# endregion FUNC_main
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -1,10 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Provides one global mutex that serialises access to the shared
-// SIM7670G Serial1 channel between the modem SMS and GNSS poll tasks.
-// SCOPE: lazy-created FreeRTOS mutex, take/give helpers.
-// NOT: AT parsing, NVS, HTTP.
-// INVARIANTS: Mutex is created once and never deleted; every take is paired
-// with a give even on error paths.
+// PURPOSE: Prevents concurrent modem tasks from corrupting shared Serial1 I/O.
+// SCOPE:
+// - lazy-created FreeRTOS mutex, take/give helpers.
+// - NOT: AT parsing, NVS, HTTP.
+// INVARIANTS:
+// - Mutex is created once and never deleted;
+// - every take is paired with a give even on error paths.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -18,7 +19,7 @@
 namespace modem_lock {
 
 // #region FUNC_mutex
-// PURPOSE: Returns the singleton modem channel mutex, creating it on first use.
+// PURPOSE: Gives every modem task the same lock so Serial1 access stays serialized.
 inline SemaphoreHandle_t mutex() {
   static SemaphoreHandle_t handle = nullptr;
   if (handle == nullptr) {
@@ -29,7 +30,7 @@ inline SemaphoreHandle_t mutex() {
 // #endregion FUNC_mutex
 
 // #region FUNC_take
-// PURPOSE: Blocks at most timeoutMs for the modem mutex.
+// PURPOSE: Bounds contention so a modem task cannot wait indefinitely for Serial1.
 inline bool take(unsigned long timeoutMs = 5000) {
   SemaphoreHandle_t m = mutex();
   if (m == nullptr) return false;
@@ -38,7 +39,7 @@ inline bool take(unsigned long timeoutMs = 5000) {
 // #endregion FUNC_take
 
 // #region FUNC_give
-// PURPOSE: Releases the modem mutex.
+// PURPOSE: Restores access for the next modem operation after a guarded exchange.
 inline void give() {
   SemaphoreHandle_t m = mutex();
   if (m != nullptr) xSemaphoreGive(m);

@@ -1,8 +1,8 @@
 /**
  * #region moduleContract
- * @purpose ZTE MF79RU page logic: module settings form with saved-password
- *   placeholder, last poll status refresh and the connection test.
- * @scope /zte only; NOT: shared helpers or other pages.
+ * @modulecontract
+ * @purpose Keeps the auxiliary modem configured and its connection testable.
+ * @scope /zte page; NOT: shared runtime.
  * #endregion moduleContract
  */
 
@@ -29,6 +29,10 @@ const syncForm = bindFieldDependencies(zteForm, {
 	label: "forward_enabled",
 });
 
+// #region FUNC_formFields
+/**
+ * @purpose Prevents auxiliary-modem field drift during settings writes.
+ */
 function formFields() {
 	const elements = zteForm.elements;
 	return {
@@ -40,13 +44,23 @@ function formFields() {
 		label: elements.label.value.trim(),
 	};
 }
+// #endregion FUNC_formFields
 
+// #region FUNC_applyPasswordPlaceholder
+/**
+ * @purpose Signals when a saved modem secret can be retained without re-entry.
+ */
 function applyPasswordPlaceholder(passwordSet) {
 	passwordInput.placeholder = passwordSet
 		? "Saved — leave blank to keep"
 		: "Enter password";
 }
+// #endregion FUNC_applyPasswordPlaceholder
 
+// #region FUNC_loadConfig
+/**
+ * @purpose Prevents stale browser values from overwriting the saved auxiliary profile.
+ */
 async function loadConfig() {
 	const { response, payload } = await apiFetch("/api/zte");
 	if (!response.ok || !payload) {
@@ -62,7 +76,12 @@ async function loadConfig() {
 	syncForm();
 	applyPasswordPlaceholder(payload.password_set === true);
 }
+// #endregion FUNC_loadConfig
 
+// #region FUNC_refreshLastStatus
+/**
+ * @purpose Keeps the latest auxiliary modem outcome visible to operators.
+ */
 async function refreshLastStatus() {
 	const { response, payload } = await apiFetch("/api/zte");
 	if (!response.ok || !payload) {
@@ -72,6 +91,7 @@ async function refreshLastStatus() {
 		last_status: payload.last_status || "—",
 	});
 }
+// #endregion FUNC_refreshLastStatus
 
 zteForm.addEventListener("submit", (event) => {
 	event.preventDefault();

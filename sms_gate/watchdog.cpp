@@ -1,6 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements the watchdog supervisor (ADR-0006) — TWDT + RTC boot
-// loop quorum + modem RESET-before-restart — so the sketch stays thin.
+// PURPOSE: Recovers stalled firmware and contains repeated boot failures.
+// SCOPE:
+// - Initializes, feeds, and reports watchdog state, including RTC boot-loop containment.
+// - NOT: Owning normal service scheduling or persistent configuration.
+// INVARIANTS:
+// - Watchdog reboot state survives software restarts within the RTC retention window.
+// - Repeated watchdog resets enter safe mode before normal work resumes.
 // #endregion MODULE_CONTRACT
 
 #include "system/watchdog.h"
@@ -34,6 +39,7 @@ namespace watchdog {
 namespace {
 
 // #region CONST_watchdogRtc
+// PURPOSE: Preserves boot-loop state across watchdog restarts.
 constexpr uint32_t kRtcMagic = 0x57445447UL;  // 'WDTG'
 struct RtcState {
   uint32_t magic = 0;
@@ -80,6 +86,7 @@ void resetModemHardware() {
 }  // namespace
 
 // #region FUNC_begin
+// PURPOSE: Initializes reset tracking and the watchdog before services start.
 void begin() {
 #ifdef ARDUINO
   gLastResetReason = static_cast<uint32_t>(esp_reset_reason());
@@ -175,10 +182,12 @@ void begin() {
 // #endregion FUNC_begin
 
 // #region FUNC_isSafeMode
+// PURPOSE: Lets callers suppress risky tasks during a boot loop.
 bool isSafeMode() { return gSafeMode; }
 // #endregion FUNC_isSafeMode
 
 // #region FUNC_feedLoop
+// PURPOSE: Proves the main loop is alive to both watchdog layers.
 void feedLoop() {
   gLastFeedLoopMs = millis();
   gLoopFedOnce = true;
@@ -190,7 +199,8 @@ void feedLoop() {
 }
 // #endregion FUNC_feedLoop
 
-// #region FUNC_addRemoveCurrentTask
+// #region FUNC_addCurrentTask
+// PURPOSE: Subscribes the current task to the watchdog with an operator label.
 void addCurrentTask(const char* name) {
 #ifdef ARDUINO
   if (!gTwdtInitialised) return;
@@ -205,7 +215,10 @@ void addCurrentTask(const char* name) {
   (void)name;
 #endif
 }
+// #endregion FUNC_addCurrentTask
 
+// #region FUNC_removeCurrentTask
+// PURPOSE: Removes the current task before its FreeRTOS handle is deleted.
 void removeCurrentTask() {
 #ifdef ARDUINO
   if (!gTwdtInitialised) return;
@@ -213,9 +226,10 @@ void removeCurrentTask() {
   Serial.println("event=watchdog_task_removed");
 #endif
 }
-// #endregion FUNC_addRemoveCurrentTask
+// #endregion FUNC_removeCurrentTask
 
 // #region FUNC_reset
+// PURPOSE: Keeps a subscribed worker task alive during blocking work.
 void reset() {
 #ifdef ARDUINO
   if (gTwdtInitialised) esp_task_wdt_reset();
@@ -224,6 +238,7 @@ void reset() {
 // #endregion FUNC_reset
 
 // #region FUNC_loop
+// PURPOSE: Detects stalls and clears the boot-loop counter after stability.
 void loop() {
   const unsigned long now = millis();
   if (!gLoopFedOnce) return;
@@ -257,6 +272,7 @@ void loop() {
 // #endregion FUNC_loop
 
 // #region FUNC_triggerRestart
+// PURPOSE: Provides one reset path that safely resets modem and ESP hardware.
 void triggerRestart(const char* reason) {
   const char* r = reason ? reason : "unknown";
   Serial.printf("event=watchdog_trigger reason=%s safe_mode=%s boot_count=%u\n", r,
@@ -283,6 +299,7 @@ void triggerRestart(const char* reason) {
 // #endregion FUNC_triggerRestart
 
 // #region FUNC_clearSafeMode
+// PURPOSE: Lets operator intervention clear retained recovery state.
 void clearSafeMode() {
   rtcState.bootCount = 0;
   rtcState.safeMode = 0;
@@ -292,9 +309,14 @@ void clearSafeMode() {
 }
 // #endregion FUNC_clearSafeMode
 
-// #region FUNC_status
+// #region FUNC_bootLoopCount
+// PURPOSE: Exposes the retained watchdog count for status reporting.
 uint32_t bootLoopCount() { return rtcState.bootCount; }
+// #endregion FUNC_bootLoopCount
+
+// #region FUNC_lastResetReasonCode
+// PURPOSE: Exposes the last reset classification for status reporting.
 uint32_t lastResetReasonCode() { return gLastResetReason; }
-// #endregion FUNC_status
+// #endregion FUNC_lastResetReasonCode
 
 }  // namespace watchdog

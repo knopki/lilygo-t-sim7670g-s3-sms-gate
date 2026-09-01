@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+# region MODULE_CONTRACT
+# PURPOSE: Checks wire-level NTP compatibility so the embedded server remains
+# acceptable to standard clients.
+# SCOPE:
+# - Sends UDP NTP request variants and validates normal replies, version
+#   clamping, anti-reflection filtering, timestamp precision, and RATE KoD form.
+# INVARIANTS:
+# - Every checked reply is decoded from a 48-byte NTP packet;
+# - the rate burst runs last because it deliberately consumes the server request budget.
+# endregion MODULE_CONTRACT
+
 """NTP conformance probe for the sms_gate NTP server.
 
 Checks the device's UDP/123 replies against the acceptance rules that
@@ -27,10 +38,16 @@ NTP_EPOCH_OFFSET = 2208988800
 RATE_LIMIT = 20  # kNtpRateLimitPerSecond in sms_gate/ntp_server.cpp
 
 
+# region FUNC_frac_to_float
+# PURPOSE: Makes NTP fractional timestamps comparable to Unix time in diagnostics.
 def frac_to_float(sec, frac):
     return sec - NTP_EPOCH_OFFSET + frac / 2**32
 
 
+# endregion FUNC_frac_to_float
+
+# region FUNC_build_request
+# PURPOSE: Exercises exact wire variants without duplicating packet setup.
 def build_request(mode, vn, xmt_sec, xmt_frac):
     pkt = bytearray(48)
     pkt[0] = ((vn & 0x07) << 3) | (mode & 0x07)
@@ -38,12 +55,22 @@ def build_request(mode, vn, xmt_sec, xmt_frac):
     return bytes(pkt)
 
 
+# endregion FUNC_build_request
+
+# region CLASS_Client
+# PURPOSE: Keeps probe socket lifecycle and exchanges isolated.
 class Client:
+    # region METHOD___init__
+    # PURPOSE: Bounds endpoint failures instead of allowing the probe to hang.
     def __init__(self, host, port, timeout=1.0):
         self.addr = (host, port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(timeout)
 
+    # endregion METHOD___init__
+
+    # region METHOD_query
+    # PURPOSE: Makes missing replies observable to conformance checks.
     def query(self, mode=3, vn=4):
         """Send one request; return (request, response_or_None)."""
         now = time.time()
@@ -58,6 +85,11 @@ class Client:
         return req, resp
 
 
+# endregion METHOD_query
+# endregion CLASS_Client
+
+# region FUNC_unpack
+# PURPOSE: Exposes only the response fields needed for protocol checks.
 def unpack(resp):
     return {
         "lvm": resp[0],
@@ -72,6 +104,10 @@ def unpack(resp):
     }
 
 
+# endregion FUNC_unpack
+
+# region FUNC_main
+# PURPOSE: Makes wire-level regressions fail automation with a clear status.
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -175,6 +211,8 @@ def main():
     print("all checks passed — reply form is accepted by chrony and ntpd")
     return 0
 
+
+# endregion FUNC_main
 
 if __name__ == "__main__":
     sys.exit(main())

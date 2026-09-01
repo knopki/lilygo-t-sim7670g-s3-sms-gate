@@ -1,8 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Host test for email_builder — sanitizeSenderForSubject and
-// buildSmsEmailFromParts / buildZteSmsEmail / buildModemSmsEmail. Asserts
-// printable-ASCII, 40-char cap, unknown sender, INCOMPLETE flag, alias
-// subject prefix and body Received-on alias.
+// PURPOSE: Locks forwarded-email formatting so source aliases and incomplete warnings stay visible.
+// SCOPE:
+// - Tests sender sanitization and the subject/body rendering shared
+// - by ZTE and SIM7670G SMS forwarding.
+// INVARIANTS:
+// - Rendered subjects identify a safe sender;
+// - incomplete messages retain their warning and source aliases are rendered consistently.
 // #endregion MODULE_CONTRACT
 #include <cassert>
 #include <cstdio>
@@ -23,7 +26,15 @@ bool formatZteDate(const char* raw, char* out, size_t outSize) {
 }
 
 static int run = 0, pass = 0;
-#define EXPECT(cond, msg) do { ++run; if (cond) { ++pass; } else { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, msg); } } while(0)
+#define EXPECT(cond, msg)                                 \
+  do {                                                    \
+    ++run;                                                \
+    if (cond) {                                           \
+      ++pass;                                             \
+    } else {                                              \
+      printf("FAIL %s:%d %s\n", __FILE__, __LINE__, msg); \
+    }                                                     \
+  } while (0)
 
 static bool contains(const String& h, const char* needle) {
   return std::string(h.c_str()).find(needle) != std::string::npos;
@@ -31,15 +42,21 @@ static bool contains(const String& h, const char* needle) {
 
 int main() {
   // sanitizeSenderForSubject
-  EXPECT(String(sanitizeSenderForSubject(nullptr).c_str()) == String("unknown sender"), "null->unknown");
-  EXPECT(String(sanitizeSenderForSubject("").c_str()) == String("unknown sender"), "empty->unknown");
-  EXPECT(String(sanitizeSenderForSubject("   ").c_str()) == String("unknown sender"), "spaces->unknown");
+  EXPECT(String(sanitizeSenderForSubject(nullptr).c_str()) == String("unknown sender"),
+         "null->unknown");
+  EXPECT(String(sanitizeSenderForSubject("").c_str()) == String("unknown sender"),
+         "empty->unknown");
+  EXPECT(String(sanitizeSenderForSubject("   ").c_str()) == String("unknown sender"),
+         "spaces->unknown");
   EXPECT(String(sanitizeSenderForSubject("Alice").c_str()) == String("Alice"), "plain");
   // control byte -> space then trim
-  EXPECT(contains(sanitizeSenderForSubject("A\x01" "B"), "A B"), "control->space");
+  EXPECT(contains(sanitizeSenderForSubject("A\x01"
+                                           "B"),
+                  "A B"),
+         "control->space");
   // non-ascii (>126) -> '?'
   {
-    char s[] = {(char)0xC3, (char)0xA9, 0}; // utf8 bytes >126
+    char s[] = {(char)0xC3, (char)0xA9, 0};  // utf8 bytes >126
     String r = sanitizeSenderForSubject(s);
     EXPECT(contains(r, "?"), "non-ascii -> ?");
   }
@@ -55,7 +72,8 @@ int main() {
   // buildSmsEmailFromParts — complete
   {
     String subject, body;
-    buildSmsEmailFromParts("+123456789", "MyLabel", "42", "2024-01-02", "hello", true, "1", "1", subject, body);
+    buildSmsEmailFromParts("+123456789", "MyLabel", "42", "2024-01-02", "hello", true, "1", "1",
+                           subject, body);
     EXPECT(contains(subject, "[MyLabel] SMS from +123456789"), "alias subject prefix");
     EXPECT(subject.indexOf("[MyLabel]") == 0, "alias prefix first");
     EXPECT(contains(body, "Sender: +123456789"), "body sender");
@@ -68,7 +86,8 @@ int main() {
   {
     String subject, body;
     buildSmsEmailFromParts("Alice", "", "7", "2024-01-02", "frag", false, "1", "3", subject, body);
-    EXPECT(String(subject.c_str()) == String("[INCOMPLETE 1/3] SMS from Alice"), "no alias, old subject");
+    EXPECT(String(subject.c_str()) == String("[INCOMPLETE 1/3] SMS from Alice"),
+           "no alias, old subject");
     EXPECT(contains(subject, "[INCOMPLETE 1/3]"), "incomplete subject tag");
     EXPECT(contains(subject, "SMS from Alice"), "incomplete subject sender");
     EXPECT(contains(body, "WARNING"), "incomplete warning");
@@ -77,13 +96,16 @@ int main() {
   // incomplete with alias: alias prefix first, then INCOMPLETE tag
   {
     String subject, body;
-    buildSmsEmailFromParts("Alice", "Work", "7", "2024-01-02", "frag", false, "1", "3", subject, body);
-    EXPECT(String(subject.c_str()) == String("[Work] [INCOMPLETE 1/3] SMS from Alice"), "alias + incomplete subject");
+    buildSmsEmailFromParts("Alice", "Work", "7", "2024-01-02", "frag", false, "1", "3", subject,
+                           body);
+    EXPECT(String(subject.c_str()) == String("[Work] [INCOMPLETE 1/3] SMS from Alice"),
+           "alias + incomplete subject");
   }
   // null text/id/date
   {
     String subject, body;
-    buildSmsEmailFromParts(nullptr, "", nullptr, nullptr, nullptr, true, nullptr, nullptr, subject, body);
+    buildSmsEmailFromParts(nullptr, "", nullptr, nullptr, nullptr, true, nullptr, nullptr, subject,
+                           body);
     EXPECT(contains(subject, "unknown sender"), "null sender -> unknown");
     EXPECT(contains(body, "Modem message ID: "), "null id empty");
   }
@@ -95,7 +117,7 @@ int main() {
     strncpy(zs.dateRaw, "rawDate", sizeof(zs.dateRaw));
     strncpy(zs.textUtf8, "zte text", sizeof(zs.textUtf8));
     zs.concatComplete = true;
-    String s1,b1;
+    String s1, b1;
     buildZteSmsEmail(zs, "L", s1, b1);
     EXPECT(contains(b1, "zte text"), "zte wrapper");
 
@@ -105,7 +127,7 @@ int main() {
     strncpy(ms.date, "rawDate", sizeof(ms.date));
     strncpy(ms.text, "modem text", sizeof(ms.text));
     ms.concatComplete = true;
-    String s2,b2;
+    String s2, b2;
     buildModemSmsEmail(ms, "L", s2, b2);
     EXPECT(contains(b2, "modem text"), "modem wrapper");
     // both use same alias rendering

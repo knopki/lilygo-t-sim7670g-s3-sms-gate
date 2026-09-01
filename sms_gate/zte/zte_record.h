@@ -1,10 +1,12 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Defines the portable, checksummed binary record for the ZTE
-// MF79RU SMS source (see ADR-0003) so it can be validated independently of
-// Arduino hardware APIs.
-// INVARIANTS: A record is valid only with the expected magic, version, and
-// checksum; host and password are complete printable-ASCII fields so
-// corrupt NVS content can never reach the modem dialog.
+// PURPOSE: Keeps ZTE settings verifiable and independent of hardware APIs.
+// SCOPE:
+// - Defines ZTE record layouts, checksums, and validation predicates.
+// - NOT: NVS access, ZTE modem dialogs, SMS forwarding, and HTTP rendering.
+// INVARIANTS:
+// - A record is valid only with the expected magic, version, and checksum;
+// - host and password are complete printable-ASCII fields so corrupt NVS content
+//   can never reach the modem dialog.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -34,7 +36,7 @@ inline bool isValidZtePollInterval(uint16_t value) {
 }
 // #endregion FUNC_isValidZtePollInterval
 
-// #region CLASS_ZteConfigRecord
+// #region STRUCT_ZteConfigRecord
 // PURPOSE: Represents the ZTE modem SMS source profile (module enable,
 // LAN host, the modem's own web-login password, phone number or alias shown
 // in forwarded emails, per-source poll interval, and forward enable) as a
@@ -50,7 +52,7 @@ struct ZteConfigRecord {
   uint16_t pollIntervalSec;
   uint32_t checksum;
 };
-// #endregion CLASS_ZteConfigRecord
+// #endregion STRUCT_ZteConfigRecord
 
 // #region FUNC_calculateZteConfigChecksum
 // PURPOSE: Detects incomplete and incompatible records before the modem
@@ -112,6 +114,7 @@ struct ZteConfigRecordV3 {
 // #endregion STRUCT_ZteConfigRecordV3
 
 // #region FUNC_isZteConfigRecordV3Valid
+// PURPOSE: Rejects corrupt legacy ZTE profiles before migration.
 inline bool isZteConfigRecordV3Valid(const ZteConfigRecordV3& record) {
   const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
   uint32_t hash = 2166136261UL;

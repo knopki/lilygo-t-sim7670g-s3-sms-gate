@@ -1,5 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements GpsService so sms_gate.ino only drives sync/load/save.
+// PURPOSE: Keeps GNSS lifecycle details out of the firmware shell.
+// SCOPE:
+//   - Coordinates stored GNSS policy, polling tasks, status caching, and time-source feeds.
+//   - NOT: Parsing GNSS wire responses or defining persisted record formats.
+// INVARIANTS:
+//   - GNSS tasks run only for a loaded, module-enabled profile.
+//   - Web status is served from the cache without directly accessing Serial1.
 // #endregion MODULE_CONTRACT
 
 #include "gps/gps_service.h"
@@ -23,6 +29,7 @@ constexpr size_t kGpsScratchSize = 2048;
 GpsService::GpsService() = default;
 
 // #region METHOD_GpsService_load
+// PURPOSE: Restores GNSS settings before polling is scheduled.
 bool GpsService::load() {
   loaded_ = store_.load(stored_);
   return loaded_;
@@ -30,6 +37,7 @@ bool GpsService::load() {
 // #endregion METHOD_GpsService_load
 
 // #region METHOD_GpsService_save
+// PURPOSE: Persists validated GNSS settings for the next boot.
 bool GpsService::save(const RuntimeGpsConfig& candidate) {
   if (!store_.save(candidate)) return false;
   stored_ = candidate;
@@ -38,13 +46,23 @@ bool GpsService::save(const RuntimeGpsConfig& candidate) {
 }
 // #endregion METHOD_GpsService_save
 
+// #region METHOD_GpsService_shouldRunTask
+// PURPOSE: Gates task creation on a loaded, enabled GNSS profile.
 bool GpsService::shouldRunTask() const { return loaded_ && stored_.moduleEnabled; }
+// #endregion METHOD_GpsService_shouldRunTask
 
+// #region METHOD_GpsService_shouldPoll
+// PURPOSE: Gates polling on the profile's module and poll switches.
 bool GpsService::shouldPoll() const { return shouldRunTask() && stored_.pollEnabled; }
+// #endregion METHOD_GpsService_shouldPoll
 
+// #region METHOD_GpsService_shouldTimeSync
+// PURPOSE: Gates GNSS clock feeding on an active poll profile.
 bool GpsService::shouldTimeSync() const { return shouldPoll() && stored_.timeSyncEnabled; }
+// #endregion METHOD_GpsService_shouldTimeSync
 
 // #region METHOD_GpsService_webConfig
+// PURPOSE: Exposes stored GNSS settings without service internals.
 WebGpsConfig GpsService::webConfig() const {
   WebGpsConfig web;
   web.present = loaded_;
@@ -68,6 +86,7 @@ WebGpsConfig GpsService::webConfig() const {
 // #endregion METHOD_GpsService_webConfig
 
 // #region METHOD_GpsService_webStatus
+// PURPOSE: Exposes the cached GNSS state without touching Serial1.
 WebGpsStatus GpsService::webStatus() const {
   GpsStatus raw = statusCache_.read();
   WebGpsStatus web;
@@ -95,6 +114,7 @@ WebGpsStatus GpsService::webStatus() const {
 // #endregion METHOD_GpsService_webStatus
 
 // #region METHOD_GpsService_readForm
+// PURPOSE: Rejects invalid GNSS settings before persistence.
 bool GpsService::readForm(WebServer& server, RuntimeGpsConfig& out, String& error) {
   out.moduleEnabled = server.arg("module_enabled") == F("1");
   out.pollEnabled = server.arg("poll_enabled") == F("1");
@@ -121,6 +141,7 @@ bool GpsService::readForm(WebServer& server, RuntimeGpsConfig& out, String& erro
 // #endregion METHOD_GpsService_readForm
 
 // #region METHOD_GpsService_pollIntervalMs
+// PURPOSE: Converts the configured GNSS interval to scheduler units.
 unsigned long GpsService::pollIntervalMs() const {
   const uint16_t sec = loaded_ ? stored_.pollIntervalSec : kDefaultGpsPollSec;
   if (!isValidGpsPollInterval(sec)) return kDefaultGpsPollSec * 1000UL;
@@ -129,14 +150,17 @@ unsigned long GpsService::pollIntervalMs() const {
 // #endregion METHOD_GpsService_pollIntervalMs
 
 // #region METHOD_GpsService_publishStatus
+// PURPOSE: Publishes one GNSS snapshot through the protected cache.
 void GpsService::publishStatus(const GpsStatus& status) { statusCache_.publish(status); }
 // #endregion METHOD_GpsService_publishStatus
 
 // #region METHOD_GpsService_readStatus
+// PURPOSE: Reads one consistent GNSS snapshot for consumers.
 GpsStatus GpsService::readStatus() const { return statusCache_.read(); }
 // #endregion METHOD_GpsService_readStatus
 
 // #region METHOD_GpsService_runPollTask
+// PURPOSE: Owns the serialized GNSS polling session.
 void GpsService::runPollTask() {
   watchdog::addCurrentTask("gps_poll");
   char* scratch = static_cast<char*>(malloc(kGpsScratchSize));
@@ -233,6 +257,7 @@ void GpsService::runPollTask() {
 // #endregion METHOD_GpsService_runPollTask
 
 // #region METHOD_GpsService_pollTask
+// PURPOSE: Provides the FreeRTOS entry point for GNSS polling.
 void GpsService::pollTask(void* param) {
   auto* self = static_cast<GpsService*>(param);
   if (self != nullptr) self->runPollTask();
@@ -240,6 +265,7 @@ void GpsService::pollTask(void* param) {
 // #endregion METHOD_GpsService_pollTask
 
 // #region METHOD_GpsService_syncTask
+// PURPOSE: Starts or stops polling to match the stored profile.
 void GpsService::syncTask() {
   if (taskHandle_ != nullptr) {
     if (!task_control::stopTask(taskHandle_, taskStopRequested_)) {
@@ -262,6 +288,7 @@ void GpsService::syncTask() {
 // #endregion METHOD_GpsService_syncTask
 
 // #region METHOD_GpsService_stopTask
+// PURPOSE: Releases GNSS ownership before shared modem access.
 bool GpsService::stopTask() {
   if (taskHandle_ == nullptr) return true;
   if (!task_control::stopTask(taskHandle_, taskStopRequested_)) {

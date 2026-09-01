@@ -1,19 +1,9 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Pins the SIM7670G AT-dialog contracts on the host, without
-// hardware (ADR-0004), so firmware changes cannot silently corrupt SMS
-// handling. Uses a strict FakeModemChannel that replays AT
-// replies in exact script order, rejects commands issued before the previous
-// reply is fully drained, captures the CMGS data phase (body + Ctrl-Z), and
-// records protocol violations so regressions attribute to the code under
-// test, not to the fake.
+// PURPOSE: Keeps SIM7670G AT-dialog regressions reproducible without hardware.
 // SCOPE:
-// - Parser unit tests, pollStatus sequencing, CMGL scan discipline,
-// - CPMS storage selection (mem2/mem3 stay ME),
-// - GSM/UCS2 send routing with exact raw payloads.
-// - NOT: UART timing, unsolicited real-world URCs, HardwareSerial purge
-//   semantics, ModemService lifecycle, carrier delivery.
-// INVARIANTS: The fake never aborts on violations; assertions own the
-// verdict; every send test asserts the exact raw data payload.
+// - Covers parsing, polling, storage selection, and exact SMS payloads;
+// - NOT: UART timing or carrier delivery.
+// INVARIANTS: Fake violations are reported to assertions, never hidden.
 // #endregion MODULE_CONTRACT
 
 #include "../sms_gate/codec.h"
@@ -28,13 +18,8 @@
 #include <vector>
 
 // #region CLASS_FakeModemChannel
-// PURPOSE: Makes the modem's wire discipline observable in host tests, so a
-// regression is attributed to the code under test, not to the fake. Every
-// command must match the next script entry, a new command must not start
-// before the previous scripted reply is fully delivered (including its
-// terminal OK), and writes after the ">" prompt are captured as CMGS data
-// payload (body and Ctrl-Z) instead of being treated as commands.
-// Violations are recorded, never fatal inside the fake.
+// PURPOSE: Makes command order, reply draining, and CMGS payloads observable
+// without hiding fake violations.
 class FakeModemChannel : public ModemChannel {
  public:
   struct Script {
@@ -133,9 +118,8 @@ class FakeModemChannel : public ModemChannel {
 };
 // #endregion CLASS_FakeModemChannel
 
-// #region FUNC_fakeAssertions
-// PURPOSE: Assertion helpers keeping failures attributable to the code under
-// test: recorded violations print first, then the assert fires.
+// #region FUNC_expectNoViolations
+// PURPOSE: Reports fake protocol violations before failing the owning test.
 static void expectNoViolations(const FakeModemChannel& ch, const char* context) {
   if (ch.broken()) {
     for (const std::string& v : ch.violations())
@@ -143,14 +127,19 @@ static void expectNoViolations(const FakeModemChannel& ch, const char* context) 
   }
   assert(!ch.broken());
 }
+// #endregion FUNC_expectNoViolations
+
+// #region FUNC_fakeSentCommand
+// PURPOSE: Checks whether a scripted command was actually matched.
 static bool fakeSentCommand(const FakeModemChannel& ch, const std::string& cmd) {
   for (const std::string& c : ch.matchedCommands())
     if (c == cmd) return true;
   return false;
 }
-// Returns the idx-th Ctrl-Z terminated data payload captured after a ">"
-// prompt (terminator included), so multipart sends can assert each concat
-// part separately.
+// #endregion FUNC_fakeSentCommand
+
+// #region FUNC_fakePayloadPart
+// PURPOSE: Keeps multipart assertions tied to exact captured CMGS parts.
 static std::string fakePayloadPart(const FakeModemChannel& ch, size_t idx) {
   std::vector<std::string> parts;
   std::string cur;
@@ -164,9 +153,10 @@ static std::string fakePayloadPart(const FakeModemChannel& ch, size_t idx) {
   if (!cur.empty()) parts.push_back(cur);
   return idx < parts.size() ? parts[idx] : std::string();
 }
-// #endregion FUNC_fakeAssertions
+// #endregion FUNC_fakePayloadPart
 
 // #region FUNC_testParseCpin
+// PURPOSE: Keeps CPIN status parsing aligned with modem reply shapes.
 void testParseCpin() {
   char out[32];
   assert(parseCpinLine("+CPIN: READY", out, sizeof(out)) && strcmp(out, "READY") == 0);
@@ -178,6 +168,7 @@ void testParseCpin() {
 // #endregion FUNC_testParseCpin
 
 // #region FUNC_testParseCsq
+// PURPOSE: Keeps RSSI and BER parsing aligned with modem reply shapes.
 void testParseCsq() {
   int rssi, ber;
   assert(parseCsqLine("+CSQ: 22,0", rssi, ber) && rssi == 22 && ber == 0);
@@ -187,6 +178,7 @@ void testParseCsq() {
 // #endregion FUNC_testParseCsq
 
 // #region FUNC_testParseCesq
+// PURPOSE: Preserves LTE signal conversion and unknown-value handling.
 void testParseCesq() {
   int rsrp, rsrq;
   assert(parseCesqLine("+CESQ: 99,99,255,255,30,60", rsrp, rsrq));
@@ -196,6 +188,7 @@ void testParseCesq() {
 // #endregion FUNC_testParseCesq
 
 // #region FUNC_testParseCreg
+// PURPOSE: Preserves registration-state extraction across CEREG and CREG.
 void testParseCreg() {
   int stat;
   assert(parseCregLine("+CEREG: 0,1", stat) && stat == 1);
@@ -205,6 +198,7 @@ void testParseCreg() {
 // #endregion FUNC_testParseCreg
 
 // #region FUNC_testParseCops
+// PURPOSE: Preserves operator and access-technology extraction.
 void testParseCops() {
   char op[32];
   int act;
@@ -215,6 +209,7 @@ void testParseCops() {
 // #endregion FUNC_testParseCops
 
 // #region FUNC_testParseCpms
+// PURPOSE: Preserves SMS storage counters needed by polling.
 void testParseCpms() {
   uint16_t used, total;
   assert(parseCpmsLine("+CPMS: \"ME\",3,100,\"ME\",3,100,\"ME\",3,100", used, total) && used == 3 &&
@@ -224,6 +219,7 @@ void testParseCpms() {
 // #endregion FUNC_testParseCpms
 
 // #region FUNC_testParseCclk
+// PURPOSE: Preserves modem clock extraction for time synchronization.
 void testParseCclk() {
   char out[32];
   assert(parseCclkLine("+CCLK: \"25/08/25,12:34:56+12\"", out, sizeof(out)) &&
@@ -232,6 +228,7 @@ void testParseCclk() {
 // #endregion FUNC_testParseCclk
 
 // #region FUNC_testParseImei
+// PURPOSE: Rejects malformed identity replies before they reach status output.
 void testParseImei() {
   char out[24];
   assert(parseImeiLine("864567789012345", out, sizeof(out)) && strcmp(out, "864567789012345") == 0);
@@ -243,6 +240,7 @@ void testParseImei() {
 // #endregion FUNC_testParseImei
 
 // #region FUNC_testParseFw
+// PURPOSE: Preserves firmware-version extraction used for diagnostics.
 void testParseFw() {
   char out[48];
   assert(parseFwLine("2374B03SIM767XM5A_M", out, sizeof(out)) &&
@@ -253,8 +251,7 @@ void testParseFw() {
 // #endregion FUNC_testParseFw
 
 // #region FUNC_makeModemSourceRecord
-// PURPOSE: Builds one known-good modem-source record as the baseline for
-// every mutation.
+// PURPOSE: Provides one valid record baseline so mutations isolate validation rules.
 ModemSourceRecord makeModemRecord() {
   ModemSourceRecord record{};
   record.magic = kModemSourceMagic;
@@ -271,9 +268,7 @@ ModemSourceRecord makeModemRecord() {
 // #endregion FUNC_makeModemSourceRecord
 
 // #region FUNC_testModemRecordValidation
-// PURPOSE: Gates load/save on the shared predicate: corrupt, foreign,
-// non-printable, and out-of-range intervals never reach the poll path;
-// the label is optional but must be printable when present.
+// PURPOSE: Ensures invalid modem-source records never reach polling.
 void testModemRecordValidation() {
   ModemSourceRecord record = makeModemRecord();
   assert(isModemSourceRecordValid(record));
@@ -395,6 +390,7 @@ void testModemRecordValidation() {
 // #endregion FUNC_testModemRecordValidation
 
 // #region FUNC_testPollStatus
+// PURPOSE: Pins the status command order and storage-selection contract.
 void testPollStatus() {
   FakeModemChannel ch;
   char scratch[256];
@@ -436,6 +432,7 @@ void testPollStatus() {
 // #endregion FUNC_testPollStatus
 
 // #region FUNC_testCodecUcs2
+// PURPOSE: Keeps UCS-2 validation and UTF-8 decoding interoperable.
 void testCodecUcs2() {
   assert(codec::isUcs2HexView("00480065006C006C006F", 20));
   assert(!codec::isUcs2HexView("004G", 4));
@@ -457,6 +454,7 @@ void testCodecUcs2() {
 // #endregion FUNC_testCodecUcs2
 
 // #region FUNC_testParseCmglHeader
+// PURPOSE: Preserves CMGL header fields across text and UCS-2 forms.
 void testParseCmglHeader() {
   ModemCmglInfo info{};
   assert(parseCmglHeader(
@@ -487,6 +485,7 @@ void testParseCmglHeader() {
 // #endregion FUNC_testParseCmglHeader
 
 // #region FUNC_testParseCmgrHeader
+// PURPOSE: Preserves CMGR header fields and optional PDU metadata.
 void testParseCmgrHeader() {
   ModemCmgrInfo info{};
   assert(parseCmgrHeader(
@@ -511,6 +510,7 @@ void testParseCmgrHeader() {
 // #endregion FUNC_testParseCmgrHeader
 
 // #region FUNC_testParseCmglEntry
+// PURPOSE: Preserves CMGL body decoding and concatenation metadata.
 void testParseCmglEntry() {
   ModemSms sms{};
   // Cyrillic "Привет тест 123" from research §2
@@ -541,6 +541,7 @@ void testParseCmglEntry() {
 // #endregion FUNC_testParseCmglEntry
 
 // #region FUNC_testParseCmgrEntry
+// PURPOSE: Preserves CMGR body decoding and concatenation metadata.
 void testParseCmgrEntry() {
   ModemSms sms{};
   assert(parseCmgrEntry(
@@ -558,6 +559,7 @@ void testParseCmgrEntry() {
 // #endregion FUNC_testParseCmgrEntry
 
 // #region FUNC_testParsePduConcat
+// PURPOSE: Preserves 8-bit and 16-bit concatenation identity parsing.
 void testParsePduConcat() {
   ModemConcatInfo concat{};
   assert(parsePduConcat("050003530401", concat));
@@ -575,8 +577,7 @@ void testParsePduConcat() {
 // #endregion FUNC_testParsePduConcat
 
 // #region FUNC_testExtractConcatFromDeliverPdu
-// PURPOSE: Pins the SMS-DELIVER PDU walk at its variable OA and UDH
-// boundary, so a concat-looking user body cannot be mistaken for metadata.
+// PURPOSE: Keeps variable SMS-DELIVER offsets from misreading body data as concat metadata.
 void testExtractConcatFromDeliverPdu() {
   ModemConcatInfo concat{};
   // SCA=0, SMS-DELIVER+UDHI, 11-digit OA, DCS=UCS2, 7-byte SCTS,
@@ -614,8 +615,7 @@ void testExtractConcatFromDeliverPdu() {
 // #endregion FUNC_testExtractConcatFromDeliverPdu
 
 // #region FUNC_testProbeConcat
-// PURPOSE: Verifies PDU UDH probing restores text mode after both a parsed
-// reply and a modem error, preserving the text-mode receive contract.
+// PURPOSE: Ensures PDU probing restores text mode after success and errors.
 void testProbeConcat() {
   char scratch[512];
   {
@@ -646,9 +646,7 @@ void testProbeConcat() {
 // #endregion FUNC_testProbeConcat
 
 // #region FUNC_testModemConcatCache
-// PURPOSE: Covers RAM reassembly across poll cycles, completion ordering,
-// full-width concat identity, bounded-set refusal, and the 20-cycle
-// incomplete fallback trigger.
+// PURPOSE: Keeps multipart reassembly, identity bounds, and retry state deterministic.
 void testModemConcatCache() {
   auto sms = [](const char* id, const char* text) {
     ModemSms value{};
@@ -764,7 +762,8 @@ void testModemConcatCache() {
 }
 // #endregion FUNC_testModemConcatCache
 
-// #region FUNC_testFindOldestUnreadScenarios
+// #region FUNC_testFindOldestUnreadUcs2
+// PURPOSE: Verifies oldest unread selection and UCS-2 body decoding.
 void testFindOldestUnreadUcs2() {
   FakeModemChannel ch;
   char scratch[512];
@@ -788,6 +787,10 @@ void testFindOldestUnreadUcs2() {
   assert(strstr(sms.text, "\xD0\x9F") != nullptr);
   puts("testFindOldestUnreadUcs2 ok");
 }
+// #endregion FUNC_testFindOldestUnreadUcs2
+
+// #region FUNC_testFindOldestUnreadGsm
+// PURPOSE: Verifies oldest unread selection for plain GSM text.
 void testFindOldestUnreadGsm() {
   FakeModemChannel ch;
   char scratch[512];
@@ -803,6 +806,10 @@ void testFindOldestUnreadGsm() {
   assert(strcmp(sms.text, "Hello test 123") == 0);
   puts("testFindOldestUnreadGsm ok");
 }
+// #endregion FUNC_testFindOldestUnreadGsm
+
+// #region FUNC_testFindOldestUnreadOrdered
+// PURPOSE: Ensures listing order does not replace chronological selection.
 void testFindOldestUnreadOrdered() {
   FakeModemChannel ch;
   char scratch[512];
@@ -822,6 +829,10 @@ void testFindOldestUnreadOrdered() {
   assert(sms.concatComplete);
   puts("testFindOldestUnreadOrdered ok");
 }
+// #endregion FUNC_testFindOldestUnreadOrdered
+
+// #region FUNC_testFindOldestUnreadEmptyAndError
+// PURPOSE: Distinguishes an empty inbox from a modem protocol failure.
 void testFindOldestUnreadEmptyAndError() {
   FakeModemChannel ch;
   char scratch[256];
@@ -838,6 +849,10 @@ void testFindOldestUnreadEmptyAndError() {
   assert(strcmp(client2.failedStage(), "cms_error") == 0);
   puts("testFindOldestUnreadEmptyAndError ok");
 }
+// #endregion FUNC_testFindOldestUnreadEmptyAndError
+
+// #region FUNC_testFindOldestUnreadFullStorage
+// PURPOSE: Ensures a full listing is drained before the selected SMS is read.
 void testFindOldestUnreadFullStorage() {
   FakeModemChannel ch;
   char scratch[512];
@@ -872,6 +887,10 @@ void testFindOldestUnreadFullStorage() {
   assert(fakeSentCommand(ch, "AT+CMGR=10"));
   puts("testFindOldestUnreadFullStorage ok");
 }
+// #endregion FUNC_testFindOldestUnreadFullStorage
+
+// #region FUNC_testFindOldestUnreadMissingOk
+// PURPOSE: Rejects incomplete listings so no unverified message is read.
 void testFindOldestUnreadMissingOk() {
   FakeModemChannel ch;
   char scratch[512];
@@ -889,6 +908,10 @@ void testFindOldestUnreadMissingOk() {
   assert(!ch.broken());  // no follow-up command was issued at all
   puts("testFindOldestUnreadMissingOk ok");
 }
+// #endregion FUNC_testFindOldestUnreadMissingOk
+
+// #region FUNC_testFindOldestUnreadRecRead
+// PURPOSE: Re-delivers read messages left behind by a failed forward.
 void testFindOldestUnreadRecRead() {
   FakeModemChannel ch;
   char scratch[512];
@@ -907,6 +930,10 @@ void testFindOldestUnreadRecRead() {
   assert(strcmp(sms.id, "2") == 0);
   puts("testFindOldestUnreadRecRead ok");
 }
+// #endregion FUNC_testFindOldestUnreadRecRead
+
+// #region FUNC_testFindOldestUnreadIgnoresOutgoing
+// PURPOSE: Ensures outgoing storage records never enter the receive queue.
 void testFindOldestUnreadIgnoresOutgoing() {
   FakeModemChannel ch;
   char scratch[512];
@@ -926,6 +953,10 @@ void testFindOldestUnreadIgnoresOutgoing() {
   assert(strcmp(sms.id, "2") == 0);
   puts("testFindOldestUnreadIgnoresOutgoing ok");
 }
+// #endregion FUNC_testFindOldestUnreadIgnoresOutgoing
+
+// #region FUNC_testReadDeleteSend
+// PURPOSE: Covers direct read, delete, and input rejection boundaries.
 void testReadDeleteSend() {
   FakeModemChannel ch;
   char scratch[512];
@@ -960,12 +991,10 @@ void testReadDeleteSend() {
   assert(strcmp(client3.failedStage(), "send_input") == 0);
   puts("testReadDeleteSend ok");
 }
-// #endregion FUNC_testFindOldestUnreadScenarios
+// #endregion FUNC_testReadDeleteSend
 
 // #region FUNC_testFindUnreadCandidates
-// PURPOSE: Ensures one terminally drained CMGL listing exposes all incoming
-// ids in order before CMGR, so a cached oldest concat part cannot starve a
-// later sibling or unrelated single SMS.
+// PURPOSE: Ensures one drained CMGL listing exposes every candidate before CMGR reads.
 void testFindUnreadCandidates() {
   FakeModemChannel ch;
   char scratch[512];
@@ -985,10 +1014,8 @@ void testFindUnreadCandidates() {
 }
 // #endregion FUNC_testFindUnreadCandidates
 
-// #region FUNC_testSelectStorage
-// PURPOSE: Guards incoming delivery during the SM fallback scan: a full SIM
-// must never receive new messages, so only the read/delete store (mem1)
-// switches and the write/incoming stores (mem2/mem3) stay on ME.
+// #region FUNC_testSelectStorageMe
+// PURPOSE: Keeps normal polling on the modem's ME storage.
 void testSelectStorageMe() {
   FakeModemChannel ch;
   char scratch[256];
@@ -1001,6 +1028,10 @@ void testSelectStorageMe() {
   assert(ch.matchedCommands().size() == 1);
   puts("testSelectStorageMe ok");
 }
+// #endregion FUNC_testSelectStorageMe
+
+// #region FUNC_testSelectStorageSmReadKeepsMeIncoming
+// PURPOSE: Prevents SIM fallback reads from redirecting incoming storage.
 void testSelectStorageSmReadKeepsMeIncoming() {
   FakeModemChannel ch;
   char scratch[256];
@@ -1014,13 +1045,10 @@ void testSelectStorageSmReadKeepsMeIncoming() {
   assert(ch.matchedCommands().size() == 1);
   puts("testSelectStorageSmReadKeepsMeIncoming ok");
 }
-// #endregion FUNC_testSelectStorage
+// #endregion FUNC_testSelectStorageSmReadKeepsMeIncoming
 
 // #region FUNC_testBuildUcs2SubmitPdu
-// PURPOSE: Pins the byte-exact SMS-SUBMIT layout (SCA 0, TP-UDHI, swapped
-// semi-octet address with F pad, PID 0, DCS 8, UDL counting UDHL+UDH, UDH
-// 05 00 03 ref/total/seq) so a wrong octet cannot silently corrupt
-// delivery; also guards the AT+CMGS octet count and input validation.
+// PURPOSE: Keeps SMS-SUBMIT octets, CMGS length, and input validation byte-exact.
 void testBuildUcs2SubmitPdu() {
   char out[320];
   size_t octets = 0;
@@ -1052,15 +1080,8 @@ void testBuildUcs2SubmitPdu() {
 }
 // #endregion FUNC_testBuildUcs2SubmitPdu
 
-// #region FUNC_testModemSend
-// PURPOSE: Guards SMS text integrity on the wire: printable ASCII and
-// GSM 03.38 coincide only partly ($@[\]^_`{|}~ differ), so sending such
-// bytes raw corrupts the delivered text. Only the provably identical subset
-// goes raw (CSCS="GSM", DCS 0, plain number/body); unsafe punctuation and
-// Unicode go UCS2 (CSCS="UCS2", DCS 8, hex number/body). Texts beyond one
-// segment go out as UCS2 concat PDU parts (CMGF=0) with text mode restored
-// on every outcome, including six parts when surrogate boundaries require it.
-// The strict fake enforces the exact command order and payload bytes.
+// #region FUNC_testModemSendGsmSafeAscii
+// PURPOSE: Confirms GSM-safe text uses the direct text-mode payload path.
 void testModemSendGsmSafeAscii() {
   FakeModemChannel ch;
   char scratch[512];
@@ -1088,6 +1109,10 @@ void testModemSendGsmSafeAscii() {
   assert(seq[4] == "AT+CMGS=\"+79990000000\"");
   puts("testModemSendGsmSafeAscii ok");
 }
+// #endregion FUNC_testModemSendGsmSafeAscii
+
+// #region FUNC_testModemSendUnsafeAsciiUcs2
+// PURPOSE: Confirms GSM-mismatched punctuation takes the UCS-2 path.
 void testModemSendUnsafeAsciiUcs2() {
   FakeModemChannel ch;
   char scratch[1024];
@@ -1112,6 +1137,10 @@ void testModemSendUnsafeAsciiUcs2() {
   assert(ch.dataPayload() == std::string(hexBody) + "\x1A");
   puts("testModemSendUnsafeAsciiUcs2 ok");
 }
+// #endregion FUNC_testModemSendUnsafeAsciiUcs2
+
+// #region FUNC_testModemSendCyrillic
+// PURPOSE: Confirms UTF-8 Cyrillic becomes the expected UCS-2 payload.
 void testModemSendCyrillic() {
   FakeModemChannel ch;
   char scratch[1024];
@@ -1132,6 +1161,10 @@ void testModemSendCyrillic() {
   assert(ch.dataPayload() == std::string(hexBody) + "\x1A");
   puts("testModemSendCyrillic ok");
 }
+// #endregion FUNC_testModemSendCyrillic
+
+// #region FUNC_testIsDirectGsmAsciiText
+// PURPOSE: Defines the safe ASCII subset that can be sent as GSM text.
 void testIsDirectGsmAsciiText() {
   assert(isDirectGsmAsciiText(""));
   assert(isDirectGsmAsciiText("Hello 123!?"));
@@ -1152,6 +1185,10 @@ void testIsDirectGsmAsciiText() {
   assert(!isDirectGsmAsciiText(nullptr));
   puts("testIsDirectGsmAsciiText ok");
 }
+// #endregion FUNC_testIsDirectGsmAsciiText
+
+// #region FUNC_testModemSendPromptTimeout
+// PURPOSE: Ensures a missing CMGS prompt reports a bounded timeout.
 void testModemSendPromptTimeout() {
   FakeModemChannel ch;
   char scratch[512];
@@ -1166,6 +1203,10 @@ void testModemSendPromptTimeout() {
   assert(strcmp(client.failedStage(), "cmgs_prompt") == 0);
   puts("testModemSendPromptTimeout ok");
 }
+// #endregion FUNC_testModemSendPromptTimeout
+
+// #region FUNC_testModemSendCmsError
+// PURPOSE: Maps a modem CMS error to the stable send rejection result.
 void testModemSendCmsError() {
   FakeModemChannel ch;
   char scratch[512];
@@ -1179,6 +1220,10 @@ void testModemSendCmsError() {
   assert(strcmp(client.failedStage(), "cms_error") == 0);
   puts("testModemSendCmsError ok");
 }
+// #endregion FUNC_testModemSendCmsError
+
+// #region FUNC_testModemSendProtocolError
+// PURPOSE: Rejects a CMGS reply that lacks its success reference.
 void testModemSendProtocolError() {
   FakeModemChannel ch;
   char scratch[512];
@@ -1193,6 +1238,10 @@ void testModemSendProtocolError() {
   assert(strcmp(client.failedStage(), "protocol") == 0);
   puts("testModemSendProtocolError ok");
 }
+// #endregion FUNC_testModemSendProtocolError
+
+// #region FUNC_testModemSendMultipartTwoParts
+// PURPOSE: Pins two-part UCS-2 concatenation boundaries and payloads.
 void testModemSendMultipartTwoParts() {
   FakeModemChannel ch;
   char scratch[1024];
@@ -1221,6 +1270,10 @@ void testModemSendMultipartTwoParts() {
   assert(fakePayloadPart(ch, 1) == "0041000B919799000000F0000820050003010202" + units13 + "\x1A");
   puts("testModemSendMultipartTwoParts ok");
 }
+// #endregion FUNC_testModemSendMultipartTwoParts
+
+// #region FUNC_testModemSendMultipartThreeParts
+// PURPOSE: Pins three-part fallback when GSM text exceeds one segment.
 void testModemSendMultipartThreeParts() {
   FakeModemChannel ch;
   char scratch[1024];
@@ -1246,6 +1299,10 @@ void testModemSendMultipartThreeParts() {
   assert(fakePayloadPart(ch, 2) == "0041000B919799000000F000083C050003010303" + units27 + "\x1A");
   puts("testModemSendMultipartThreeParts ok");
 }
+// #endregion FUNC_testModemSendMultipartThreeParts
+
+// #region FUNC_testModemSendMultipartPart2Fails
+// PURPOSE: Ensures multipart failure still restores text mode.
 void testModemSendMultipartPart2Fails() {
   FakeModemChannel ch;
   char scratch[1024];
@@ -1264,6 +1321,10 @@ void testModemSendMultipartPart2Fails() {
   assert(fakeSentCommand(ch, "AT+CMGF=1"));
   puts("testModemSendMultipartPart2Fails ok");
 }
+// #endregion FUNC_testModemSendMultipartPart2Fails
+
+// #region FUNC_testModemSendSurrogateNotSplit
+// PURPOSE: Keeps UTF-16 surrogate pairs intact across multipart boundaries.
 void testModemSendSurrogateNotSplit() {
   FakeModemChannel ch;
   char scratch[1024];
@@ -1291,6 +1352,10 @@ void testModemSendSurrogateNotSplit() {
          std::string("0041000B919799000000F000081E050003010202") + "D83DDE3A" + units10 + "\x1A");
   puts("testModemSendSurrogateNotSplit ok");
 }
+// #endregion FUNC_testModemSendSurrogateNotSplit
+
+// #region FUNC_testModemSendSegmentBoundaries
+// PURPOSE: Preserves single-part limits for GSM and UCS-2 text.
 void testModemSendSegmentBoundaries() {
   // 160 'a' exactly fills the single GSM segment: the proven text-mode path
   // must stay (no PDU switch).
@@ -1333,6 +1398,10 @@ void testModemSendSegmentBoundaries() {
   }
   puts("testModemSendSegmentBoundaries ok");
 }
+// #endregion FUNC_testModemSendSegmentBoundaries
+
+// #region FUNC_testModemSendMaxUnitsMultipart
+// PURPOSE: Preserves the shared maximum SMS length without truncation.
 void testModemSendMaxUnitsMultipart() {
   FakeModemChannel ch;
   char scratch[2048];
@@ -1363,6 +1432,10 @@ void testModemSendMaxUnitsMultipart() {
   }
   puts("testModemSendMaxUnitsMultipart ok");
 }
+// #endregion FUNC_testModemSendMaxUnitsMultipart
+
+// #region FUNC_testModemSendAstralMaxUnitsMultipart
+// PURPOSE: Ensures astral codepoints produce legal non-splitting PDU parts.
 void testModemSendAstralMaxUnitsMultipart() {
   // 167 astral code points occupy 334 UTF-16 units. A 67-unit part boundary
   // would split every pair, so six legal PDU parts are required.
@@ -1399,9 +1472,10 @@ void testModemSendAstralMaxUnitsMultipart() {
   }
   puts("testModemSendAstralMaxUnitsMultipart ok");
 }
-// #endregion FUNC_testModemSend
+// #endregion FUNC_testModemSendAstralMaxUnitsMultipart
 
-// #region FUNC_testInitSequence
+// #region FUNC_testInitSuccess
+// PURPOSE: Pins the successful modem initialization command sequence.
 void testInitSuccess() {
   FakeModemChannel ch;
   char scratch[256];
@@ -1418,6 +1492,10 @@ void testInitSuccess() {
   assert(client.init() == ModemResult::kSuccess);
   puts("testInitSuccess ok");
 }
+// #endregion FUNC_testInitSuccess
+
+// #region FUNC_testInitNotPresent
+// PURPOSE: Ensures an unresponsive modem reports absence cleanly.
 void testInitNotPresent() {
   class TimeoutChannel : public ModemChannel {
    public:
@@ -1431,6 +1509,10 @@ void testInitNotPresent() {
   assert(strcmp(client.failedStage(), "not_present") == 0);
   puts("testInitNotPresent ok");
 }
+// #endregion FUNC_testInitNotPresent
+
+// #region FUNC_testDeleteCmsError
+// PURPOSE: Maps delete-time CMS errors to the stable protocol result.
 void testDeleteCmsError() {
   FakeModemChannel ch;
   char scratch[256];
@@ -1440,6 +1522,10 @@ void testDeleteCmsError() {
   assert(strcmp(client.failedStage(), "cms_error") == 0);
   puts("testDeleteCmsError ok");
 }
+// #endregion FUNC_testDeleteCmsError
+
+// #region FUNC_testReadCmsError
+// PURPOSE: Maps read-time CMS errors to the stable protocol result.
 void testReadCmsError() {
   FakeModemChannel ch;
   char scratch[256];
@@ -1450,7 +1536,7 @@ void testReadCmsError() {
   assert(strcmp(client.failedStage(), "cms_error") == 0);
   puts("testReadCmsError ok");
 }
-// #endregion FUNC_testInitSequence
+// #endregion FUNC_testReadCmsError
 
 int main() {
   testParseCpin();

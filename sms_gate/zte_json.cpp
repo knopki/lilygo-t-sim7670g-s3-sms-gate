@@ -1,7 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements the lenient JSON scanner for the ZTE MF79RU goform
-// dialog, matching the B02 firmware's raw-control behaviour and the fixed
-// paging shapes used by the inbox and send-status paths.
+// PURPOSE: Extracts bounded ZTE data despite firmware-specific JSON.
+// SCOPE:
+// - Parses bounded ZTE JSON responses and decodes their modem-specific values.
+// - NOT: Performing ZTE transport requests or managing polling lifecycle.
+// INVARIANTS:
+// - Every scan remains within the supplied response bounds.
+// - Malformed JSON and unsupported values fail without producing unbounded output.
 // #endregion MODULE_CONTRACT
 
 #include "zte/zte_json.h"
@@ -16,7 +20,7 @@ constexpr uint32_t kInvalidHex = 0x200000;
 }
 
 // #region FUNC_skipWhitespace
-// PURPOSE: Advances past JSON insignificant whitespace.
+// PURPOSE: Keeps bounded scans independent of formatting whitespace.
 const char* skipWhitespace(const char* p, const char* end) {
   while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) {
     ++p;
@@ -26,8 +30,7 @@ const char* skipWhitespace(const char* p, const char* end) {
 // #endregion FUNC_skipWhitespace
 
 // #region FUNC_skipString
-// PURPOSE: Advances past one quoted JSON string, accepting raw control
-// characters inside it; returns nullptr when the string never terminates.
+// PURPOSE: Stops malformed strings from making later scans escape the response.
 const char* skipString(const char* p, const char* end) {
   if (p >= end || *p != '"') {
     return nullptr;
@@ -48,8 +51,7 @@ const char* skipString(const char* p, const char* end) {
 // #endregion FUNC_skipString
 
 // #region FUNC_isLiteralCharacter
-// PURPOSE: Recognizes the character set of JSON numbers and literals so
-// skipValue can pass over values this dialog never inspects.
+// PURPOSE: Lets unknown JSON values be skipped without treating firmware extensions as errors.
 bool isLiteralCharacter(char ch) {
   return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
          ch == '-' || ch == '+' || ch == '.';
@@ -57,9 +59,7 @@ bool isLiteralCharacter(char ch) {
 // #endregion FUNC_isLiteralCharacter
 
 // #region FUNC_skipValue
-// PURPOSE: Advances over one complete JSON value (string, object, array,
-// number, or literal) and returns the position after it, or nullptr on a
-// malformed value.
+// PURPOSE: Preserves forward compatibility while keeping every skipped value bounded.
 const char* skipValue(const char* p, const char* end) {
   p = skipWhitespace(p, end);
   if (p >= end) {
@@ -157,9 +157,7 @@ bool findMember(JsonView object, const char* key, JsonView& value) {
 // #endregion FUNC_findMember
 
 // #region FUNC_jsonMemberString
-// PURPOSE: Reads one member as a decoded JSON string (standard escapes plus
-// raw control characters) into a bounded buffer, truncating long values;
-// returns false when the member is absent or not a string.
+// PURPOSE: Makes selected text fields safe for forwarding and bounded output.
 bool jsonMemberString(JsonView object, const char* key, char* out, size_t outSize) {
   JsonView value;
   if (!findMember(object, key, value)) {
@@ -233,8 +231,8 @@ bool jsonMemberString(JsonView object, const char* key, char* out, size_t outSiz
 }
 // #endregion FUNC_jsonMemberString
 
-// #region CLASS_JsonArrayIterator_next
-// PURPOSE: Steps to the next array element, bounding it as a JsonView.
+// #region METHOD_JsonArrayIterator_next
+// PURPOSE: Lets paging scans consume arrays without crossing element bounds.
 bool JsonArrayIterator::next(JsonView& element) {
   cursor_ = skipWhitespace(cursor_, end_);
   if (cursor_ >= end_) {
@@ -261,18 +259,17 @@ bool JsonArrayIterator::next(JsonView& element) {
   cursor_ = valueEnd;
   return true;
 }
-// #endregion CLASS_JsonArrayIterator_next
+// #endregion METHOD_JsonArrayIterator_next
 
 // #region FUNC_jsonMemberArray
-// PURPOSE: Bounds the value of one member when it is an array.
+// PURPOSE: Lets callers inspect selected arrays without copying or overreading them.
 bool jsonMemberArray(JsonView object, const char* key, JsonView& array) {
   return findMember(object, key, array) && array.start < array.end && *array.start == '[';
 }
 // #endregion FUNC_jsonMemberArray
 
 // #region FUNC_parseUint32String
-// PURPOSE: Converts a digits-only decimal string to uint32 for ordering and
-// reporting decisions.
+// PURPOSE: Keeps ordering and reporting decisions safe from malformed IDs.
 bool parseUint32String(const char* id, uint32_t& out) {
   if (*id == '\0') {
     return false;
@@ -293,7 +290,7 @@ bool parseUint32String(const char* id, uint32_t& out) {
 // #endregion FUNC_parseUint32String
 
 // #region FUNC_copyRawView
-// PURPOSE: Copies a non-hex content value verbatim, truncating at outSize.
+// PURPOSE: Keeps unknown message content forwardable without overrunning output.
 void copyRawView(JsonView view, char* out, size_t outSize) {
   size_t used = 0;
   for (const char* p = view.start; p < view.end && used + 1 < outSize; ++p) {
@@ -304,8 +301,7 @@ void copyRawView(JsonView view, char* out, size_t outSize) {
 // #endregion FUNC_copyRawView
 
 // #region FUNC_innerStringValue
-// PURPOSE: Strips the quotes of a string JSON value to bound its raw inner
-// bytes for content decoding.
+// PURPOSE: Gives content decoders a bounded view of raw string bytes.
 bool innerStringValue(JsonView value, JsonView& inner) {
   if (value.start >= value.end || *value.start != '"' || *(value.end - 1) != '"' ||
       value.end - value.start < 2) {
@@ -318,15 +314,14 @@ bool innerStringValue(JsonView value, JsonView& inner) {
 // #endregion FUNC_innerStringValue
 
 // #region FUNC_isUcs2HexView
-// PURPOSE: Validates the whole content view as 4-hex-per-codepoint UCS-2
-// via the shared codec helper.
+// PURPOSE: Keeps decoding on the UCS-2 path only when content is wholly valid.
 bool isUcs2HexView(JsonView view) {
   return codec::isUcs2HexView(view.start, static_cast<size_t>(view.end - view.start));
 }
 // #endregion FUNC_isUcs2HexView
 
 // #region FUNC_decodeUcs2HexView
-// PURPOSE: Decodes validated UCS-2 hex into UTF-8 via the shared codec helper.
+// PURPOSE: Makes valid encoded content usable by forwarding without extra storage.
 size_t decodeUcs2HexView(JsonView view, char* out, size_t outSize) {
   return codec::decodeUcs2HexView(view.start, static_cast<size_t>(view.end - view.start), out,
                                   outSize);
@@ -334,8 +329,7 @@ size_t decodeUcs2HexView(JsonView view, char* out, size_t outSize) {
 // #endregion FUNC_decodeUcs2HexView
 
 // #region FUNC_captureMessage
-// PURPOSE: Extracts one complete incoming SMS (including the decoded text)
-// from its JSON object view.
+// PURPOSE: Keeps modem-specific field extraction out of forwarding logic.
 bool captureMessage(JsonView element, ZteSms& out) {
   if (!jsonMemberString(element, "id", out.id, sizeof(out.id))) {
     return false;
@@ -374,7 +368,7 @@ bool captureMessage(JsonView element, ZteSms& out) {
 // #endregion FUNC_captureMessage
 
 // #region FUNC_parseEntryHeader
-// PURPOSE: Reads the id and tag one scan step needs (tag optional).
+// PURPOSE: Gives cleanup only bounded ID and tag metadata for one record.
 bool parseEntryHeader(JsonView element, char* id, size_t idSize, char* tag, size_t tagSize) {
   if (!jsonMemberString(element, "id", id, idSize)) {
     return false;
@@ -387,8 +381,7 @@ bool parseEntryHeader(JsonView element, char* id, size_t idSize, char* tag, size
 // #endregion FUNC_parseEntryHeader
 
 // #region FUNC_headerHasPrefix
-// PURPOSE: Case-insensitive header-name match for the three HTTP headers
-// this dialog inspects.
+// PURPOSE: Keeps framing checks limited to the headers this dialog trusts.
 bool headerHasPrefix(const char* line, const char* prefix) {
   size_t index = 0;
   for (; prefix[index] != '\0'; ++index) {
@@ -409,7 +402,7 @@ bool headerHasPrefix(const char* line, const char* prefix) {
 // #endregion FUNC_headerHasPrefix
 
 // #region FUNC_parseContentLength
-// PURPOSE: Parses the Content-Length value; returns false on non-digits.
+// PURPOSE: Rejects untrusted body lengths before they control reads.
 bool parseContentLength(const char* value, size_t& out) {
   size_t number = 0;
   if (*value == '\0') {

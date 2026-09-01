@@ -1,13 +1,13 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Provides validated access to the isolated appcfg NVS partition for
-// the Wi-Fi, web administrator, SMTP delivery, ZTE and onboard SIM7670G SMS
-// source configurations. This header re-exports the split modules for
-// backward compatibility so existing consumers keep a single include.
+// PURPOSE: Preserves one validated configuration include during store splits.
 // SCOPE:
 // - Re-exports network, SMTP, ZTE and modem-source stores and their runtime
 //   profiles.
 // - NOT: NVS access itself, network connections, protocol dialogs and HTTP
 //   handling — each split module owns its domain.
+// INVARIANTS:
+// - Including this header exposes the same split-store declarations
+//   without defining persistence or protocol behavior.
 // DEPRECATED: Prefer including the split headers (config_store_network.h,
 // config_store_smtp.h, config_store_zte.h, config_store_modem.h) directly;
 // this aggregator is kept only for backward compatibility and may be removed.

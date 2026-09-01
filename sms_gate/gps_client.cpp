@@ -1,5 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements host-testable GNSS AT dialog for SIM7670G (CGNSS).
+// PURPOSE: Keeps GNSS wire behavior testable before hardware I/O.
+// SCOPE:
+//   - Parses GNSS modem replies and implements bounded GNSS command dialogs.
+//   - NOT: Persisting GNSS policy or scheduling service tasks.
+// INVARIANTS:
+//   - Malformed modem replies do not produce accepted GNSS state.
+//   - Parsed timestamps and coordinates are converted before leaving the client boundary.
 // #endregion MODULE_CONTRACT
 
 #include "gps/gps_client.h"
@@ -25,7 +31,7 @@ constexpr int kGpsMaxLines = 20;
 }  // namespace
 
 // #region FUNC_parseCgnssPwrLine
-// PURPOSE: Parses +CGNSSPWR: 1/0.
+// PURPOSE: Keeps GNSS power decisions strict when modem replies are malformed.
 bool parseCgnssPwrLine(const char* line, bool& powered) {
   const char* p = strstr(line, "+CGNSSPWR:");
   if (p == nullptr) return false;
@@ -44,7 +50,7 @@ bool parseCgnssPwrLine(const char* line, bool& powered) {
 // #endregion FUNC_parseCgnssPwrLine
 
 // #region FUNC_parseCgnssModeLine
-// PURPOSE: Parses +CGNSSMODE: <mode>.
+// PURPOSE: Keeps receiver-mode decisions strict when modem replies are malformed.
 bool parseCgnssModeLine(const char* line, int& mode) {
   const char* p = strstr(line, "+CGNSSMODE:");
   if (p == nullptr) return false;
@@ -59,7 +65,7 @@ bool parseCgnssModeLine(const char* line, int& mode) {
 // #endregion FUNC_parseCgnssModeLine
 
 // #region FUNC_nmeaToDecimal
-// PURPOSE: Converts NMEA ddmm.mmmm + dir (N/S/E/W) to decimal degrees.
+// PURPOSE: Makes modem coordinates usable without carrying NMEA formatting downstream.
 double nmeaToDecimal(const char* nmea, char dir) {
   if (nmea == nullptr || nmea[0] == '\0') return 0.0;
   double raw = atof(nmea);
@@ -71,9 +77,8 @@ double nmeaToDecimal(const char* nmea, char dir) {
 }
 // #endregion FUNC_nmeaToDecimal
 
-// #region FUNC_gpsFixToIso
-// PURPOSE: Converts fix date (ddmmyy) + time (hhmmss.s) to ISO8601 UTC.
-// Returns false when fields are empty or malformed.
+// #region FUNC_gpsFixToEpochMs
+// PURPOSE: Turns a valid GNSS timestamp into epoch time for source arbitration.
 bool gpsFixToEpochMs(const GpsFixFields& fix, int64_t& epochMsOut) {
   if (fix.date[0] == '\0' || fix.utcTime[0] == '\0') return false;
   if (strlen(fix.date) != 6) return false;
@@ -105,7 +110,10 @@ bool gpsFixToEpochMs(const GpsFixFields& fix, int64_t& epochMsOut) {
   epochMsOut = epochSec * 1000LL + fix.timeMs;
   return true;
 }
+// #endregion FUNC_gpsFixToEpochMs
 
+// #region FUNC_gpsFixToIso
+// PURPOSE: Keeps GNSS timestamps consistent across status and forwarded email output.
 bool gpsFixToIso(const GpsFixFields& fix, char* out, size_t outSize) {
   if (fix.date[0] == '\0' || fix.utcTime[0] == '\0') return false;
   if (strlen(fix.date) != 6) return false;
@@ -136,8 +144,7 @@ bool gpsFixToIso(const GpsFixFields& fix, char* out, size_t outSize) {
 // #endregion FUNC_gpsFixToIso
 
 // #region FUNC_parseCgpsInfoLine
-// PURPOSE: Parses +CGPSINFO: <lat>,<N/S>,<lon>,<E/W>,<date>,<time>,<alt>,<speed>,<course>
-// Empty fields (,,,,) => no fix.
+// PURPOSE: Turns optional CGPSINFO data into a bounded fix snapshot, preserving no-fix state.
 bool parseCgpsInfoLine(const char* line, GpsFixFields& out) {
   out = GpsFixFields{};
   const char* p = strstr(line, "+CGPSINFO:");
@@ -237,12 +244,9 @@ bool parseCgpsInfoLine(const char* line, GpsFixFields& out) {
 // #endregion FUNC_parseCgpsInfoLine
 
 // #region FUNC_parseCgnssInfoLine
-// PURPOSE: Parses +CGNSSINFO by the SIM767xx AT manual V1.02 field order:
-// <mode>,<GPS-SVs>,<GLONASS-SVs>,<GALILEO-SVs>,<BEIDOU-SVs>,<lat>,<N/S>,
-// <log>,<E/W>,<date>,<UTC>,<alt>,<speed>,<course>,<PDOP>,<HDOP>,<VDOP>,<NoSV>.
+// PURPOSE: Preserves positional constellation fields so status uses the right satellite counts.
 // The *-SVs fields are visible satellites per constellation; NoSV counts the
-// satellites involved in positioning. Empty fields are positional: a dropped
-// field would shift every later index.
+// satellites involved in positioning. Empty fields remain positional.
 bool parseCgnssInfoLine(const char* line, GpsSatsInfo& out) {
   const char* p = strstr(line, "+CGNSSINFO");
   if (p == nullptr) return false;
@@ -282,16 +286,19 @@ bool parseCgnssInfoLine(const char* line, GpsSatsInfo& out) {
 }
 // #endregion FUNC_parseCgnssInfoLine
 
-// #region CLASS_GpsClient
+// #region METHOD_GpsClient_GpsClient
+// PURPOSE: Binds one GNSS dialog instance to a channel and scratch buffer.
 GpsClient::GpsClient(ModemChannel& channel, char* scratch, size_t scratchSize)
     : channel_(channel), scratch_(scratch), scratchSize_(scratchSize) {}
-// #endregion CLASS_GpsClient
+// #endregion METHOD_GpsClient_GpsClient
 
 // #region METHOD_GpsClient_fail
+// PURPOSE: Stores a stable failure stage without exposing modem data.
 void GpsClient::fail(const char* stage) { failedStage_ = stage; }
 // #endregion METHOD_GpsClient_fail
 
 // #region METHOD_GpsClient_sendCommand
+// PURPOSE: Starts each GNSS command from a clean channel boundary.
 GpsResult GpsClient::sendCommand(const char* cmd, unsigned long timeoutMs) {
   (void)timeoutMs;
   channel_.purge();
@@ -313,6 +320,7 @@ GpsResult GpsClient::sendCommand(const char* cmd, unsigned long timeoutMs) {
 // #endregion METHOD_GpsClient_sendCommand
 
 // #region METHOD_GpsClient_readResponse
+// PURPOSE: Collects bounded GNSS replies for parser and status updates.
 GpsResult GpsClient::readResponse() {
   if (scratch_ == nullptr || scratchSize_ == 0) {
     fail("no_scratch");
@@ -378,6 +386,7 @@ GpsResult GpsClient::restart() {
 // #endregion METHOD_GpsClient_restart
 
 // #region METHOD_GpsClient_ensurePowered
+// PURPOSE: Makes GNSS power state explicit before a poll.
 GpsResult GpsClient::ensurePowered() {
   // This firmware targets the Classic board, whose active GNSS antenna is wired
   // to modem GPIO4. GPIO1 commands can return OK but only drive the Standard
@@ -448,6 +457,7 @@ power_on:
 // #endregion METHOD_GpsClient_ensurePowered
 
 // #region METHOD_GpsClient_poll
+// PURPOSE: Produces one complete GNSS snapshot for the service.
 GpsResult GpsClient::poll(GpsStatus& out) {
   GpsStatus tmp;
   tmp.present = false;

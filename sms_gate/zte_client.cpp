@@ -1,16 +1,16 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements the host-testable ZTE MF79RU goform dialog over any
-// ZteChannel, reproducing the hardware-proven request sequence of the
-// reference forwarder (see ADR-0003 and RESEARCH notes in the forwarder
-// project): one HTTP/1.1 request per command, mandatory Referer, stok
-// cookie session, AD = md5(md5(cr_version+wa_inner_version) + RD), a
-// lenient JSON scanner because the B02 firmware emits raw control
-// characters inside string values, and the SEND_SMS shape documented from
-// the modem's own web UI (ZxicSmsFwd's proven client matches it).
-// INVARIANTS: Every exit path stops the channel; credentials never appear
-// in stage names or error paths; every failure is traceable to one stage;
-// paging stays bounded by kZteMaxPages; send bodies stay within the modem
-// web UI's own UNICODE limit.
+// PURPOSE: Keeps ZTE SMS wire behavior testable and bounded off hardware.
+// SCOPE:
+// - Formats ZTE fields and drives bounded modem-web status, polling, and SMS
+//   dialogs over ZteChannel.
+// - NOT: Socket transport ownership, persisted configuration, task scheduling,
+//   and HTTP rendering.
+// INVARIANTS:
+// - Every exit path stops the channel;
+// - credentials never appear in stage names or error paths;
+// - every failure is traceable to one stage;
+// - paging stays bounded by kZteMaxPages;
+// - send bodies stay within the modem web UI's own UNICODE limit.
 // #endregion MODULE_CONTRACT
 
 #include "zte/zte_client.h"
@@ -73,9 +73,8 @@ bool formatZteDate(const char* raw, char* out, size_t outSize) {
 size_t zteSmsUtf16Units(const char* utf8) { return smsUtf16Units(utf8); }
 // #endregion FUNC_zteSmsUtf16Units
 
-// #region FUNC_ZteModem_ZteModem
-// PURPOSE: Binds one dialog instance to one channel and response scratch
-// buffer for its lifetime.
+// #region METHOD_ZteModem_ZteModem
+// PURPOSE: Gives each dialog one isolated channel and bounded response workspace.
 ZteModem::ZteModem(ZteChannel& channel, char* scratch, size_t scratchSize)
     : channel_(channel), scratch_(scratch), scratchSize_(scratchSize) {
   host_[0] = '\0';
@@ -83,14 +82,14 @@ ZteModem::ZteModem(ZteChannel& channel, char* scratch, size_t scratchSize)
   cookie_[0] = '\0';
   waVersion_[0] = '\0';
 }
-// #endregion FUNC_ZteModem_ZteModem
+// #endregion METHOD_ZteModem_ZteModem
 
-// #region FUNC_ZteModem_fail
-// PURPOSE: Records the stable stage token of the last failure.
+// #region METHOD_ZteModem_fail
+// PURPOSE: Keeps failures diagnosable without exposing credentials or raw replies.
 void ZteModem::fail(const char* stage) { failedStage_ = stage; }
-// #endregion FUNC_ZteModem_fail
+// #endregion METHOD_ZteModem_fail
 
-// #region FUNC_ZteModem_requestPost
+// #region METHOD_ZteModem_requestPost
 // PURPOSE: Sends one POST to goform_set_cmd_process with the mandatory
 // Referer header, the session cookie when present, and Connection: close,
 // then reads the response into the scratch buffer; the buffer fits the
@@ -141,9 +140,9 @@ ZteResult ZteModem::requestPost(const char* formBody) {
   channel_.stop();
   return result;
 }
-// #endregion FUNC_ZteModem_requestPost
+// #endregion METHOD_ZteModem_requestPost
 
-// #region FUNC_ZteModem_requestGet
+// #region METHOD_ZteModem_requestGet
 // PURPOSE: Sends one GET to goform_get_cmd_process with the same mandatory
 // headers and reads the response into the scratch buffer.
 ZteResult ZteModem::requestGet(const char* query) {
@@ -188,9 +187,9 @@ ZteResult ZteModem::requestGet(const char* query) {
   channel_.stop();
   return result;
 }
-// #endregion FUNC_ZteModem_requestGet
+// #endregion METHOD_ZteModem_requestGet
 
-// #region FUNC_ZteModem_readResponse
+// #region METHOD_ZteModem_readResponse
 // PURPOSE: Consumes one HTTP response: requires 200, captures the stok
 // cookie, and fills the scratch buffer with the exact body (or until EOF
 // when Content-Length is absent).
@@ -292,9 +291,9 @@ ZteResult ZteModem::readResponse() {
   bodyLength_ = used;
   return ZteResult::kSuccess;
 }
-// #endregion FUNC_ZteModem_readResponse
+// #endregion METHOD_ZteModem_readResponse
 
-// #region FUNC_ZteModem_loginSession
+// #region METHOD_ZteModem_loginSession
 // PURPOSE: Performs one LOGIN with the base64 password and immediately
 // loads the firmware versions, mirroring the reference sequence.
 ZteResult ZteModem::loginSession() {
@@ -322,9 +321,9 @@ ZteResult ZteModem::loginSession() {
   }
   return requestVersions();
 }
-// #endregion FUNC_ZteModem_loginSession
+// #endregion METHOD_ZteModem_loginSession
 
-// #region FUNC_ZteModem_openSession
+// #region METHOD_ZteModem_openSession
 // PURPOSE: Opens a session with one retry when the versions answer arrives
 // stale, matching the reference forwarder's single relogin.
 ZteResult ZteModem::openSession() {
@@ -334,9 +333,9 @@ ZteResult ZteModem::openSession() {
   }
   return result;
 }
-// #endregion FUNC_ZteModem_openSession
+// #endregion METHOD_ZteModem_openSession
 
-// #region FUNC_ZteModem_requestVersions
+// #region METHOD_ZteModem_requestVersions
 // PURPOSE: Loads cr_version and wa_inner_version whose concatenation feeds
 // the AD token; an absent version marks the session unusable.
 ZteResult ZteModem::requestVersions() {
@@ -360,18 +359,18 @@ ZteResult ZteModem::requestVersions() {
   }
   return ZteResult::kSuccess;
 }
-// #endregion FUNC_ZteModem_requestVersions
+// #endregion METHOD_ZteModem_requestVersions
 
-// #region FUNC_ZteModem_login
+// #region METHOD_ZteModem_login
 // PURPOSE: Stores the credentials and opens the first session.
 ZteResult ZteModem::login(const char* host, const char* password) {
   snprintf(host_, sizeof(host_), "%s", host);
   snprintf(password_, sizeof(password_), "%s", password);
   return openSession();
 }
-// #endregion FUNC_ZteModem_login
+// #endregion METHOD_ZteModem_login
 
-// #region FUNC_ZteModem_fetchRd
+// #region METHOD_ZteModem_fetchRd
 // PURPOSE: Reads one fresh RD token in the current session, relogging in
 // once when the answer arrives stale.
 ZteResult ZteModem::fetchRd(char* rd, size_t rdSize) {
@@ -393,11 +392,10 @@ ZteResult ZteModem::fetchRd(char* rd, size_t rdSize) {
   fail("rd");
   return ZteResult::kStaleSession;
 }
-// #endregion FUNC_ZteModem_fetchRd
+// #endregion METHOD_ZteModem_fetchRd
 
-// #region FUNC_ZteModem_fetchAd
-// PURPOSE: Builds the AD anti-CSRF token shared by every set command
-// (AD = md5(md5(wa_version) + RD)) from one fresh RD token.
+// #region METHOD_ZteModem_fetchAd
+// PURPOSE: Keeps every state-changing request protected by the current session token.
 ZteResult ZteModem::fetchAd(char* ad, size_t adSize) {
   if (adSize < 33) {
     fail("ad");
@@ -415,9 +413,9 @@ ZteResult ZteModem::fetchAd(char* ad, size_t adSize) {
   codec::md5Hex(concatenated, strlen(concatenated), ad);
   return ZteResult::kSuccess;
 }
-// #endregion FUNC_ZteModem_fetchAd
+// #endregion METHOD_ZteModem_fetchAd
 
-// #region FUNC_ZteModem_fetchSmsPage
+// #region METHOD_ZteModem_fetchSmsPage
 // PURPOSE: Requests one device-storage list into the scratch buffer with a
 // caller-selected modem tag filter, relogging once when the modem answers
 // the stale empty shape. B02 ignores page, so callers that delete records
@@ -451,9 +449,9 @@ ZteResult ZteModem::fetchSmsPage(unsigned int page, const char* tags) {
   fail("sms_list");
   return ZteResult::kStaleSession;
 }
-// #endregion FUNC_ZteModem_fetchSmsPage
+// #endregion METHOD_ZteModem_fetchSmsPage
 
-// #region FUNC_ZteModem_scanOldest
+// #region METHOD_ZteModem_scanOldest
 // PURPOSE: Walks the inbox pages and captures the oldest incoming SMS,
 // auto-detecting the effective ordering from consecutive IDs so a firmware
 // that ignores the requested ascending order still yields the oldest
@@ -514,9 +512,9 @@ ZteResult ZteModem::scanOldest(ZteSms& out, bool& found) {
   }
   return ZteResult::kSuccess;  // Page cap reached; retry continues next poll.
 }
-// #endregion FUNC_ZteModem_scanOldest
+// #endregion METHOD_ZteModem_scanOldest
 
-// #region FUNC_ZteModem_findOldestIncoming
+// #region METHOD_ZteModem_findOldestIncoming
 // PURPOSE: Ensures a session exists, then scans for the oldest incoming SMS.
 ZteResult ZteModem::findOldestIncoming(ZteSms& out, bool& found) {
   if (!hasSession()) {
@@ -527,9 +525,9 @@ ZteResult ZteModem::findOldestIncoming(ZteSms& out, bool& found) {
   }
   return scanOldest(out, found);
 }
-// #endregion FUNC_ZteModem_findOldestIncoming
+// #endregion METHOD_ZteModem_findOldestIncoming
 
-// #region FUNC_ZteModem_findOutgoing
+// #region METHOD_ZteModem_findOutgoing
 // PURPOSE: Finds one terminal outgoing record (tag 2 sent or tag 3 failed)
 // across bounded device-storage pages. The caller deletes it and scans again
 // from page zero, so page shifts caused by deletion cannot skip a record.
@@ -570,9 +568,9 @@ ZteResult ZteModem::findOutgoing(const char* tag, char* id, size_t idSize, bool&
   }
   return ZteResult::kSuccess;
 }
-// #endregion FUNC_ZteModem_findOutgoing
+// #endregion METHOD_ZteModem_findOutgoing
 
-// #region FUNC_ZteModem_verifyAbsent
+// #region METHOD_ZteModem_verifyAbsent
 // PURPOSE: Confirms a deleted ID disappeared from the same filter that
 // selected it. B02 ignores page, but a selected record must remain in this
 // filter's first page if DELETE_SMS did not remove it.
@@ -614,9 +612,9 @@ ZteResult ZteModem::verifyAbsent(const char* targetId, const char* tags) {
   }
   return ZteResult::kSuccess;
 }
-// #endregion FUNC_ZteModem_verifyAbsent
+// #endregion METHOD_ZteModem_verifyAbsent
 
-// #region FUNC_ZteModem_deleteMessage
+// #region METHOD_ZteModem_deleteMessage
 // PURPOSE: Deletes one validated message ID with a fresh AD token and
 // verifies it disappeared so a silently failed delete cannot be assumed
 // complete by either the incoming forwarder or outgoing cleanup.
@@ -653,15 +651,15 @@ ZteResult ZteModem::deleteMessage(const char* id, const char* verifyTags) {
   }
   return verifyAbsent(id, verifyTags);
 }
-// #endregion FUNC_ZteModem_deleteMessage
+// #endregion METHOD_ZteModem_deleteMessage
 
-// #region FUNC_ZteModem_deleteSms
+// #region METHOD_ZteModem_deleteSms
 // PURPOSE: Keeps the incoming-forwarding contract focused on one captured
 // SMS while sharing the proven delete-and-verify operation with cleanup.
 ZteResult ZteModem::deleteSms(const ZteSms& sms) { return deleteMessage(sms.id, "10"); }
-// #endregion FUNC_ZteModem_deleteSms
+// #endregion METHOD_ZteModem_deleteSms
 
-// #region FUNC_ZteModem_cleanupOutgoing
+// #region METHOD_ZteModem_cleanupOutgoing
 // PURPOSE: Reclaims all final outgoing records after a terminal send result.
 // B02 ignores page, so each tag-specific page-zero response is a bounded
 // work queue: after a verified deletion the next matching ID shifts into it.
@@ -698,10 +696,10 @@ ZteResult ZteModem::cleanupOutgoing(uint16_t& deleted) {
   }
   return ZteResult::kSuccess;
 }
-// #endregion FUNC_ZteModem_cleanupOutgoing
+// #endregion METHOD_ZteModem_cleanupOutgoing
 
-// #region FUNC_ZteModem_readInboxStatus
-// PURPOSE: Reads the device-storage occupancy for the operator test route.
+// #region METHOD_ZteModem_readInboxStatus
+// PURPOSE: Gives operators bounded storage health without exposing modem internals.
 ZteResult ZteModem::readInboxStatus(ZteInboxStatus& out) {
   ZteResult result = requestGet("isTest=false&cmd=sms_capacity_info");
   if (result != ZteResult::kSuccess) {
@@ -725,13 +723,10 @@ ZteResult ZteModem::readInboxStatus(ZteInboxStatus& out) {
   out.total = static_cast<uint16_t>(totalValue);
   return ZteResult::kSuccess;
 }
-// #endregion FUNC_ZteModem_readInboxStatus
+// #endregion METHOD_ZteModem_readInboxStatus
 
 // #region FUNC_buildSmsTimeString
-// PURPOSE: Renders the sms_time field in the shape the modem's own web UI
-// sends (yy;mm;dd;HH;MM;SS;+tz with an unpadded hour offset like the
-// browser's "+3"). Without a synced clock the epoch placeholder goes out
-// instead of a wrong wall-clock guess.
+// PURPOSE: Prevents outbound SMS timestamps from using an unsynchronized wall-clock guess.
 void buildSmsTimeString(char* out, size_t outSize) {
   const time_t now = time(nullptr);
   if (now < kEpochSynced) {  // Before 2020-01-01: no synced clock available.
@@ -745,7 +740,7 @@ void buildSmsTimeString(char* out, size_t outSize) {
 }
 // #endregion FUNC_buildSmsTimeString
 
-// #region FUNC_ZteModem_sendSms
+// #region METHOD_ZteModem_sendSms
 // PURPOSE: Sends one SMS with the request shape documented from the modem's
 // own web UI and proven by the reference clients: a fresh AD token, the
 // percent-escaped Number and sms_time, the UCS-2-hex MessageBody, ID=-1,
@@ -836,13 +831,10 @@ ZteResult ZteModem::sendSms(const char* number, const char* textUtf8) {
   }
   return ZteResult::kSuccess;
 }
-// #endregion FUNC_ZteModem_sendSms
+// #endregion METHOD_ZteModem_sendSms
 
-// #region FUNC_ZteModem_readSendStatus
-// PURPOSE: Reads one sampled outcome of the modem's asynchronous send
-// command (sms_cmd=4): "3" completed, "2" failed, anything else (including
-// the field's absence once the command clears) counts as still in progress,
-// so the caller's bounded wait is the only timeout source.
+// #region METHOD_ZteModem_readSendStatus
+// PURPOSE: Keeps send polling conservative so acceptance is not mistaken for delivery.
 ZteResult ZteModem::readSendStatus(ZteSendStatus& out) {
   out = ZteSendStatus::kInProgress;
   ZteResult result = requestGet("isTest=false&cmd=sms_cmd_status_info&sms_cmd=4");
@@ -862,4 +854,4 @@ ZteResult ZteModem::readSendStatus(ZteSendStatus& out) {
   }
   return ZteResult::kSuccess;
 }
-// #endregion FUNC_ZteModem_readSendStatus
+// #endregion METHOD_ZteModem_readSendStatus

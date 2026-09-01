@@ -1,7 +1,5 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Provides UCS-2 hex helpers for SMS text so ZTE and SIM7670G
-// dialogs share one UTF-8 ↔ UCS-2 conversion without duplicating MD5 or
-// base64 logic.
+// PURPOSE: Keeps UTF-8/UCS-2 SMS conversion identical across modem paths.
 // SCOPE:
 // - Hex digit check, parseHex4, UTF-8 appender (appendUtf8), UCS-2 hex
 // validation (isUcs2HexView), hex→UTF-8 decoding (decodeUcs2HexView) with
@@ -127,9 +125,6 @@ inline size_t decodeUcs2HexView(const char* hex, char* out, size_t outSize) {
 }
 // #endregion FUNC_decodeUcs2HexView
 
-// #region FUNC_encodeUcs2Hex
-// PURPOSE: Encodes validated UTF-8 text as UCS2 hex (4 hex per UTF-16 code
-// unit, surrogate pairs for astral codepoints), truncating at outSize.
 inline void appendUcs2HexUnitInternal(uint16_t unit, char* out, size_t outSize, size_t& used) {
   static const char kHex[] = "0123456789ABCDEF";
   for (int shift = 12; shift >= 0 && used + 1 < outSize; shift -= 4)
@@ -166,6 +161,9 @@ inline bool decodeUtf8OneForEncode(const char*& p, uint32_t& out) {
   if (out < min || out > 0x10FFFF || (out >= 0xD800 && out <= 0xDFFF)) return false;
   return true;
 }
+
+// #region FUNC_encodeUcs2Hex
+// PURPOSE: Encodes UTF-8 text as UCS-2 hex for modem SMS payloads.
 inline size_t encodeUcs2Hex(const char* utf8, char* out, size_t outSize) {
   if (utf8 == nullptr || out == nullptr || outSize == 0) return 0;
   size_t used = 0;

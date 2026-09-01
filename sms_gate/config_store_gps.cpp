@@ -1,5 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements GpsConfigStore so the sketch only drives load/save.
+// PURPOSE: Preserves GNSS settings so recovery can clear them independently.
+// SCOPE:
+//   - Loads, validates, migrates, and saves the GNSS profile in its NVS namespace.
+//   - NOT: Polling GNSS hardware or scheduling GNSS work.
+// INVARIANTS:
+//   - Only checksummed current-version records populate runtime settings.
+//   - Invalid poll intervals are replaced with the GNSS default before persistence.
 // #endregion MODULE_CONTRACT
 
 #include "persistence/config_store_gps.h"
@@ -12,7 +18,7 @@ constexpr char kGpsNamespace[] = "gps";
 }  // namespace
 
 // #region FUNC_buildGpsRecord
-// PURPOSE: Converts runtime GNSS profile into checksummed binary record.
+// PURPOSE: Gives persistence one validated representation of the GNSS profile.
 GpsRecord buildGpsRecord(const RuntimeGpsConfig& config) {
   GpsRecord record{};
   record.magic = kGpsMagic;
@@ -29,6 +35,8 @@ GpsRecord buildGpsRecord(const RuntimeGpsConfig& config) {
 }
 // #endregion FUNC_buildGpsRecord
 
+// #region METHOD_GpsConfigStore_migrateV2Record
+// PURPOSE: Upgrades a valid legacy GNSS blob without losing its settings.
 bool GpsConfigStore::migrateV2Record(size_t readLength) const {
   if (readLength != sizeof(GpsRecordV2)) return false;
   Preferences preferences;
@@ -56,9 +64,10 @@ bool GpsConfigStore::migrateV2Record(size_t readLength) const {
                 persisted ? "true" : "false");
   return persisted;
 }
+// #endregion METHOD_GpsConfigStore_migrateV2Record
 
-// #region FUNC_GpsConfigStore_load
-// PURPOSE: Restores GNSS profile only as whole validated record.
+// #region METHOD_GpsConfigStore_load
+// PURPOSE: Keeps corrupt or partial GNSS settings out of polling.
 bool GpsConfigStore::load(RuntimeGpsConfig& config) const {
   Serial.printf("event=gps_load_begin partition=%s\n", kAppCfgPartition);
   Preferences preferences;
@@ -88,10 +97,10 @@ bool GpsConfigStore::load(RuntimeGpsConfig& config) const {
                 config.timeSyncEnabled ? "true" : "false");
   return true;
 }
-// #endregion FUNC_GpsConfigStore_load
+// #endregion METHOD_GpsConfigStore_load
 
-// #region FUNC_GpsConfigStore_save
-// PURPOSE: Persists GNSS profile only after validation.
+// #region METHOD_GpsConfigStore_save
+// PURPOSE: Commits only valid GNSS settings so reboot cannot restore unsafe policy.
 bool GpsConfigStore::save(const RuntimeGpsConfig& config) const {
   Serial.println("event=gps_save_begin");
   const GpsRecord record = buildGpsRecord(config);
@@ -111,4 +120,4 @@ bool GpsConfigStore::save(const RuntimeGpsConfig& config) const {
                 static_cast<unsigned>(writtenLength));
   return saved;
 }
-// #endregion FUNC_GpsConfigStore_save
+// #endregion METHOD_GpsConfigStore_save

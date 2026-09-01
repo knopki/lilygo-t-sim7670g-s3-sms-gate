@@ -1,8 +1,10 @@
 /**
  * #region moduleContract
- * @purpose Admin page logic: administrator password change plus the
- *   watchdog status block with its safe-mode exit action.
- * @scope /admin only; NOT: shared helpers or other pages.
+ * @modulecontract
+ * @purpose Keeps administrator credentials and safe-mode recovery manageable.
+ * @scope
+ * - /admin page;
+ * - NOT: shared runtime.
  * #endregion moduleContract
  */
 
@@ -19,6 +21,10 @@ import {
 const passwordForm = document.getElementById("password-form");
 const clearButton = document.getElementById("watchdog-clear");
 
+// #region FUNC_formatDuration
+/**
+ * @purpose Presents elapsed device time in a compact operator-friendly form.
+ */
 function formatDuration(ms) {
 	if (!Number.isFinite(ms) || ms < 0) {
 		return "—";
@@ -31,6 +37,7 @@ function formatDuration(ms) {
 	const hhmmss = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 	return days > 0 ? `${days} d ${hhmmss}` : hhmmss;
 }
+// #endregion FUNC_formatDuration
 
 // Mirrors esp_reset_reason_t (esp_system.h, Arduino-ESP32 3.3.11), 0-based.
 const RESET_REASONS = [
@@ -52,6 +59,10 @@ const RESET_REASONS = [
 	"CPU lockup reset",
 ];
 
+// #region FUNC_describeResetReason
+/**
+ * @purpose Makes reset diagnostics understandable without losing the raw code.
+ */
 function describeResetReason(code) {
 	if (!Number.isFinite(code)) {
 		return "—";
@@ -59,7 +70,12 @@ function describeResetReason(code) {
 	const reason = RESET_REASONS[code];
 	return reason ? `${reason} (${code})` : `Unknown (${code})`;
 }
+// #endregion FUNC_describeResetReason
 
+// #region FUNC_loadWatchdog
+/**
+ * @purpose Keeps the recovery view aligned with the device watchdog state.
+ */
 async function loadWatchdog() {
 	const { response, payload } = await apiFetch("/api/watchdog");
 	if (!response.ok || !payload) {
@@ -74,6 +90,7 @@ async function loadWatchdog() {
 	});
 	clearButton.hidden = payload.safe_mode !== true;
 }
+// #endregion FUNC_loadWatchdog
 
 passwordForm.addEventListener("submit", (event) => {
 	event.preventDefault();

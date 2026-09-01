@@ -1,8 +1,8 @@
 /**
  * #region moduleContract
- * @purpose Time Sync page logic: TimeSync status polling and the NTP
- *   server form backed by GET/POST /api/ntp.
- * @scope /time only; NOT: shared helpers or other pages.
+ * @modulecontract
+ * @purpose Lets operators inspect synchronization health and control NTP input.
+ * @scope /time page; NOT: shared runtime.
  * #endregion moduleContract
  */
 
@@ -30,13 +30,22 @@ const syncForm = bindFieldDependencies(ntpForm, {
 	ntp_server2: "ntp_enabled",
 });
 
+// #region FUNC_formatUtc
+/**
+ * @purpose Gives synchronization timestamps a stable operator-readable form.
+ */
 function formatUtc(epochMs) {
 	if (!Number.isFinite(epochMs) || epochMs <= 0) {
 		return "—";
 	}
 	return `${new Date(epochMs).toISOString().slice(0, 19).replace("T", " ")} UTC`;
 }
+// #endregion FUNC_formatUtc
 
+// #region FUNC_loadTime
+/**
+ * @purpose Keeps synchronization health visible without stale readings.
+ */
 async function loadTime() {
 	const { response, payload } = await apiFetch("/api/time");
 	if (!response.ok || !payload) {
@@ -53,7 +62,12 @@ async function loadTime() {
 			: "inactive",
 	});
 }
+// #endregion FUNC_loadTime
 
+// #region FUNC_loadConfig
+/**
+ * @purpose Restores NTP controls so changes start from device state.
+ */
 async function loadConfig() {
 	const { response, payload } = await apiFetch("/api/ntp");
 	if (!response.ok || !payload) {
@@ -66,6 +80,7 @@ async function loadConfig() {
 	});
 	syncForm();
 }
+// #endregion FUNC_loadConfig
 
 ntpForm.addEventListener("submit", (event) => {
 	event.preventDefault();

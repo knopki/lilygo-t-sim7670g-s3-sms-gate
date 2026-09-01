@@ -1,16 +1,9 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Owns the GNSS polling lifecycle (NVS profile, status poll and time
-// sync) so the main firmware only drives sync and HTTP delegation.
+// PURPOSE: Keeps GNSS lifecycle and polling outside the firmware shell.
 // SCOPE:
-// - GpsConfigStore load/save, WebGpsConfig snapshot, form validation,
-//   poll interval, status cache, the gps_poll task, and CGNSS dialog via
-//   GpsClient (antenna bias + CGNSSPWR + CGNSSMODE + CGPSINFO/CGNSSINFO).
-// - NOT: Wi-Fi lifecycle, ZTE goform, SIM SMS, HTTP route registration.
-// INVARIANTS: Serial1 accessed only while holding modem_lock mutex;
-// status cache is portMUX-protected and never exposes lock across String;
-// credentials never logged; at most one GNSS poll owns Serial1.
-// DEPENDENCIES: Uses GpsClient, ModemTransport, GpsConfigStore, ConfigStore,
-// WebApi and task_control.
+// - Profile persistence, status projection, form validation, and polling.
+// - NOT: Wi-Fi, other modem sources, HTTP routes, or clock arbitration.
+// INVARIANTS: Serial1 has one owner; status snapshots are consistent; secrets never enter logs.
 // #endregion MODULE_CONTRACT
 
 #pragma once
@@ -27,27 +20,77 @@
 #include "system/web_api.h"
 
 // #region CLASS_GpsService
-// PURPOSE: Encapsulates the GNSS source state and its poll task.
+// PURPOSE: Keeps GNSS lifecycle decisions out of the firmware shell.
 class GpsService {
  public:
   GpsService();
+  // #region METHOD_GpsService_load
+  // PURPOSE: Makes the saved GNSS policy available before task control.
   bool load();
+  // #endregion METHOD_GpsService_load
+
+  // #region METHOD_GpsService_save
+  // PURPOSE: Keeps validated GNSS policy across reboot.
   bool save(const RuntimeGpsConfig& candidate);
+  // #endregion METHOD_GpsService_save
   bool isLoaded() const { return loaded_; }
   const RuntimeGpsConfig& config() const { return stored_; }
+  // #region METHOD_GpsService_webConfig
+  // PURPOSE: Lets the UI inspect GNSS policy without store access.
   WebGpsConfig webConfig() const;
+  // #endregion METHOD_GpsService_webConfig
+
+  // #region METHOD_GpsService_webStatus
+  // PURPOSE: Lets the UI inspect GNSS state without modem access.
   WebGpsStatus webStatus() const;
+  // #endregion METHOD_GpsService_webStatus
+
+  // #region METHOD_GpsService_readForm
+  // PURPOSE: Prevents invalid GNSS policy from reaching persistence.
   bool readForm(WebServer& server, RuntimeGpsConfig& out, String& error);
+  // #endregion METHOD_GpsService_readForm
+  // #region METHOD_GpsService_pollIntervalMs
+  // PURPOSE: Converts the profile interval into a safe scheduler delay.
   unsigned long pollIntervalMs() const;
+  // #endregion METHOD_GpsService_pollIntervalMs
+
+  // #region METHOD_GpsService_publishStatus
+  // PURPOSE: Publishes a GNSS snapshot without exposing the modem channel.
   void publishStatus(const GpsStatus& status);
+  // #endregion METHOD_GpsService_publishStatus
+
+  // #region METHOD_GpsService_readStatus
+  // PURPOSE: Gives consumers one consistent GNSS snapshot.
   GpsStatus readStatus() const;
+  // #endregion METHOD_GpsService_readStatus
+
   bool isPollActive() const { return pollActive_; }
+
+  // #region METHOD_GpsService_shouldRunTask
+  // PURPOSE: Gates task creation on a loaded, enabled GNSS profile.
   bool shouldRunTask() const;
+  // #endregion METHOD_GpsService_shouldRunTask
+
+  // #region METHOD_GpsService_shouldPoll
+  // PURPOSE: Gates polling on the profile's module and poll switches.
   bool shouldPoll() const;
+  // #endregion METHOD_GpsService_shouldPoll
+
+  // #region METHOD_GpsService_shouldTimeSync
+  // PURPOSE: Gates GNSS clock feeding on an active poll profile.
   bool shouldTimeSync() const;
+  // #endregion METHOD_GpsService_shouldTimeSync
+
   void setTimeSync(TimeSync* timeSync) { timeSync_ = timeSync; }
+  // #region METHOD_GpsService_syncTask
+  // PURPOSE: Applies profile changes without rebooting the gateway.
   void syncTask();
+  // #endregion METHOD_GpsService_syncTask
+
+  // #region METHOD_GpsService_stopTask
+  // PURPOSE: Releases Serial1 before another service needs it.
   bool stopTask();
+  // #endregion METHOD_GpsService_stopTask
 
  private:
   GpsConfigStore store_;

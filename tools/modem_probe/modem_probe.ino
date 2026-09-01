@@ -1,3 +1,14 @@
+// #region MODULE_CONTRACT
+// PURPOSE: Exposes modem capabilities and a passthrough so hardware behavior
+// can be diagnosed before firmware changes.
+// SCOPE:
+// - Detects board pin maps, queries SIM7670G identity, network, and SMS
+//   capabilities, then provides USB CDC-to-UART passthrough.
+// INVARIANTS:
+// - Capability queries run only after an AT-ready variant is found;
+// - probe output uses structured events and never includes credentials.
+// #endregion MODULE_CONTRACT
+
 // Temporary hardware probe for the onboard SIM7670G modem (not part of the
 // firmware). Auto-detects the board variant (Classic vs Standard pin maps),
 // powers the modem up over UART1, and dumps identification plus network/SMS
@@ -30,6 +41,8 @@ constexpr BoardVariant kVariants[] = {
 
 String modemReplyBuffer;
 
+// #region FUNC_readModemResponse
+// PURPOSE: Keeps probe decisions bounded and based on complete modem replies.
 String readModemResponse(unsigned long timeoutMs) {
     String response;
     const unsigned long deadline = millis() + timeoutMs;
@@ -46,6 +59,10 @@ String readModemResponse(unsigned long timeoutMs) {
     return response;
 }
 
+// #endregion FUNC_readModemResponse
+
+// #region FUNC_modemAlive
+// PURPOSE: Prevents capability queries from running against an unresponsive pin map.
 bool modemAlive() {
     for (int attempt = 0; attempt < 10; ++attempt) {
         SerialAT.print("AT\r\n");
@@ -57,6 +74,10 @@ bool modemAlive() {
     return false;
 }
 
+// #endregion FUNC_modemAlive
+
+// #region FUNC_query
+// PURPOSE: Keeps capability evidence searchable and safe to read in logs.
 void query(const __FlashStringHelper* event, const char* command) {
     SerialAT.print(command);
     SerialAT.print("\r\n");
@@ -73,7 +94,10 @@ void query(const __FlashStringHelper* event, const char* command) {
     Serial.println("\"");
 }
 
-// Returns true when the modem answers AT on this variant's pins.
+// #endregion FUNC_query
+
+// #region FUNC_tryVariant
+// PURPOSE: Prevents later capability observations from using the wrong board variant.
 bool tryVariant(const BoardVariant& variant) {
     pinMode(variant.dtrPin, OUTPUT); // keep modem awake
     digitalWrite(variant.dtrPin, LOW);
@@ -183,6 +207,10 @@ bool tryVariant(const BoardVariant& variant) {
     return false;
 }
 
+// #endregion FUNC_tryVariant
+
+// #region FUNC_setup
+// PURPOSE: Makes modem bring-up observable before firmware integration.
 void setup() {
     Serial.begin(115200);
     const unsigned long usbDeadline = millis() + kUsbWaitMs;
@@ -200,6 +228,10 @@ void setup() {
         "event=modem_unreachable variants_tried=standard,classic");
 }
 
+// #endregion FUNC_setup
+
+// #region FUNC_loop
+// PURPOSE: Keeps manual modem recovery available after automated probing.
 void loop() {
     if (SerialAT.available()) {
         Serial.write(SerialAT.read());
@@ -209,3 +241,4 @@ void loop() {
     }
     delay(1);
 }
+// #endregion FUNC_loop

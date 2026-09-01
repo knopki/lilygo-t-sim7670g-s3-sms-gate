@@ -1,7 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Host test for sms_validate shared helpers — recipient rule and
-// UTF-16 unit counting. Guards the 335-unit modem limit and the optional
-// leading plus that both ZTE and SIM7670G send paths rely on.
+// PURPOSE: Locks shared SMS validation so both modem paths reject unsafe input identically.
+// SCOPE:
+// - Tests recipient syntax and UTF-8-to-UTF-16 unit counting,
+//   including malformed sequences and message-length boundaries.
+// INVARIANTS:
+// - Valid recipients are digit-only with an optional leading plus;
+// - invalid UTF-8 always returns the shared invalid-unit sentinel.
 // #endregion MODULE_CONTRACT
 #include <cassert>
 #include <cstdio>
@@ -11,7 +15,15 @@
 static int tests_run = 0;
 static int tests_pass = 0;
 
-#define EXPECT(cond, msg) do { ++tests_run; if (cond) { ++tests_pass; } else { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, msg); } } while(0)
+#define EXPECT(cond, msg)                                 \
+  do {                                                    \
+    ++tests_run;                                          \
+    if (cond) {                                           \
+      ++tests_pass;                                       \
+    } else {                                              \
+      printf("FAIL %s:%d %s\n", __FILE__, __LINE__, msg); \
+    }                                                     \
+  } while (0)
 
 int main() {
   // isValidSmsRecipient
@@ -37,7 +49,7 @@ int main() {
   // BMP
   EXPECT(smsUtf16Units("café") == 4, "utf8 2-byte c3a9 counts 1");
   // Surrogate pair: U+1F600 requires 2 units (4-byte utf8)
-  const char emoji[] = "\xF0\x9F\x98\x80"; // 😀
+  const char emoji[] = "\xF0\x9F\x98\x80";  // 😀
   EXPECT(smsUtf16Units(emoji) == 2, "emoji 2 units");
   std::string manyA(335, 'a');
   EXPECT(smsUtf16Units(manyA.c_str()) == 335, "335 a");

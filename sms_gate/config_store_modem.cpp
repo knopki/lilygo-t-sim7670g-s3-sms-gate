@@ -1,8 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Persists verified records in a dedicated NVS partition so USB
-// recovery can erase them without touching future independent settings.
-// INVARIANTS: Credentials are stored and retrieved only as whole checksummed
-// records. Schema changes must migrate stored data (see AGENTS.md).
+// PURPOSE: Preserves modem settings so recovery can clear them independently.
+// SCOPE:
+// - Reads, validates, migrates, and writes the modem-source profile in appcfg.
+// - NOT: Runtime modem control, SMS polling, and HTTP rendering.
+// INVARIANTS:
+// - Credentials are stored and retrieved only as whole checksummed records.
+// - Schema changes must migrate stored data (see AGENTS.md).
 // DEPENDENCIES: Uses Preferences partition label appcfg.
 // #endregion MODULE_CONTRACT
 
@@ -16,9 +19,7 @@ constexpr char kModemNamespace[] = "modem";
 }  // namespace
 
 // #region FUNC_buildModemSourceRecord
-// PURPOSE: Converts the runtime modem-source profile into its checksummed
-// binary record so persistence and the web form always exercise the same
-// field limits.
+// PURPOSE: Gives persistence one bounded modem-source representation shared with forms.
 ModemSourceRecord buildModemSourceRecord(const RuntimeModemSourceConfig& config) {
   ModemSourceRecord record{};
   record.magic = kModemSourceMagic;
@@ -34,6 +35,8 @@ ModemSourceRecord buildModemSourceRecord(const RuntimeModemSourceConfig& config)
 }
 // #endregion FUNC_buildModemSourceRecord
 
+// #region METHOD_ModemSourceStore_migrateV2Record
+// PURPOSE: Upgrades a valid legacy modem blob without losing its settings.
 bool ModemSourceStore::migrateV2Record(size_t readLength) const {
   if (readLength != sizeof(ModemSourceRecordV2)) return false;
   Preferences preferences;
@@ -63,10 +66,10 @@ bool ModemSourceStore::migrateV2Record(size_t readLength) const {
                 persisted ? "true" : "false");
   return persisted;
 }
+// #endregion METHOD_ModemSourceStore_migrateV2Record
 
-// #region FUNC_ModemSourceStore_load
-// PURPOSE: Restores the modem-source profile only as a whole validated
-// record so a corrupt or partial blob can never reach the SMS poll path.
+// #region METHOD_ModemSourceStore_load
+// PURPOSE: Keeps corrupt or partial modem policy out of the SMS poll path.
 bool ModemSourceStore::load(RuntimeModemSourceConfig& config) const {
   Serial.printf("event=modem_source_load_begin partition=%s\n", kAppCfgPartition);
   Preferences preferences;
@@ -103,11 +106,10 @@ bool ModemSourceStore::load(RuntimeModemSourceConfig& config) const {
       config.smsPollEnabled ? "true" : "false");
   return true;
 }
-// #endregion FUNC_ModemSourceStore_load
+// #endregion METHOD_ModemSourceStore_load
 
-// #region FUNC_ModemSourceStore_save
-// PURPOSE: Persists the modem-source profile only after the full record
-// passes the shared validation predicate, so web input and NVS content agree.
+// #region METHOD_ModemSourceStore_save
+// PURPOSE: Commits only shared-valid modem policy so forms and NVS cannot diverge.
 bool ModemSourceStore::save(const RuntimeModemSourceConfig& config) const {
   Serial.println("event=modem_source_save_begin");
   const ModemSourceRecord record = buildModemSourceRecord(config);
@@ -128,4 +130,4 @@ bool ModemSourceStore::save(const RuntimeModemSourceConfig& config) const {
                 static_cast<unsigned>(writtenLength));
   return saved;
 }
-// #endregion FUNC_ModemSourceStore_save
+// #endregion METHOD_ModemSourceStore_save

@@ -1,6 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements HttpServer so the sketch only drives
-// setupFirmware/loopFirmware while all HTTP handlers live here.
+// PURPOSE: Keeps authentication and route policy in one boundary.
+// SCOPE:
+//   - Registers HTTP routes, authenticates protected requests, and validates API form input.
+//   - NOT: Owning Wi-Fi, source-service, or persistent-record implementation.
+// INVARIANTS:
+//   - Protected routes require the configured administrator Digest credentials.
+//   - API errors use the shared JSON error envelope.
 // #endregion MODULE_CONTRACT
 #include "system/http_server.h"
 #include <Arduino.h>
@@ -22,8 +27,7 @@ constexpr int kHttpConflict = 409;
 constexpr int kHttpInternalError = 500;
 constexpr int kHttpUnavailable = 503;
 }  // namespace
-// #region CLASS_HttpServer
-// #region METHOD_constructor
+// #region METHOD_HttpServer_HttpServer
 // PURPOSE: Binds shared services by reference.
 HttpServer::HttpServer(WebServer& server, ConfigStore& store, RuntimeConfig& config,
                        WifiManager& wifi, SmtpService& smtp, ZteService& zte, ModemService& modem,
@@ -37,7 +41,7 @@ HttpServer::HttpServer(WebServer& server, ConfigStore& store, RuntimeConfig& con
       modem_(modem),
       gps_(gps),
       timeSync_(timeSync) {}
-// #endregion METHOD_constructor
+// #endregion METHOD_HttpServer_HttpServer
 // #region METHOD_requireAuthentication
 // PURPOSE: Guards protected routes with Digest authentication.
 bool HttpServer::requireAuthentication() {
@@ -205,7 +209,7 @@ bool HttpServer::handleZteViaSend(const String& to, const String& text) {
 }
 // #endregion METHOD_handleZteViaSend
 // #region METHOD_handleStatusRequest
-// PURPOSE: Reports controller state as JSON.
+// PURPOSE: Gives the UI one response for current network and setup state.
 void HttpServer::handleStatusRequest() {
   if (config_.ssid.length() > 0 && !requireAuthentication()) {
     return;
@@ -214,7 +218,7 @@ void HttpServer::handleStatusRequest() {
 }
 // #endregion METHOD_handleStatusRequest
 // #region METHOD_handleScanRequest
-// PURPOSE: Returns scanned networks as JSON.
+// PURPOSE: Gives provisioning bounded network choices without exposing scan internals.
 void HttpServer::handleScanRequest() {
   if (config_.ssid.length() > 0 && !requireAuthentication()) {
     return;
@@ -223,7 +227,7 @@ void HttpServer::handleScanRequest() {
 }
 // #endregion METHOD_handleScanRequest
 // #region METHOD_handleSetupSubmission
-// PURPOSE: Accepts initial configuration after Wi-Fi test.
+// PURPOSE: Prevents untested credentials from becoming the first persisted profile.
 void HttpServer::handleSetupSubmission() {
   Serial.println("event=http_setup_submit");
   if (config_.ssid.length() > 0) {
@@ -301,7 +305,7 @@ void HttpServer::handleNetworkSubmission() {
 }
 // #endregion METHOD_handleNetworkSubmission
 // #region METHOD_handleNtpConfigRequest
-// PURPOSE: Serves GET /api/ntp with the stored NTP profile (ADR-0005).
+// PURPOSE: Lets authenticated clients inspect clock-source settings safely (ADR-0005).
 void HttpServer::handleNtpConfigRequest() {
   if (config_.ssid.length() > 0 && !requireAuthentication()) return;
   WebNtpConfig web;
@@ -338,7 +342,7 @@ void HttpServer::handleNtpSaveSubmission() {
 }
 // #endregion METHOD_handleNtpSaveSubmission
 // #region METHOD_handlePasswordSubmission
-// PURPOSE: Changes admin/fallback-AP password.
+// PURPOSE: Lets operators rotate the credential protecting administration and fallback access.
 void HttpServer::handlePasswordSubmission() {
   Serial.println("event=http_password_submit");
   if (!requireAuthentication()) {
@@ -371,7 +375,7 @@ void HttpServer::handlePasswordSubmission() {
 }
 // #endregion METHOD_handlePasswordSubmission
 // #region METHOD_handleSmtpConfigRequest
-// PURPOSE: Returns stored SMTP profile without password.
+// PURPOSE: Lets the settings UI inspect SMTP state without exposing its password.
 void HttpServer::handleSmtpConfigRequest() {
   if (!requireAuthentication()) {
     return;
@@ -380,7 +384,7 @@ void HttpServer::handleSmtpConfigRequest() {
 }
 // #endregion METHOD_handleSmtpConfigRequest
 // #region METHOD_handleSmtpSaveSubmission
-// PURPOSE: Validates and persists SMTP profile.
+// PURPOSE: Commits only validated SMTP settings from the authenticated UI.
 void HttpServer::handleSmtpSaveSubmission() {
   Serial.println("event=http_smtp_submit");
   if (!requireAuthentication()) {
@@ -403,7 +407,7 @@ void HttpServer::handleSmtpSaveSubmission() {
 }
 // #endregion METHOD_handleSmtpSaveSubmission
 // #region METHOD_handleSmtpTestStart
-// PURPOSE: Starts one test delivery on its own task.
+// PURPOSE: Keeps SMTP verification non-blocking and isolated from the request.
 void HttpServer::handleSmtpTestStart() {
   Serial.println("event=http_smtp_test_submit");
   if (!requireAuthentication()) {
@@ -432,7 +436,7 @@ void HttpServer::handleSmtpTestStart() {
 }
 // #endregion METHOD_handleSmtpTestStart
 // #region METHOD_handleSmtpTestStatus
-// PURPOSE: Reports async test progress.
+// PURPOSE: Lets the UI follow SMTP verification without blocking the route.
 void HttpServer::handleSmtpTestStatus() {
   if (!requireAuthentication()) {
     return;
@@ -441,7 +445,7 @@ void HttpServer::handleSmtpTestStatus() {
 }
 // #endregion METHOD_handleSmtpTestStatus
 // #region METHOD_handleZteConfigRequest
-// PURPOSE: Returns stored ZTE profile without password.
+// PURPOSE: Lets the settings UI inspect ZTE state without exposing its password.
 void HttpServer::handleZteConfigRequest() {
   if (!requireAuthentication()) {
     return;
@@ -450,7 +454,7 @@ void HttpServer::handleZteConfigRequest() {
 }
 // #endregion METHOD_handleZteConfigRequest
 // #region METHOD_handleZteSaveSubmission
-// PURPOSE: Validates and persists ZTE profile.
+// PURPOSE: Commits only validated ZTE settings from the authenticated UI.
 void HttpServer::handleZteSaveSubmission() {
   Serial.println("event=http_zte_submit");
   if (!requireAuthentication()) {
@@ -475,7 +479,7 @@ void HttpServer::handleZteSaveSubmission() {
 }
 // #endregion METHOD_handleZteSaveSubmission
 // #region METHOD_handleZteTestStart
-// PURPOSE: Starts one non-destructive ZTE connection test.
+// PURPOSE: Verifies ZTE connectivity without altering inbox or send state.
 void HttpServer::handleZteTestStart() {
   Serial.println("event=http_zte_test_submit");
   if (!requireAuthentication()) {
@@ -512,7 +516,7 @@ void HttpServer::handleZteTestStart() {
 }
 // #endregion METHOD_handleZteTestStart
 // #region METHOD_handleZteTestStatus
-// PURPOSE: Reports ZTE test progress.
+// PURPOSE: Lets the UI follow ZTE verification without blocking the route.
 void HttpServer::handleZteTestStatus() {
   if (!requireAuthentication()) {
     return;
@@ -521,7 +525,7 @@ void HttpServer::handleZteTestStatus() {
 }
 // #endregion METHOD_handleZteTestStatus
 // #region METHOD_handleZteSendStatus
-// PURPOSE: Reports ZTE send progress.
+// PURPOSE: Lets the UI follow ZTE sends without blocking the route.
 void HttpServer::handleZteSendStatus() {
   if (!requireAuthentication()) {
     return;
@@ -530,14 +534,14 @@ void HttpServer::handleZteSendStatus() {
 }
 // #endregion METHOD_handleZteSendStatus
 // #region METHOD_handleModemStatusRequest
-// PURPOSE: Serves GET /api/modem/status.
+// PURPOSE: Gives the UI secret-free modem diagnostics for readiness and recovery.
 void HttpServer::handleModemStatusRequest() {
   if (config_.ssid.length() > 0 && !requireAuthentication()) return;
   sendJson(server_, kHttpOk, renderModemStatusJson(modem_.webStatus()));
 }
 // #endregion METHOD_handleModemStatusRequest
 // #region METHOD_handleModemSourceRequest
-// PURPOSE: Returns modem-source profile.
+// PURPOSE: Lets the settings UI inspect modem-source policy without credentials.
 void HttpServer::handleModemSourceRequest() {
   if (config_.ssid.length() > 0 && !requireAuthentication()) {
     return;
@@ -546,7 +550,7 @@ void HttpServer::handleModemSourceRequest() {
 }
 // #endregion METHOD_handleModemSourceRequest
 // #region METHOD_handleModemSourceSave
-// PURPOSE: Validates and persists modem-source profile.
+// PURPOSE: Commits only validated modem-source settings from the authenticated UI.
 void HttpServer::handleModemSourceSave() {
   Serial.println("event=http_modem_source_submit");
   if (config_.ssid.length() > 0 && !requireAuthentication()) {
@@ -573,21 +577,21 @@ void HttpServer::handleModemSourceSave() {
 }
 // #endregion METHOD_handleModemSourceSave
 // #region METHOD_handleModemSendStatus
-// PURPOSE: Reports modem send progress.
+// PURPOSE: Lets the UI follow modem sends without blocking the route.
 void HttpServer::handleModemSendStatus() {
   if (!requireAuthentication()) return;
   sendJson(server_, kHttpOk, renderAsyncOpJson(modem_.sendStatus()));
 }
 // #endregion METHOD_handleModemSendStatus
 // #region METHOD_handleGpsConfigRequest
-// PURPOSE: Returns stored GNSS profile.
+// PURPOSE: Lets the settings UI inspect GNSS policy without modem access.
 void HttpServer::handleGpsConfigRequest() {
   if (config_.ssid.length() > 0 && !requireAuthentication()) return;
   sendJson(server_, kHttpOk, renderGpsConfigJson(gps_.webConfig()));
 }
 // #endregion METHOD_handleGpsConfigRequest
 // #region METHOD_handleGpsSaveSubmission
-// PURPOSE: Validates and persists GNSS profile.
+// PURPOSE: Commits only validated GNSS settings from the authenticated UI.
 void HttpServer::handleGpsSaveSubmission() {
   Serial.println("event=http_gps_submit");
   if (config_.ssid.length() > 0 && !requireAuthentication()) return;
@@ -770,4 +774,3 @@ void HttpServer::begin() {
   Serial.printf("event=http_server_started port=%u\n", kHttpPort);
 }
 // #endregion METHOD_begin
-// #endregion CLASS_HttpServer

@@ -1,10 +1,13 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements the SIM7670G AT dialog (ADR-0004) as pure parsing
-// and sequencing, so the wire behavior is provable on the host while the
-// device layer only binds the transport.
-// INVARIANTS: Every exit leaves channel idle; failedStage is stable;
-// parsers tolerate 99/255 unknown sentinels; CMS/CME ERROR shapes are
-// recognised; all non-trivial functions have GRACE contracts.
+// PURPOSE: Makes SIM7670G SMS wire behavior testable before hardware I/O.
+// SCOPE:
+// - Parses SIM7670G replies and drives bounded status and SMS dialogs over ModemChannel.
+// - NOT: Serial transport ownership, persisted configuration, task scheduling, and HTTP rendering.
+// INVARIANTS:
+// - Every exit leaves channel idle;
+// - failedStage is stable;
+// - parsers tolerate 99/255 unknown sentinels;
+// - CMS/CME ERROR shapes are recognised.
 // #endregion MODULE_CONTRACT
 
 #include "modem/modem_client.h"
@@ -158,6 +161,10 @@ bool parseCclkLine(const char* line, char* out, size_t outSize) {
   out[len] = '\0';
   return true;
 }
+// #endregion FUNC_parseCclkLine
+
+// #region FUNC_cclkToEpochMs
+// PURPOSE: Converts modem clock text into UTC for time-source arbitration.
 bool cclkToEpochMs(const char* cclk, int64_t& epochMsOut) {
   if (cclk == nullptr) return false;
   // Expected "yy/MM/dd,hh:mm:ss+zz" or "-zz", zz quarters 15 min.
@@ -194,7 +201,7 @@ bool cclkToEpochMs(const char* cclk, int64_t& epochMsOut) {
   epochMsOut = utcSec * 1000LL;
   return true;
 }
-// #endregion FUNC_parseCclkLine
+// #endregion FUNC_cclkToEpochMs
 
 // #region FUNC_parseImeiLine
 // PURPOSE: Extracts the IMEI from both CGSN/GSN reply shapes, so status
@@ -733,10 +740,11 @@ bool buildUcs2SubmitPdu(const char* number, const char* partUcs2Hex, uint8_t ref
 }
 // #endregion FUNC_buildUcs2SubmitPdu
 
-// #region CLASS_ModemClient
+// #region METHOD_ModemClient_ModemClient
+// PURPOSE: Gives each AT dialog one isolated channel and bounded workspace.
 ModemClient::ModemClient(ModemChannel& channel, char* scratch, size_t scratchSize)
     : channel_(channel), scratch_(scratch), scratchSize_(scratchSize) {}
-// #endregion CLASS_ModemClient
+// #endregion METHOD_ModemClient_ModemClient
 
 // #region METHOD_ModemClient_fail
 // PURPOSE: Sets the stable stage token for the last failure, so Serial

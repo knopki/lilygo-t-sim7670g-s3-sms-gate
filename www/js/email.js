@@ -1,8 +1,8 @@
 /**
  * #region moduleContract
- * @purpose E-mail page logic: SMTP settings form with a saved-password
- *   placeholder and the async test-email operation.
- * @scope /email only; NOT: shared helpers or other pages.
+ * @modulecontract
+ * @purpose Lets operators maintain SMTP delivery settings and verify them.
+ * @scope /email page; NOT: shared runtime.
  * #endregion moduleContract
  */
 
@@ -16,6 +16,10 @@ import {
 const smtpForm = document.getElementById("smtp-form");
 const passwordInput = smtpForm.elements.password;
 
+// #region FUNC_formFields
+/**
+ * @purpose Prevents SMTP field-name and secret-handling drift during settings writes.
+ */
 function formFields() {
 	const elements = smtpForm.elements;
 	return {
@@ -28,13 +32,23 @@ function formFields() {
 		recipient: elements.recipient.value.trim(),
 	};
 }
+// #endregion FUNC_formFields
 
+// #region FUNC_applyPasswordPlaceholder
+/**
+ * @purpose Signals when a saved secret can be retained without re-entry.
+ */
 function applyPasswordPlaceholder(passwordSet) {
 	passwordInput.placeholder = passwordSet
 		? "Saved — leave blank to keep"
 		: "Enter password";
 }
+// #endregion FUNC_applyPasswordPlaceholder
 
+// #region FUNC_loadConfig
+/**
+ * @purpose Prevents stale browser values from overwriting saved SMTP settings.
+ */
 async function loadConfig() {
 	const { response, payload } = await apiFetch("/api/smtp");
 	if (!response.ok || !payload) {
@@ -50,6 +64,7 @@ async function loadConfig() {
 	});
 	applyPasswordPlaceholder(payload.password_set === true);
 }
+// #endregion FUNC_loadConfig
 
 smtpForm.addEventListener("submit", (event) => {
 	event.preventDefault();

@@ -18,7 +18,10 @@ class String {
   String(const String& o) = default;
   String(String&& o) = default;
   String& operator=(const String& o) = default;
-  String& operator=(const char* s) { data_ = s ? s : ""; return *this; }
+  String& operator=(const char* s) {
+    data_ = s ? s : "";
+    return *this;
+  }
 
   // numeric ctors
   String(int v) : data_(std::to_string(v)) {}
@@ -75,17 +78,32 @@ class String {
   }
   void replace(const char* from, const char* to) { replace(String(from), String(to)); }
 
-  String& operator+=(const String& o) { data_ += o.data_; return *this; }
-  String& operator+=(const char* s) { if (s) data_ += s; return *this; }
-  String& operator+=(char c) { data_ += c; return *this; }
+  String& operator+=(const String& o) {
+    data_ += o.data_;
+    return *this;
+  }
+  String& operator+=(const char* s) {
+    if (s) data_ += s;
+    return *this;
+  }
+  String& operator+=(char c) {
+    data_ += c;
+    return *this;
+  }
 
-  friend String operator+(const String& a, const String& b) { return String((a.data_ + b.data_).c_str()); }
-  friend String operator+(const String& a, const char* b) { return String((a.data_ + (b?b:"")).c_str()); }
-  friend String operator+(const char* a, const String& b) { return String(((a?a:"") + b.data_).c_str()); }
+  friend String operator+(const String& a, const String& b) {
+    return String((a.data_ + b.data_).c_str());
+  }
+  friend String operator+(const String& a, const char* b) {
+    return String((a.data_ + (b ? b : "")).c_str());
+  }
+  friend String operator+(const char* a, const String& b) {
+    return String(((a ? a : "") + b.data_).c_str());
+  }
 
   bool operator==(const String& o) const { return data_ == o.data_; }
   bool operator!=(const String& o) const { return data_ != o.data_; }
-  bool operator==(const char* s) const { return data_ == (s?s:""); }
+  bool operator==(const char* s) const { return data_ == (s ? s : ""); }
 
   char operator[](size_t i) const { return data_[i]; }
 
@@ -110,5 +128,8 @@ inline void delay(unsigned long) {}
 inline void yield() {}
 
 // ESP stub
-struct EspStub { uint32_t getFreeHeap(){return 0;} uint32_t getMaxAllocHeap(){return 0;} };
+struct EspStub {
+  uint32_t getFreeHeap() { return 0; }
+  uint32_t getMaxAllocHeap() { return 0; }
+};
 inline EspStub ESP;

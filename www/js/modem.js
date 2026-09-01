@@ -1,8 +1,8 @@
 /**
  * #region moduleContract
- * @purpose Internal modem page logic: SIM7670G status polling and the
- *   module/polling/forwarding/NITZ settings form.
- * @scope /modem only; NOT: shared helpers or other pages.
+ * @modulecontract
+ * @purpose Keeps the internal modem usable for status, forwarding, and time sync.
+ * @scope /modem page; NOT: shared runtime.
  * #endregion moduleContract
  */
 
@@ -34,6 +34,10 @@ function text(value) {
 }
 
 // Maps a COPS AcT code to the human-readable access technology name.
+// #region FUNC_actName
+/**
+ * @purpose Turns modem access codes into labels operators can interpret.
+ */
 function actName(act) {
 	const map = {
 		0: "GSM",
@@ -49,9 +53,14 @@ function actName(act) {
 	};
 	return map[act] || "unknown";
 }
+// #endregion FUNC_actName
 
 // COPS may report the operator as a numeric MCC/MNC; map the known codes to
 // carrier names and pass long alphanumeric names through unchanged.
+// #region FUNC_operatorLabel
+/**
+ * @purpose Makes numeric network identities useful in connection diagnostics.
+ */
 function operatorLabel(name) {
 	const mccMncNames = {
 		25001: "MTS",
@@ -67,7 +76,12 @@ function operatorLabel(name) {
 	}
 	return mccMncNames[name] ? `${mccMncNames[name]} (${name})` : name;
 }
+// #endregion FUNC_operatorLabel
 
+// #region FUNC_operatorText
+/**
+ * @purpose Combines operator identity and access technology into one status value.
+ */
 function operatorText(operator) {
 	const act = operator.act;
 	const actText =
@@ -78,7 +92,12 @@ function operatorText(operator) {
 		[operatorLabel(operator.name), actText].filter(Boolean).join(" — ") || "—"
 	);
 }
+// #endregion FUNC_operatorText
 
+// #region FUNC_loadStatus
+/**
+ * @purpose Keeps modem health and network diagnostics current for operators.
+ */
 async function loadStatus() {
 	const { response, payload } = await apiFetch("/api/modem/status");
 	if (!response.ok || !payload) {
@@ -106,6 +125,7 @@ async function loadStatus() {
 		firmware: text(identity.fw),
 	});
 }
+// #endregion FUNC_loadStatus
 
 function applyLastStatus(payload) {
 	fillFields(document.getElementById("modem-config"), {
@@ -113,6 +133,10 @@ function applyLastStatus(payload) {
 	});
 }
 
+// #region FUNC_applyConfig
+/**
+ * @purpose Prevents profile updates from leaving dependent modem controls inconsistent.
+ */
 function applyConfig(payload) {
 	fillFields(sourceForm, {
 		module_enabled: payload.module_enabled === true,
@@ -125,13 +149,19 @@ function applyConfig(payload) {
 	syncForm();
 	applyLastStatus(payload);
 }
+// #endregion FUNC_applyConfig
 
+// #region FUNC_loadConfig
+/**
+ * @purpose Prevents stale browser values from overwriting the saved modem profile.
+ */
 async function loadConfig() {
 	const { response, payload } = await apiFetch("/api/modem/source");
 	if (response.ok && payload) {
 		applyConfig(payload);
 	}
 }
+// #endregion FUNC_loadConfig
 
 sourceForm.addEventListener("submit", (event) => {
 	event.preventDefault();

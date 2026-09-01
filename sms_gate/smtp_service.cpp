@@ -1,6 +1,11 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Implements the SMTP service owned by SmtpService so the
-// monolithic sms_gate.ino only calls load/save/webConfig/readForm/startTest.
+// PURPOSE: Keeps SMTP validation and asynchronous tests out of loop().
+// SCOPE:
+// - Manages persisted SMTP policy, web-safe status, and asynchronous connection tests.
+// - NOT: Implementing SMTP transport or rendering SMS email content.
+// INVARIANTS:
+// - Saved policy becomes the running policy only after persistence succeeds.
+// - Web configuration never exposes the SMTP password.
 // #endregion MODULE_CONTRACT
 
 #include "smtp/smtp_service.h"
@@ -64,7 +69,7 @@ void logSmtpStage(const char* stage, int code) {
 // #endregion FUNC_logSmtpStage
 
 // #region METHOD_SmtpService_load
-// PURPOSE: Loads the stored profile from NVS.
+// PURPOSE: Makes stored SMTP policy available before tests or forwarding.
 bool SmtpService::load() {
   loaded_ = store_.load(stored_);
   return loaded_;
@@ -72,7 +77,7 @@ bool SmtpService::load() {
 // #endregion METHOD_SmtpService_load
 
 // #region METHOD_SmtpService_save
-// PURPOSE: Persists a validated candidate and updates the in-memory copy.
+// PURPOSE: Keeps validated SMTP policy consistent across NVS and the running task.
 bool SmtpService::save(const RuntimeSmtpConfig& candidate) {
   if (!store_.save(candidate)) {
     return false;
@@ -104,7 +109,7 @@ WebSmtpConfig SmtpService::webConfig() const {
 // #endregion METHOD_SmtpService_webConfig
 
 // #region METHOD_SmtpService_parseSmtpPort
-// PURPOSE: Parses a port field or falls back to the mode's default.
+// PURPOSE: Prevents malformed ports from reaching the SMTP connection.
 bool SmtpService::parseSmtpPort(const String& raw, SmtpSecurityMode mode, uint16_t& port) const {
   String value = raw;
   value.trim();
@@ -126,7 +131,7 @@ bool SmtpService::parseSmtpPort(const String& raw, SmtpSecurityMode mode, uint16
 // #endregion METHOD_SmtpService_parseSmtpPort
 
 // #region METHOD_SmtpService_readSmtpForm
-// PURPOSE: Validates the SMTP form into a runtime profile.
+// PURPOSE: Rejects invalid SMTP input before persistence or network use.
 bool SmtpService::readSmtpForm(WebServer& server, RuntimeSmtpConfig& candidate, String& error) {
   const String security = server.arg("security");
   if (security == F("implicit")) {
@@ -193,7 +198,7 @@ bool SmtpService::readSmtpForm(WebServer& server, RuntimeSmtpConfig& candidate, 
 // #endregion METHOD_SmtpService_readSmtpForm
 
 // #region METHOD_SmtpService_startTest
-// PURPOSE: Starts one test delivery on its own task.
+// PURPOSE: Keeps SMTP tests non-blocking and single-flight.
 bool SmtpService::startTest(const RuntimeSmtpConfig& candidate, const String& ehloName,
                             String& error) {
   if (testRunning_) {
@@ -217,7 +222,7 @@ bool SmtpService::startTest(const RuntimeSmtpConfig& candidate, const String& eh
 // #endregion METHOD_SmtpService_startTest
 
 // #region METHOD_SmtpService_testStatus
-// PURPOSE: Snapshots the async test progress.
+// PURPOSE: Lets the UI poll SMTP tests without joining their worker task.
 WebAsyncOp SmtpService::testStatus() const {
   WebAsyncOp op;
   op.running = testRunning_;
@@ -231,7 +236,7 @@ WebAsyncOp SmtpService::testStatus() const {
 // #endregion METHOD_SmtpService_testStatus
 
 // #region METHOD_SmtpService_testTask
-// PURPOSE: Runs one test delivery on its own task.
+// PURPOSE: Provides the worker entry point for a non-blocking SMTP test.
 void SmtpService::testTask(void* param) {
   auto* self = static_cast<SmtpService*>(param);
   if (self != nullptr) {

@@ -18,11 +18,11 @@ run = "arduino-cli compile sms_gate"
 
 [tasks."fmt"]
 description = "Format Arduino C++ source and headers, JS, HTML"
-run = "clang-format -i $(find sms_gate -name '*.ino' -o -name '*.h' -o -name '*.cpp') && biome format --write www/"
+run = "clang-format -i $(find {sms_gate,tests} -name '*.ino' -o -name '*.h' -o -name '*.cpp') && biome format --write www/"
 
 [tasks."fmt:check"]
 description = "Check Arduino C++ formatting without modifying"
-run = "clang-format --dry-run --Werror $(find sms_gate -name '*.ino' -o -name '*.h' -o -name '*.cpp') && biome format www/"
+run = "clang-format --dry-run --Werror $(find {sms_gate,tests} -name '*.ino' -o -name '*.h' -o -name '*.cpp') && biome format www/"
 
 [tasks."lint"]
 description = "Run Cppcheck on Arduino C++ source, JS, HTML"
