@@ -143,6 +143,8 @@ class WifiManager {
   String lastConnectionError_;
   bool accessPointActive_ = false;
   bool mdnsActive_ = false;
+  bool accessPointShutdownScheduled_ = false;
+  bool accessPointRestartScheduled_ = false;
   unsigned long connectionAttemptStartedAt_ = 0;
   unsigned long nextReconnectAt_ = 0;
   unsigned long accessPointShutdownAt_ = 0;

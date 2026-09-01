@@ -19,6 +19,7 @@
 #include <NetworkClient.h>
 #include <lwip/sockets.h>
 
+#include "system/millis_deadline.h"
 #include "system/plain_socket_reader.h"
 #include "zte/zte_client.h"
 
@@ -35,7 +36,7 @@ class NetworkZteChannel : public ZteChannel {
   }
 
   bool write(const char* data, size_t length) override {
-    const unsigned long deadline = millis() + timeoutMs_;
+    const uint32_t deadline = millis() + timeoutMs_;
     size_t sent = 0;
     while (sent < length) {
       const size_t written =
@@ -44,7 +45,7 @@ class NetworkZteChannel : public ZteChannel {
         sent += written;
         continue;
       }
-      if (millis() > deadline) {
+      if (millis_deadline::reached(millis(), deadline)) {
         return false;
       }
       delay(1);
@@ -56,14 +57,14 @@ class NetworkZteChannel : public ZteChannel {
     if (size < 2) {
       return -1;
     }
-    const unsigned long deadline = millis() + timeoutMs_;
+    const uint32_t deadline = millis() + timeoutMs_;
     ensureRecvTimeout();
     return plainReadLine(client_.fd(), buffer, size, deadline);
   }
 
   int read(char* buffer, size_t size) override {
     ensureRecvTimeout();
-    const unsigned long deadline = millis() + timeoutMs_;
+    const uint32_t deadline = millis() + timeoutMs_;
     return plainReadBytes(client_.fd(), buffer, size, deadline);
   }
 

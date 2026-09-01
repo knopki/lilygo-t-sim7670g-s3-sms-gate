@@ -5,7 +5,7 @@
 // SO_RCVTIMEO.
 // - NOT: TLS reads, connect/write, and HTTP framing.
 // INVARIANTS:
-// - One recv() per byte/chunk, bounded by deadline via millis()+ delay(1);
+// - One recv() per byte/chunk, bounded by a rollover-safe millis() deadline + delay(1);
 // - never calls available() or select().
 // DEPENDENCIES: Arduino millis/delay and lwIP sockets.
 // #endregion MODULE_CONTRACT
@@ -18,6 +18,8 @@
 
 #include <Arduino.h>
 #include <lwip/sockets.h>
+
+#include "system/millis_deadline.h"
 
 // #region FUNC_plainReadLine
 // PURPOSE: Reads one CRLF-terminated line (without CRLF) into buffer with
@@ -36,7 +38,7 @@ inline int plainReadLine(int fd, char* buffer, size_t size, unsigned long deadli
     }
     if (got < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-        if (millis() > deadline) {
+        if (millis_deadline::reached(millis(), deadline)) {
           return -1;
         }
         delay(1);
@@ -55,7 +57,7 @@ inline int plainReadLine(int fd, char* buffer, size_t size, unsigned long deadli
       return -1;
     }
     buffer[used++] = static_cast<char>(byte);
-    if (millis() > deadline) {
+    if (millis_deadline::reached(millis(), deadline)) {
       return -1;
     }
   }
@@ -83,7 +85,7 @@ inline int plainReadLineDetailed(int fd, char* buffer, size_t size, unsigned lon
     }
     if (got < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-        if (millis() > deadline) {
+        if (millis_deadline::reached(millis(), deadline)) {
           detail = 'T';
           lastErrno = errno;
           return -1;
@@ -107,7 +109,7 @@ inline int plainReadLineDetailed(int fd, char* buffer, size_t size, unsigned lon
       return -1;
     }
     buffer[used++] = static_cast<char>(byte);
-    if (millis() > deadline) {
+    if (millis_deadline::reached(millis(), deadline)) {
       detail = 'T';
       return -1;
     }
@@ -128,7 +130,7 @@ inline int plainReadBytes(int fd, char* buffer, size_t size, unsigned long deadl
     }
     if (got < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-        if (millis() > deadline) {
+        if (millis_deadline::reached(millis(), deadline)) {
           break;
         }
         delay(1);

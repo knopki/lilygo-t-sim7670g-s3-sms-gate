@@ -10,6 +10,8 @@
 
 #include "system/time_sync.h"
 
+#include "system/millis_deadline.h"
+
 #ifdef ARDUINO
 #include <Arduino.h>
 #include <esp_sntp.h>
@@ -67,6 +69,8 @@ void TimeSync::begin() {
   for (auto& s : samples_) s = TimeSample{};
   // cppcheck-suppress useStlAlgorithm
   for (auto& q : quarantineUntilMs_) q = 0;
+  // cppcheck-suppress useStlAlgorithm
+  for (auto& active : quarantineActive_) active = false;
   for (auto& d : quarantineDurationMs_) d = kQuarantineDurationMs;
   // cppcheck-suppress useStlAlgorithm
   for (auto& l : lastIgnoredLogMs_) l = 0;
@@ -81,7 +85,7 @@ void TimeSync::begin() {
 // PURPOSE: Reports whether a source is temporarily excluded from arbitration.
 bool TimeSync::isQuarantined(TimeSource s, uint32_t nowMs) const {
   uint8_t idx = static_cast<uint8_t>(s);
-  return quarantineUntilMs_[idx] != 0 && nowMs < quarantineUntilMs_[idx];
+  return quarantineActive_[idx] && !millis_deadline::reached(nowMs, quarantineUntilMs_[idx]);
 }
 // #endregion METHOD_TimeSync_isQuarantined
 
@@ -89,7 +93,8 @@ bool TimeSync::isQuarantined(TimeSource s, uint32_t nowMs) const {
 // PURPOSE: Quarantines a source only when two fresh peers establish a quorum.
 bool TimeSync::shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs) {
   uint8_t idx = static_cast<uint8_t>(sample.source);
-  if (quarantineUntilMs_[idx] != 0 && nowMs < quarantineUntilMs_[idx]) return true;
+  if (quarantineActive_[idx] && !millis_deadline::reached(nowMs, quarantineUntilMs_[idx]))
+    return true;
 
   // Collect fresh, valid, non-quarantined peers (excluding sample itself).
   TimeSample peers[3];
@@ -98,7 +103,7 @@ bool TimeSync::shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs) {
     if (i == idx) continue;
     const TimeSample& p = samples_[i];
     if (!p.valid) continue;
-    if (quarantineUntilMs_[i] != 0 && nowMs < quarantineUntilMs_[i]) continue;
+    if (quarantineActive_[i] && !millis_deadline::reached(nowMs, quarantineUntilMs_[i])) continue;
     uint32_t age = nowMs - p.receivedMs;
     bool fresh = false;
     if (p.source == TimeSource::kGnss)
@@ -127,6 +132,7 @@ bool TimeSync::shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs) {
     uint32_t dur = quarantineDurationMs_[idx];
     if (dur == 0) dur = kQuarantineDurationMs;
     quarantineUntilMs_[idx] = nowMs + dur;
+    quarantineActive_[idx] = true;
     // exponential backoff on repeat (capped at 2h)
     uint32_t next = dur * 2;
     if (next > kQuarantineMaxMs) next = kQuarantineMaxMs;
@@ -228,7 +234,8 @@ TimeSource TimeSync::arbitrateAt(uint32_t nowMs) const {
     uint8_t idx = static_cast<uint8_t>(src);
     const TimeSample& s = samples_[idx];
     if (!s.valid) continue;
-    if (quarantineUntilMs_[idx] != 0 && nowMs < quarantineUntilMs_[idx]) continue;
+    if (quarantineActive_[idx] && !millis_deadline::reached(nowMs, quarantineUntilMs_[idx]))
+      continue;
     uint32_t age = nowMs - s.receivedMs;
     bool fresh = false;
     if (src == TimeSource::kGnss)
@@ -325,7 +332,8 @@ void TimeSync::discipline(const TimeSample& chosen) {
 void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
   // Clear expired quarantines and reset backoff once quarantine lifts.
   for (uint8_t i = 1; i < 4; ++i) {
-    if (quarantineUntilMs_[i] != 0 && nowMs >= quarantineUntilMs_[i]) {
+    if (quarantineActive_[i] && millis_deadline::reached(nowMs, quarantineUntilMs_[i])) {
+      quarantineActive_[i] = false;
       quarantineUntilMs_[i] = 0;
       quarantineDurationMs_[i] = kQuarantineDurationMs;
     }
@@ -358,22 +366,23 @@ void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
   }
   // Publish quarantine state for current best source.
   uint8_t bidx = static_cast<uint8_t>(best);
-  if (quarantineUntilMs_[bidx] != 0 && nowMs < quarantineUntilMs_[bidx]) {
+  if (quarantineActive_[bidx] && !millis_deadline::reached(nowMs, quarantineUntilMs_[bidx])) {
     published_.quarantined = true;
     published_.quarantinedUntilEpochMs =
         published_.epochMs + (int64_t)(quarantineUntilMs_[bidx] - nowMs);
   } else {
     // If best is not quarantined but any source is, still report max quarantine for observability.
-    uint32_t maxQ = 0;
+    uint32_t maxRemainingMs = 0;
     bool any = false;
     for (uint8_t i = 1; i < 4; ++i) {
-      if (quarantineUntilMs_[i] != 0 && nowMs < quarantineUntilMs_[i]) {
+      if (quarantineActive_[i] && !millis_deadline::reached(nowMs, quarantineUntilMs_[i])) {
         any = true;
-        if (quarantineUntilMs_[i] > maxQ) maxQ = quarantineUntilMs_[i];
+        const uint32_t remainingMs = quarantineUntilMs_[i] - nowMs;
+        if (remainingMs > maxRemainingMs) maxRemainingMs = remainingMs;
       }
     }
     published_.quarantined = any;
-    published_.quarantinedUntilEpochMs = any ? published_.epochMs + (int64_t)(maxQ - nowMs) : 0;
+    published_.quarantinedUntilEpochMs = any ? published_.epochMs + (int64_t)maxRemainingMs : 0;
   }
 }
 // #endregion METHOD_TimeSync_loopAt

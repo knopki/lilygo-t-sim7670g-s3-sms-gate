@@ -134,6 +134,27 @@ void testQuarantineGnssOutlier() {
 }
 // #endregion FUNC_testQuarantineGnssOutlier
 
+// #region FUNC_testQuarantineAcrossMillisRollover
+// PURPOSE: Keeps quorum quarantine active until its wrapped deadline expires.
+void testQuarantineAcrossMillisRollover() {
+  TimeSync ts;
+  ts.begin();
+  constexpr uint32_t kQuarantineDurationMs = 15U * 60U * 1000U;
+  constexpr uint32_t kNowMs = UINT32_MAX - kQuarantineDurationMs + 1U;
+  const int64_t base = makeEpochMs(2025, 8, 26, 12, 0, 0);
+  ts.feedSntpSyncAt(base, kNowMs - 2000);
+  ts.feedNitzSampleAt(base + 5000, 1500, kNowMs - 1000);
+  ts.feedGnssSampleAt(base + 3600LL * 1000LL, 100, kNowMs);
+  assert(ts.isQuarantined(TimeSource::kGnss, kNowMs));
+
+  const uint32_t afterExpiryMs = kNowMs + kQuarantineDurationMs + 1U;
+  assert(!ts.isQuarantined(TimeSource::kGnss, afterExpiryMs));
+  ts.loopAt(afterExpiryMs, base);
+  assert(!ts.isQuarantined(TimeSource::kGnss, afterExpiryMs));
+  puts("testQuarantineAcrossMillisRollover ok");
+}
+// #endregion FUNC_testQuarantineAcrossMillisRollover
+
 // #region FUNC_testQuorumNoQuarantineWhenPeersDisagree
 // PURPOSE: Preserves availability when peer disagreement provides no quarantine quorum.
 void testQuorumNoQuarantineWhenPeersDisagree() {
@@ -222,6 +243,7 @@ int main() {
   testArbitrationPriority();
   testGnssFreshnessWindow();
   testQuarantineGnssOutlier();
+  testQuarantineAcrossMillisRollover();
   testQuorumNoQuarantineWhenPeersDisagree();
   testCclkToEpoch();
   testPublishedSyncTimes();

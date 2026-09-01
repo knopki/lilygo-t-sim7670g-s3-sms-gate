@@ -17,6 +17,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "system/millis_deadline.h"
+
 namespace task_control {
 
 constexpr unsigned long kTaskStopTimeoutMs = 5000;
@@ -33,8 +35,8 @@ inline bool stopTask(TaskHandle_t& handle, volatile bool& stopFlag,
     return true;
   }
   stopFlag = true;
-  const unsigned long deadline = millis() + timeoutMs;
-  while (handle != nullptr && millis() < deadline) {
+  const uint32_t deadline = millis() + timeoutMs;
+  while (handle != nullptr && !millis_deadline::reached(millis(), deadline)) {
     delay(kTaskStopPollMs);
   }
   stopFlag = false;

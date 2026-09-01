@@ -18,6 +18,7 @@
 #include <Arduino.h>
 
 #include "modem/modem_client.h"
+#include "system/millis_deadline.h"
 
 // Classic revision pin map (see docs/research/modem-sim7670g.md §1).
 constexpr int kModemPinRx = 10;
@@ -97,7 +98,7 @@ class ModemTransport : public ModemChannel {
   // PURPOSE: Reads one bounded modem line while preserving timeout semantics.
   int readLine(char* buffer, size_t size, unsigned long timeoutMs) override {
     if (size < 2) return -1;
-    const unsigned long deadline = millis() + timeoutMs;
+    const uint32_t deadline = millis() + timeoutMs;
     size_t used = 0;
     bool overflow = false;
     for (;;) {
@@ -121,7 +122,7 @@ class ModemTransport : public ModemChannel {
         buffer[used++] = static_cast<char>(ch);
         continue;
       }
-      if (millis() > deadline) {
+      if (millis_deadline::reached(millis(), deadline)) {
         if (overflow) {
           buffer[0] = '\0';
           return -1;

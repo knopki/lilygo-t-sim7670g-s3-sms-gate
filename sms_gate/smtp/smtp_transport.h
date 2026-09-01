@@ -20,6 +20,7 @@
 #include <NetworkClientSecure.h>
 #include <lwip/sockets.h>
 
+#include "system/millis_deadline.h"
 #include "system/plain_socket_reader.h"
 #include "smtp/smtp_client.h"
 
@@ -58,7 +59,7 @@ class SecureSmtpChannel : public SmtpChannel {
   }
 
   bool write(const char* data, size_t length) override {
-    const unsigned long deadline = millis() + timeoutMs_;
+    const uint32_t deadline = millis() + timeoutMs_;
     size_t sent = 0;
     while (sent < length) {
       const size_t written =
@@ -67,7 +68,7 @@ class SecureSmtpChannel : public SmtpChannel {
         sent += written;
         continue;
       }
-      if (millis() > deadline) {
+      if (millis_deadline::reached(millis(), deadline)) {
         return false;
       }
       delay(1);
@@ -79,7 +80,7 @@ class SecureSmtpChannel : public SmtpChannel {
     if (size < 2) {
       return -1;
     }
-    const unsigned long deadline = millis() + timeoutMs_;
+    const uint32_t deadline = millis() + timeoutMs_;
     size_t used = 0;
     if (client_.stillInPlainStart()) {
       return readPlainLine(buffer, size, deadline);
@@ -113,7 +114,7 @@ class SecureSmtpChannel : public SmtpChannel {
         buffer[used++] = static_cast<char>(character);
         continue;
       }
-      if (millis() > deadline) {
+      if (millis_deadline::reached(millis(), deadline)) {
         readDetail_ = 'T';
         lastErrno_ = 0;
         return -1;

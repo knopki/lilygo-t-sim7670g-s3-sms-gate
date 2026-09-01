@@ -163,6 +163,7 @@ class TimeSync {
   TimeSample samples_[4] = {};
   TimeState published_ = {};
   uint32_t quarantineUntilMs_[4] = {};
+  bool quarantineActive_[4] = {};
   uint32_t quarantineDurationMs_[4] = {};
   uint32_t lastIgnoredLogMs_[4] = {};
 

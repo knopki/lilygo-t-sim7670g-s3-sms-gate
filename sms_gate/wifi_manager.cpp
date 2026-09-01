@@ -16,6 +16,7 @@
 #include <esp_sntp.h>
 #include <time.h>
 
+#include "system/millis_deadline.h"
 #include "system/time_sync.h"
 #include "system/watchdog.h"
 
@@ -121,6 +122,7 @@ void WifiManager::stopAccessPoint() {
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_STA);
   accessPointActive_ = false;
+  accessPointShutdownScheduled_ = false;
   accessPointShutdownAt_ = 0;
   Serial.println("event=ap_stopped");
 }
@@ -175,6 +177,7 @@ void WifiManager::onStationConnected(const RuntimeConfig& config, bool deferAcce
   if (accessPointActive_) {
     if (deferAccessPointShutdown) {
       accessPointShutdownAt_ = millis() + kApShutdownDelayMs;
+      accessPointShutdownScheduled_ = true;
     } else {
       stopAccessPoint();
     }
@@ -282,8 +285,8 @@ bool WifiManager::testStationCandidate(const RuntimeConfig& candidate,
   WiFi.disconnect();
   delay(kWiFiTestStepMs);
   WiFi.begin(candidate.ssid.c_str(), candidate.wifiPassword.c_str());
-  const unsigned long deadline = millis() + kConnectTimeoutMs;
-  while (millis() < deadline) {
+  const uint32_t deadline = millis() + kConnectTimeoutMs;
+  while (!millis_deadline::reached(millis(), deadline)) {
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("event=sta_candidate_test_complete connected=true");
       return true;
@@ -318,15 +321,17 @@ void WifiManager::loop(const RuntimeConfig& config) {
   } else if (connectionState_ == ConnectionState::kOnline && WiFi.status() != WL_CONNECTED) {
     enterFallback(config, F("Connection to the saved Wi-Fi network was lost."), "sta_disconnected");
   } else if (connectionState_ == ConnectionState::kFallbackAp && config.ssid.length() > 0 &&
-             now >= nextReconnectAt_) {
+             millis_deadline::reached(now, nextReconnectAt_)) {
     beginStationAttempt(config);
   }
 
-  if (accessPointShutdownAt_ > 0 && now >= accessPointShutdownAt_ &&
+  if (accessPointShutdownScheduled_ && millis_deadline::reached(now, accessPointShutdownAt_) &&
       WiFi.status() == WL_CONNECTED) {
     stopAccessPoint();
   }
-  if (accessPointRestartAt_ > 0 && now >= accessPointRestartAt_ && accessPointActive_) {
+  if (accessPointRestartScheduled_ && millis_deadline::reached(now, accessPointRestartAt_) &&
+      accessPointActive_) {
+    accessPointRestartScheduled_ = false;
     accessPointRestartAt_ = 0;
     dnsServer_.stop();
     WiFi.softAPdisconnect(true);
@@ -350,6 +355,7 @@ void WifiManager::handleDns() {
 void WifiManager::scheduleAccessPointRestart() {
   if (accessPointActive_) {
     accessPointRestartAt_ = millis() + kApShutdownDelayMs;
+    accessPointRestartScheduled_ = true;
   }
 }
 // #endregion METHOD_WifiManager_scheduleAccessPointRestart
