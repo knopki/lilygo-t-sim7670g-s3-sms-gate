@@ -341,7 +341,9 @@ bool ZteService::forwardSms(const ZteSms& sms) {
   const unsigned long startedAt = millis();
   Serial.printf("event=zte_forward_begin id=%s heap=%u\n", sms.id,
                 static_cast<unsigned>(ESP.getFreeHeap()));
-  SecureSmtpChannel channel;
+  // This work runs inside zte_poll, so SMTP I/O must advance that task's
+  // watchdog heartbeat just like the inbox scan does.
+  SecureSmtpChannel channel(watchdog::reset);
   SmtpClient client(channel);
   client.setStageListener(logSmtpStage);
   String subject;
@@ -434,7 +436,9 @@ void ZteService::pollTask(void* param) {
 void ZteService::runPollTask() {
   watchdog::addCurrentTask("zte_poll");
   char* scratch = static_cast<char*>(malloc(kZteScratchSize));
-  NetworkZteChannel channel;
+  // The scan can span all 21 inbox pages. Feed the subscribed poll task at
+  // every bounded transport operation rather than only after the whole cycle.
+  NetworkZteChannel channel(watchdog::reset);
   ZteModem modem(channel, scratch, scratch == nullptr ? 0 : kZteScratchSize);
   bool waitingForStation = false;
   while (!pollStopRequested_) {

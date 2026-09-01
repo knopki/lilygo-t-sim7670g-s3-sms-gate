@@ -6,7 +6,8 @@
 // INVARIANTS:
 // - Plain reads avoid the unreliable select path;
 // - TLS validates the embedded CA bundle, expiry, and hostname;
-// - no insecure mode exists.
+// - no insecure mode exists;
+// - an optional progress hook runs around blocking I/O.
 // DEPENDENCIES: NetworkClientSecure, lwIP sockets, embedded Mozilla CA bundle.
 // #endregion MODULE_CONTRACT
 
@@ -36,7 +37,10 @@ extern const uint8_t _binary_x509_crt_bundle_end[];
 // client and its heap are released together with the object.
 class SecureSmtpChannel : public SmtpChannel {
  public:
-  explicit SecureSmtpChannel(unsigned long timeoutMs = 15000) : timeoutMs_(timeoutMs) {
+  // keepAlive runs in the caller's task around each bounded network operation.
+  // Poll tasks supply watchdog::reset; one-shot UI tasks omit it.
+  explicit SecureSmtpChannel(void (*keepAlive)() = nullptr, unsigned long timeoutMs = 15000)
+      : keepAlive_(keepAlive), timeoutMs_(timeoutMs) {
     const size_t bundleSize = reinterpret_cast<size_t>(_binary_x509_crt_bundle_end) -
                               reinterpret_cast<size_t>(_binary_x509_crt_bundle_start);
     client_.setCACertBundle(_binary_x509_crt_bundle_start, bundleSize);
@@ -55,13 +59,17 @@ class SecureSmtpChannel : public SmtpChannel {
       // Postpone the TLS handshake until STARTTLS has been accepted.
       client_.setPlainStart();
     }
-    return client_.connect(host, port, timeoutMs_) == 1;
+    reportProgress();
+    const bool connected = client_.connect(host, port, timeoutMs_) == 1;
+    reportProgress();
+    return connected;
   }
 
   bool write(const char* data, size_t length) override {
     const uint32_t deadline = millis() + timeoutMs_;
     size_t sent = 0;
     while (sent < length) {
+      reportProgress();
       const size_t written =
           client_.write(reinterpret_cast<const uint8_t*>(data + sent), length - sent);
       if (written > 0) {
@@ -73,6 +81,7 @@ class SecureSmtpChannel : public SmtpChannel {
       }
       delay(1);
     }
+    reportProgress();
     return true;
   }
 
@@ -80,12 +89,16 @@ class SecureSmtpChannel : public SmtpChannel {
     if (size < 2) {
       return -1;
     }
+    reportProgress();
     const uint32_t deadline = millis() + timeoutMs_;
     size_t used = 0;
     if (client_.stillInPlainStart()) {
-      return readPlainLine(buffer, size, deadline);
+      const int result = readPlainLine(buffer, size, deadline);
+      reportProgress();
+      return result;
     }
     for (;;) {
+      reportProgress();
       const int available = client_.available();
       if (available < 0) {
         readDetail_ = 'S';
@@ -123,11 +136,22 @@ class SecureSmtpChannel : public SmtpChannel {
     }
   }
 
-  bool startTls() override { return client_.startTLS() == 1; }
+  bool startTls() override {
+    reportProgress();
+    const bool started = client_.startTLS() == 1;
+    reportProgress();
+    return started;
+  }
 
   void stop() override { client_.stop(); }
 
  private:
+  void reportProgress() const {
+    if (keepAlive_ != nullptr) {
+      keepAlive_();
+    }
+  }
+
   // Plain-phase line reader delegates to plain_socket_reader.h (ADR-0002).
   int readPlainLine(char* buffer, size_t size, unsigned long deadline) {
     if (!recvTimeoutSet_) {
@@ -142,6 +166,7 @@ class SecureSmtpChannel : public SmtpChannel {
   }
 
   NetworkClientSecure client_;
+  void (*keepAlive_)();
   unsigned long timeoutMs_;
   bool recvTimeoutSet_ = false;
   char readDetail_ = 0;

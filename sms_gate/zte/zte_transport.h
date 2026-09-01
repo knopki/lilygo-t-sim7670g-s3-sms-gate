@@ -5,7 +5,8 @@
 // - NOT: goform protocol, JSON scanning, persistence, or HTTP routes.
 // INVARIANTS:
 // - Reads avoid the unreliable select path;
-// - transient socket errors wait until the deadline and all buffers remain bounded.
+// - transient socket errors wait until the deadline and all buffers remain bounded;
+// - an optional progress hook runs around blocking I/O.
 // DEPENDENCIES: NetworkClient and lwIP sockets.
 // #endregion MODULE_CONTRACT
 
@@ -28,17 +29,24 @@
 // and its buffers are released together with the object.
 class NetworkZteChannel : public ZteChannel {
  public:
-  explicit NetworkZteChannel(unsigned long timeoutMs = 10000) : timeoutMs_(timeoutMs) {}
+  // keepAlive runs in the caller's task around each bounded network operation.
+  // The poll task supplies watchdog::reset; tests and one-shot UI tasks omit it.
+  explicit NetworkZteChannel(void (*keepAlive)() = nullptr, unsigned long timeoutMs = 10000)
+      : keepAlive_(keepAlive), timeoutMs_(timeoutMs) {}
 
   bool connect(const char* host, uint16_t port) override {
     recvTimeoutSet_ = false;
-    return client_.connect(host, port, timeoutMs_) == 1;
+    reportProgress();
+    const bool connected = client_.connect(host, port, timeoutMs_) == 1;
+    reportProgress();
+    return connected;
   }
 
   bool write(const char* data, size_t length) override {
     const uint32_t deadline = millis() + timeoutMs_;
     size_t sent = 0;
     while (sent < length) {
+      reportProgress();
       const size_t written =
           client_.write(reinterpret_cast<const uint8_t*>(data + sent), length - sent);
       if (written > 0) {
@@ -50,6 +58,7 @@ class NetworkZteChannel : public ZteChannel {
       }
       delay(1);
     }
+    reportProgress();
     return true;
   }
 
@@ -57,20 +66,32 @@ class NetworkZteChannel : public ZteChannel {
     if (size < 2) {
       return -1;
     }
+    reportProgress();
     const uint32_t deadline = millis() + timeoutMs_;
     ensureRecvTimeout();
-    return plainReadLine(client_.fd(), buffer, size, deadline);
+    const int result = plainReadLine(client_.fd(), buffer, size, deadline);
+    reportProgress();
+    return result;
   }
 
   int read(char* buffer, size_t size) override {
+    reportProgress();
     ensureRecvTimeout();
     const uint32_t deadline = millis() + timeoutMs_;
-    return plainReadBytes(client_.fd(), buffer, size, deadline);
+    const int result = plainReadBytes(client_.fd(), buffer, size, deadline);
+    reportProgress();
+    return result;
   }
 
   void stop() override { client_.stop(); }
 
  private:
+  void reportProgress() const {
+    if (keepAlive_ != nullptr) {
+      keepAlive_();
+    }
+  }
+
   // One bounded recv() per byte/chunk with SO_RCVTIMEO; see INVARIANTS.
   void ensureRecvTimeout() {
     if (recvTimeoutSet_) {
@@ -85,6 +106,7 @@ class NetworkZteChannel : public ZteChannel {
   }
 
   NetworkClient client_;
+  void (*keepAlive_)();
   unsigned long timeoutMs_;
   bool recvTimeoutSet_ = false;
 };
