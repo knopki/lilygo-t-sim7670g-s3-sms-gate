@@ -10,6 +10,7 @@
 
 #include "zte/zte_json.h"
 
+#include <stdint.h>
 #include <string.h>
 
 #include "codec.h"
@@ -279,10 +280,11 @@ bool parseUint32String(const char* id, uint32_t& out) {
     if (*p < '0' || *p > '9') {
       return false;
     }
-    if (value > 429496729UL) {
+    const uint32_t digit = static_cast<uint32_t>(*p - '0');
+    if (value > UINT32_MAX / 10 || (value == UINT32_MAX / 10 && digit > UINT32_MAX % 10)) {
       return false;
     }
-    value = value * 10 + static_cast<uint32_t>(*p - '0');
+    value = value * 10 + digit;
   }
   out = value;
   return true;

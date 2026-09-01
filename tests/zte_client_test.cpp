@@ -18,6 +18,7 @@
 
 #include "../sms_gate/codec.h"
 #include "../sms_gate/zte/zte_client.h"
+#include "../sms_gate/zte/zte_json.h"
 #include "../sms_gate/zte/zte_record.h"
 
 namespace {
@@ -200,6 +201,20 @@ void testCodecVectors() {
   puts("testCodecVectors ok");
 }
 // #endregion FUNC_testCodecVectors
+
+// #region FUNC_testParseUint32String
+// PURPOSE: Rejects out-of-range modem IDs before they can alias valid IDs.
+void testParseUint32String() {
+  uint32_t value = 0;
+  assert(parseUint32String("4294967295", value));
+  assert(value == UINT32_MAX);
+  assert(!parseUint32String("4294967296", value));
+  assert(!parseUint32String("4294967297", value));
+  assert(!parseUint32String("42949672960", value));
+  assert(!parseUint32String("4294967295x", value));
+  puts("testParseUint32String ok");
+}
+// #endregion FUNC_testParseUint32String
 
 // #region FUNC_makeV3Record
 // PURPOSE: Supplies a legacy blob so migration validation remains reproducible.
@@ -983,6 +998,7 @@ void testFormatZteDate() {
 
 int main() {
   testCodecVectors();
+  testParseUint32String();
   testRecordValidation();
   testV3MigrationValidation();
   testLoginSuccess();
