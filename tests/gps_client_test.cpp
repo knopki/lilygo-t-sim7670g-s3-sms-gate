@@ -146,6 +146,36 @@ void testPollReportsAntennaBiasFailure() {
 }
 // #endregion FUNC_testPollReportsAntennaBiasFailure
 
+// #region FUNC_testCgpsInfoRejectsInvalidFixFields
+// PURPOSE: Prevents malformed GNSS coordinates and timestamps from becoming clock samples.
+void testCgpsInfoRejectsInvalidFixFields() {
+  GpsFixFields fix;
+  assert(parseCgpsInfoLine("+CGPSINFO: 5544.1234,N,03736.5678,E,250826,123456.789,100.0,0.0,0.0",
+                           fix));
+  assert(fix.hasFix);
+  assert(fix.timeMs == 789);
+
+  const char* invalidLines[] = {
+      "+CGPSINFO: 5544.1234,N,03736.5678,E,310225,123456,0,0,0",   // 31 February
+      "+CGPSINFO: 5544.1234,N,03736.5678,E,250225,12x456,0,0,0",   // non-digit time
+      "+CGPSINFO: 9999.0000,N,03736.5678,E,250225,123456,0,0,0",   // latitude > 90
+      "+CGPSINFO: 5544.1234,X,03736.5678,E,250225,123456,0,0,0",   // invalid direction
+      "+CGPSINFO: 5544.1234,NN,03736.5678,E,250225,123456,0,0,0",  // invalid direction
+  };
+  for (const char* line : invalidLines) {
+    assert(parseCgpsInfoLine(line, fix));
+    assert(!fix.hasFix);
+  }
+
+  snprintf(fix.date, sizeof(fix.date), "310225");
+  snprintf(fix.utcTime, sizeof(fix.utcTime), "123456");
+  int64_t epochMs = 0;
+  char iso[32];
+  assert(!gpsFixToEpochMs(fix, epochMs));
+  assert(!gpsFixToIso(fix, iso, sizeof(iso)));
+}
+// #endregion FUNC_testCgpsInfoRejectsInvalidFixFields
+
 // #region FUNC_testCgnssInfoMatchesManualExample
 // PURPOSE: Maps fields by the SIM767xx manual V1.02 order so the GPS page
 // shows per-constellation counts instead of GPS/GLONASS mislabeled as used.
@@ -231,6 +261,7 @@ int main() {
   testClassicAntennaBiasBeforeColdPowerOn();
   testClassicAntennaBiasRestoredForRunningEngine();
   testPollReportsAntennaBiasFailure();
+  testCgpsInfoRejectsInvalidFixFields();
   testCgnssInfoMatchesManualExample();
   testCgnssInfoEmptyFieldsKeepPositions();
   testCgnssInfoNoFixAllEmpty();

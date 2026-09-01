@@ -28,6 +28,56 @@ namespace {
 constexpr unsigned long kGpsDefaultTimeoutMs = 1500;
 constexpr unsigned long kGpsPowerTimeoutMs = 5000;
 constexpr int kGpsMaxLines = 20;
+
+// #region FUNC_parseGpsDateTime
+// PURPOSE: Rejects malformed calendar values before they can become a GNSS clock sample.
+bool parseGpsDateTime(const char* date, const char* utcTime, int& year, int& month, int& day,
+                      int& hour, int& minute, int& second) {
+  if (date == nullptr || utcTime == nullptr || strlen(date) != 6 || strlen(utcTime) != 6) {
+    return false;
+  }
+  for (size_t i = 0; i < 6; ++i) {
+    if (!isdigit(static_cast<unsigned char>(date[i])) ||
+        !isdigit(static_cast<unsigned char>(utcTime[i]))) {
+      return false;
+    }
+  }
+  day = (date[0] - '0') * 10 + date[1] - '0';
+  month = (date[2] - '0') * 10 + date[3] - '0';
+  year = (date[4] - '0') * 10 + date[5] - '0';
+  year += year < 70 ? 2000 : 1900;
+  hour = (utcTime[0] - '0') * 10 + utcTime[1] - '0';
+  minute = (utcTime[2] - '0') * 10 + utcTime[3] - '0';
+  second = (utcTime[4] - '0') * 10 + utcTime[5] - '0';
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 60) return false;
+
+  const bool leapYear = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+  const int daysInMonth[] = {0, 31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  return day >= 1 && day <= daysInMonth[month];
+}
+// #endregion FUNC_parseGpsDateTime
+
+// #region FUNC_isValidNmeaCoordinate
+// PURPOSE: Rejects malformed GNSS positions before they can publish a false fix.
+bool isValidNmeaCoordinate(const char* nmea, char direction, int maxDegrees) {
+  const bool isLatitude = maxDegrees == 90;
+  if (nmea == nullptr || nmea[0] == '\0' ||
+      (isLatitude
+           ? !(direction == 'N' || direction == 'S' || direction == 'n' || direction == 's')
+           : !(direction == 'E' || direction == 'W' || direction == 'e' || direction == 'w'))) {
+    return false;
+  }
+  char* end = nullptr;
+  double raw = strtod(nmea, &end);
+  if (end == nmea || *end != '\0' || !(raw >= 0.0) || raw > maxDegrees * 100.0 + 60.0) {
+    return false;
+  }
+  const int degrees = static_cast<int>(raw / 100.0);
+  const double minutes = raw - degrees * 100.0;
+  return minutes >= 0.0 && minutes < 60.0 &&
+         (degrees < maxDegrees || (degrees == maxDegrees && minutes == 0.0));
+}
+// #endregion FUNC_isValidNmeaCoordinate
 }  // namespace
 
 // #region FUNC_parseCgnssPwrLine
@@ -68,9 +118,11 @@ bool parseCgnssModeLine(const char* line, int& mode) {
 // PURPOSE: Makes modem coordinates usable without carrying NMEA formatting downstream.
 double nmeaToDecimal(const char* nmea, char dir) {
   if (nmea == nullptr || nmea[0] == '\0') return 0.0;
-  double raw = atof(nmea);
-  int deg = static_cast<int>(raw / 100);
-  double minutes = raw - deg * 100.0;
+  char* end = nullptr;
+  const double raw = strtod(nmea, &end);
+  if (end == nmea || *end != '\0') return 0.0;
+  const int deg = static_cast<int>(raw / 100);
+  const double minutes = raw - deg * 100.0;
   double decimal = deg + minutes / 60.0;
   if (dir == 'S' || dir == 'W' || dir == 's' || dir == 'w') decimal = -decimal;
   return decimal;
@@ -80,22 +132,8 @@ double nmeaToDecimal(const char* nmea, char dir) {
 // #region FUNC_gpsFixToEpochMs
 // PURPOSE: Turns a valid GNSS timestamp into epoch time for source arbitration.
 bool gpsFixToEpochMs(const GpsFixFields& fix, int64_t& epochMsOut) {
-  if (fix.date[0] == '\0' || fix.utcTime[0] == '\0') return false;
-  if (strlen(fix.date) != 6) return false;
-  char dd[3] = {fix.date[0], fix.date[1], '\0'};
-  char mm[3] = {fix.date[2], fix.date[3], '\0'};
-  char yy[3] = {fix.date[4], fix.date[5], '\0'};
-  int day = atoi(dd);
-  int mon = atoi(mm);
-  int year = atoi(yy);
-  if (day < 1 || day > 31 || mon < 1 || mon > 12) return false;
-  year += (year < 70 ? 2000 : 1900);
-  if (strlen(fix.utcTime) < 6) return false;
-  char hh[3] = {fix.utcTime[0], fix.utcTime[1], '\0'};
-  char mi[3] = {fix.utcTime[2], fix.utcTime[3], '\0'};
-  char ss[3] = {fix.utcTime[4], fix.utcTime[5], '\0'};
-  int h = atoi(hh), m = atoi(mi), s = atoi(ss);
-  if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 60) return false;
+  int year = 0, mon = 0, day = 0, h = 0, m = 0, s = 0;
+  if (!parseGpsDateTime(fix.date, fix.utcTime, year, mon, day, h, m, s)) return false;
   if (fix.timeMs < 0 || fix.timeMs > 999) return false;
   auto daysFromCivil = [](int y, int mo, int d) -> int64_t {
     y -= mo <= 2;
@@ -115,29 +153,8 @@ bool gpsFixToEpochMs(const GpsFixFields& fix, int64_t& epochMsOut) {
 // #region FUNC_gpsFixToIso
 // PURPOSE: Keeps GNSS timestamps consistent across status and forwarded email output.
 bool gpsFixToIso(const GpsFixFields& fix, char* out, size_t outSize) {
-  if (fix.date[0] == '\0' || fix.utcTime[0] == '\0') return false;
-  if (strlen(fix.date) != 6) return false;
-  // cppcheck-suppress constVariable
-  char dd[3] = {fix.date[0], fix.date[1], '\0'};
-  // cppcheck-suppress constVariable
-  char mm[3] = {fix.date[2], fix.date[3], '\0'};
-  // cppcheck-suppress constVariable
-  char yy[3] = {fix.date[4], fix.date[5], '\0'};
-  int day = atoi(dd);
-  int mon = atoi(mm);
-  int year = atoi(yy);
-  if (day < 1 || day > 31 || mon < 1 || mon > 12) return false;
-  year += (year < 70 ? 2000 : 1900);
-  // time: hhmmss[.s] — take first 6 chars
-  if (strlen(fix.utcTime) < 6) return false;
-  // cppcheck-suppress constVariable
-  char hh[3] = {fix.utcTime[0], fix.utcTime[1], '\0'};
-  // cppcheck-suppress constVariable
-  char mi[3] = {fix.utcTime[2], fix.utcTime[3], '\0'};
-  // cppcheck-suppress constVariable
-  char ss[3] = {fix.utcTime[4], fix.utcTime[5], '\0'};
-  int h = atoi(hh), m = atoi(mi), s = atoi(ss);
-  if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 60) return false;
+  int year = 0, mon = 0, day = 0, h = 0, m = 0, s = 0;
+  if (!parseGpsDateTime(fix.date, fix.utcTime, year, mon, day, h, m, s)) return false;
   snprintf(out, outSize, "%04d-%02d-%02dT%02d:%02d:%02dZ", year, mon, day, h, m, s);
   return true;
 }
@@ -203,39 +220,46 @@ bool parseCgpsInfoLine(const char* line, GpsFixFields& out) {
   char* altStr = tokens[6];
   char* speedStr = tokens[7];
   char* courseStr = tokens[8];
-  if (latStr[0] == '\0' || lonStr[0] == '\0') {
+  int ms = 0;
+  char* dot = strchr(timeStr, '.');
+  if (dot != nullptr) {
+    *dot = '\0';
+    const char* frac = dot + 1;
+    if (*frac == '\0') {
+      out.hasFix = false;
+      return true;
+    }
+    for (const char* digit = frac; *digit != '\0'; ++digit) {
+      if (!isdigit(static_cast<unsigned char>(*digit))) {
+        out.hasFix = false;
+        return true;
+      }
+    }
+    char msBuf[4] = "000";
+    const size_t fracLength = strlen(frac);
+    memcpy(msBuf, frac, fracLength < 3 ? fracLength : 3);
+    ms = (msBuf[0] - '0') * 100 + (msBuf[1] - '0') * 10 + msBuf[2] - '0';
+  }
+
+  const char latDir = latDirStr[0];
+  const char lonDir = lonDirStr[0];
+  int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+  if (latDirStr[1] != '\0' || lonDirStr[1] != '\0' || !isValidNmeaCoordinate(latStr, latDir, 90) ||
+      !isValidNmeaCoordinate(lonStr, lonDir, 180) ||
+      !parseGpsDateTime(dateStr, timeStr, year, month, day, hour, minute, second)) {
     out.hasFix = false;
     return true;
   }
   out.hasFix = true;
   snprintf(out.rawLat, sizeof(out.rawLat), "%s", latStr);
   snprintf(out.rawLon, sizeof(out.rawLon), "%s", lonStr);
-  out.latDir = latDirStr[0] ? latDirStr[0] : 'N';
-  out.lonDir = lonDirStr[0] ? lonDirStr[0] : 'E';
+  out.latDir = latDir;
+  out.lonDir = lonDir;
   out.lat = nmeaToDecimal(latStr, out.latDir);
   out.lon = nmeaToDecimal(lonStr, out.lonDir);
   snprintf(out.date, sizeof(out.date), "%s", dateStr);
-  {
-    char* dot = strchr(timeStr, '.');
-    int ms = 0;
-    if (dot) {
-      *dot = '\0';
-      const char* frac = dot + 1;
-      // Take up to 3 digits, pad/truncate to ms.
-      char msBuf[4] = "000";
-      size_t fl = strlen(frac);
-      if (fl > 0) {
-        size_t copy = fl < 3 ? fl : 3;
-        memcpy(msBuf, frac, copy);
-        // If only 1-2 digits, e.g. ".5" -> 500, ".12" -> 120; already padded.
-      }
-      ms = atoi(msBuf);
-      if (ms < 0) ms = 0;
-      if (ms > 999) ms = 999;
-    }
-    snprintf(out.utcTime, sizeof(out.utcTime), "%s", timeStr);
-    out.timeMs = ms;
-  }
+  snprintf(out.utcTime, sizeof(out.utcTime), "%s", timeStr);
+  out.timeMs = ms;
   if (altStr[0]) out.alt = static_cast<float>(atof(altStr));
   if (speedStr[0]) out.speed = static_cast<float>(atof(speedStr));
   if (courseStr[0]) out.course = static_cast<float>(atof(courseStr));
