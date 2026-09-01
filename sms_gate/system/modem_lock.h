@@ -46,6 +46,25 @@ inline void give() {
 }
 // #endregion FUNC_give
 
+// #region CLASS_ScopedModemLock
+// PURPOSE: Ensures a successful Serial1 lock acquisition is released exactly once.
+class ScopedModemLock {
+ public:
+  explicit ScopedModemLock(unsigned long timeoutMs = 5000) : held_(take(timeoutMs)) {}
+  ~ScopedModemLock() {
+    if (held_) give();
+  }
+
+  ScopedModemLock(const ScopedModemLock&) = delete;
+  ScopedModemLock& operator=(const ScopedModemLock&) = delete;
+
+  bool held() const { return held_; }
+
+ private:
+  bool held_ = false;
+};
+// #endregion CLASS_ScopedModemLock
+
 }  // namespace modem_lock
 
 #endif  // SYSTEM_MODEM_LOCK_H

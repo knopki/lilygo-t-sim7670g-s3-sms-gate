@@ -475,16 +475,37 @@ void ModemService::runPollTask() {
     vTaskDelete(nullptr);
     return;
   }
-  // Init must be serialized with GNSS task — hold the shared Serial1 lock.
-  modem_lock::take(15000);
   ModemTransport transport;
-  transport.begin();
-  transport.powerPulse();
-  Serial.println("event=modem_init_begin variant=classic");
-  vTaskDelay(pdMS_TO_TICKS(3000));
   ModemClient client(transport, scratch, kModemScratchSize);
-  ModemResult initResult = client.init();
-  modem_lock::give();
+  ModemResult initResult = ModemResult::kTimeout;
+  bool initComplete = false;
+  // Init must be serialized with GNSS task — never touch Serial1 without the shared lock.
+  while (!taskStopRequested_ && !initComplete) {
+    modem_lock::ScopedModemLock initLock(15000);
+    if (!initLock.held()) {
+      Serial.println("event=modem_init_skipped reason=modem_busy");
+    } else {
+      transport.begin();
+      transport.powerPulse();
+      Serial.println("event=modem_init_begin variant=classic");
+      vTaskDelay(pdMS_TO_TICKS(3000));
+      initResult = client.init();
+      initComplete = true;
+    }
+    if (!initComplete && !taskStopRequested_) {
+      watchdog::reset();
+      vTaskDelay(pdMS_TO_TICKS(kPollSliceMs));
+    }
+  }
+  if (!initComplete) {
+    transport.end();
+    free(scratch);
+    Serial.println("event=modem_task_stopped");
+    watchdog::removeCurrentTask();
+    taskHandle_ = nullptr;
+    vTaskDelete(nullptr);
+    return;
+  }
   if (initResult == ModemResult::kSuccess) {
     Serial.printf("event=modem_ready variant=classic heap=%u stack_hwm=%u\n",
                   static_cast<unsigned>(ESP.getFreeHeap()),
