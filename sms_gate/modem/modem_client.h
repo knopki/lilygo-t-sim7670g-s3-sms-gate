@@ -175,6 +175,8 @@ class ModemClient {
   size_t scratchSize_;
   const char* failedStage_ = "";
   size_t replyLen_ = 0;
+  // Applied to every line of the reply started by the latest command.
+  unsigned long responseTimeoutMs_ = 1000;
   uint8_t pduRef_ = 0;  // concat reference, increments per multipart send
 };
 // #endregion CLASS_ModemClient

@@ -43,7 +43,8 @@ class FakeGpsChannel : public ModemChannel {
     return true;
   }
 
-  int readLine(char* buffer, size_t size, unsigned long) override {
+  int readLine(char* buffer, size_t size, unsigned long timeoutMs) override {
+    readTimeouts_.push_back(timeoutMs);
     assert(transactionIndex_ < transactions_.size());
     const auto& lines = transactions_[transactionIndex_].replyLines;
     assert(lineIndex_ < lines.size());
@@ -60,11 +61,13 @@ class FakeGpsChannel : public ModemChannel {
   void purge() override {}
 
   bool complete() const { return transactionIndex_ == transactions_.size(); }
+  const std::vector<unsigned long>& readTimeouts() const { return readTimeouts_; }
 
  private:
   std::vector<Transaction> transactions_;
   size_t transactionIndex_ = 0;
   size_t lineIndex_ = 0;
+  std::vector<unsigned long> readTimeouts_;
 };
 // #endregion CLASS_FakeGpsChannel
 
@@ -253,6 +256,12 @@ void testPollMapsSatelliteCountsFromCgnssInfo() {
   assert(status.sats.used == 21);
   assert(status.mode == 3);  // CGNSSMODE value; CGNSSINFO fix mode (2) ignored
   assert(channel.complete());
+  const std::vector<unsigned long>& readTimeouts = channel.readTimeouts();
+  assert(readTimeouts.size() >= 4);
+  assert(readTimeouts[readTimeouts.size() - 4] == 3000);
+  assert(readTimeouts[readTimeouts.size() - 3] == 3000);
+  assert(readTimeouts[readTimeouts.size() - 2] == 3000);
+  assert(readTimeouts[readTimeouts.size() - 1] == 3000);
 }
 // #endregion FUNC_testPollMapsSatelliteCountsFromCgnssInfo
 

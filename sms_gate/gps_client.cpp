@@ -322,9 +322,9 @@ void GpsClient::fail(const char* stage) { failedStage_ = stage; }
 // #endregion METHOD_GpsClient_fail
 
 // #region METHOD_GpsClient_sendCommand
-// PURPOSE: Starts each GNSS command from a clean channel boundary.
+// PURPOSE: Starts each GNSS command from a clean channel boundary and keeps
+// its response timeout so the command receives the time its caller permits.
 GpsResult GpsClient::sendCommand(const char* cmd, unsigned long timeoutMs) {
-  (void)timeoutMs;
   channel_.purge();
   size_t len = strlen(cmd);
   char withCr[96];
@@ -339,12 +339,14 @@ GpsResult GpsClient::sendCommand(const char* cmd, unsigned long timeoutMs) {
     fail("write_failed");
     return GpsResult::kTimeout;
   }
+  responseTimeoutMs_ = timeoutMs;
   return GpsResult::kSuccess;
 }
 // #endregion METHOD_GpsClient_sendCommand
 
 // #region METHOD_GpsClient_readResponse
-// PURPOSE: Collects bounded GNSS replies for parser and status updates.
+// PURPOSE: Collects bounded GNSS replies using the timeout of the command
+// that started them, for parser and status updates.
 GpsResult GpsClient::readResponse() {
   if (scratch_ == nullptr || scratchSize_ == 0) {
     fail("no_scratch");
@@ -354,7 +356,7 @@ GpsResult GpsClient::readResponse() {
   replyLen_ = 0;
   char line[192];
   for (int i = 0; i < kGpsMaxLines; ++i) {
-    int len = channel_.readLine(line, sizeof(line), kGpsDefaultTimeoutMs);
+    int len = channel_.readLine(line, sizeof(line), responseTimeoutMs_);
     if (len < 0) {
       fail("timeout");
       return GpsResult::kTimeout;

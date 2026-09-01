@@ -102,6 +102,8 @@ class GpsClient {
   size_t scratchSize_;
   const char* failedStage_ = "";
   size_t replyLen_ = 0;
+  // Applied to every line of the reply started by the latest command.
+  unsigned long responseTimeoutMs_ = 1500;
 };
 // #endregion CLASS_GpsClient
 

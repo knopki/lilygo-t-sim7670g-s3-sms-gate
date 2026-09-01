@@ -753,11 +753,10 @@ void ModemClient::fail(const char* stage) { failedStage_ = stage; }
 // #endregion METHOD_ModemClient_fail
 
 // #region METHOD_ModemClient_sendCommand
-// PURPOSE: Purges stale input, then writes one CRLF-terminated command, so
-// every dialog step starts from a clean line boundary and stale replies
-// cannot be attributed to the new command.
+// PURPOSE: Purges stale input, then writes one CRLF-terminated command and
+// preserves its response timeout, so every dialog step starts from a clean
+// line boundary and receives the time its caller permits.
 ModemResult ModemClient::sendCommand(const char* cmd, unsigned long timeoutMs) {
-  (void)timeoutMs;
   channel_.purge();
   size_t len = strlen(cmd);
   char withCr[96];
@@ -772,14 +771,15 @@ ModemResult ModemClient::sendCommand(const char* cmd, unsigned long timeoutMs) {
     fail("write_failed");
     return ModemResult::kTimeout;
   }
+  responseTimeoutMs_ = timeoutMs;
   return ModemResult::kSuccess;
 }
 // #endregion METHOD_ModemClient_sendCommand
 
 // #region METHOD_ModemClient_readResponse
-// PURPOSE: Drains a bounded reply to its terminal OK/ERROR and keeps the
-// last payload line in scratch, so failure diagnostics carry the decisive
-// modem line while the success path stays quiet.
+// PURPOSE: Drains a reply to its terminal OK/ERROR using the timeout of the
+// command that started it, and keeps the last payload line in scratch so
+// failure diagnostics carry the decisive modem line while success stays quiet.
 ModemResult ModemClient::readResponse() {
   if (scratch_ == nullptr || scratchSize_ == 0) {
     fail("no_scratch");
@@ -789,7 +789,7 @@ ModemResult ModemClient::readResponse() {
   replyLen_ = 0;
   char line[160];
   for (int i = 0; i < kModemMaxLines; ++i) {
-    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
+    int len = channel_.readLine(line, sizeof(line), responseTimeoutMs_);
     if (len < 0) {
       fail("timeout");
       return ModemResult::kTimeout;
@@ -858,7 +858,7 @@ ModemResult ModemClient::init() {
   // without failing init if it does not appear within the status window.
   char line[64];
   for (int i = 0; i < kModemInitRetries; ++i) {
-    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
+    int len = channel_.readLine(line, sizeof(line), responseTimeoutMs_);
     if (len < 0) continue;
     if (len == 0) continue;
     if (strstr(line, "SMS DONE") != nullptr) break;
@@ -1021,7 +1021,7 @@ ModemResult ModemClient::findOldestUnread(ModemSms& out, bool& found) {
   bool haveBest = false;
   bool terminalOk = false;
   for (int attempt = 0; attempt < kModemCmglMaxReadAttempts; ++attempt) {
-    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
+    int len = channel_.readLine(line, sizeof(line), responseTimeoutMs_);
     if (len < 0) {
       fail("timeout");
       return ModemResult::kTimeout;
@@ -1087,7 +1087,7 @@ ModemResult ModemClient::findUnreadCandidates(ModemInboxCandidate* out, size_t c
   char line[1536];
   bool terminalOk = false;
   for (int attempt = 0; attempt < kModemCmglMaxReadAttempts; ++attempt) {
-    const int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
+    const int len = channel_.readLine(line, sizeof(line), responseTimeoutMs_);
     if (len < 0) {
       fail("timeout");
       return ModemResult::kTimeout;
@@ -1154,7 +1154,7 @@ ModemResult ModemClient::readSms(const char* id, ModemSms& out) {
   bool haveBody = false;
   bool terminalOk = false;
   for (int i = 0; i < kModemInitRetries; ++i) {
-    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
+    int len = channel_.readLine(line, sizeof(line), responseTimeoutMs_);
     if (len < 0) {
       fail("timeout");
       return ModemResult::kTimeout;
@@ -1227,7 +1227,7 @@ ModemResult ModemClient::probeConcat(const char* id, ModemConcatInfo& out) {
       char pdu[1536] = "";
       bool terminalOk = false;
       for (int attempt = 0; attempt < kModemInitRetries; ++attempt) {
-        const int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
+        const int len = channel_.readLine(line, sizeof(line), responseTimeoutMs_);
         if (len < 0) {
           fail("timeout");
           result = ModemResult::kTimeout;
@@ -1281,7 +1281,7 @@ ModemResult ModemClient::deleteSms(const char* id) {
   if (sendCommand(cmd, 3000) != ModemResult::kSuccess) return ModemResult::kTimeout;
   char line[64];
   for (int i = 0; i < 5; ++i) {
-    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
+    int len = channel_.readLine(line, sizeof(line), responseTimeoutMs_);
     if (len < 0) {
       fail("timeout");
       return ModemResult::kTimeout;
@@ -1324,7 +1324,7 @@ ModemResult ModemClient::submitData(const char* payload) {
   char line[192] = "";
   bool promptSeen = false;
   for (int attempt = 0; attempt < 6; ++attempt) {
-    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
+    int len = channel_.readLine(line, sizeof(line), responseTimeoutMs_);
     if (len < 0) {
       // Timeout waiting for prompt
       fail("cmgs_prompt");
@@ -1358,7 +1358,7 @@ ModemResult ModemClient::submitData(const char* payload) {
   }
   bool haveCmgs = false;
   for (int attempt = 0; attempt < 60; ++attempt) {
-    int len = channel_.readLine(line, sizeof(line), kModemDefaultTimeoutMs);
+    int len = channel_.readLine(line, sizeof(line), responseTimeoutMs_);
     if (len < 0) {
       fail("timeout");
       return ModemResult::kTimeout;

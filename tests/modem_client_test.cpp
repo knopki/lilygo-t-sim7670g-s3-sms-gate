@@ -59,7 +59,8 @@ class FakeModemChannel : public ModemChannel {
     return true;
   }
 
-  int readLine(char* buffer, size_t size, unsigned long) override {
+  int readLine(char* buffer, size_t size, unsigned long timeoutMs) override {
+    readTimeouts_.push_back(timeoutMs);
     if (broken_ || !pending_ || scriptIdx_ >= scripts_.size()) return -1;
     const Script& sc = scripts_[scriptIdx_];
     if (lineIdx_ >= sc.replyLines.size()) {
@@ -88,6 +89,7 @@ class FakeModemChannel : public ModemChannel {
   const std::vector<std::string>& violations() const { return violations_; }
   const std::vector<std::string>& matchedCommands() const { return matched_; }
   const std::vector<std::string>& rawWrites() const { return rawWrites_; }
+  const std::vector<unsigned long>& readTimeouts() const { return readTimeouts_; }
   const std::string& dataPayload() const { return payload_; }
 
  private:
@@ -113,6 +115,7 @@ class FakeModemChannel : public ModemChannel {
   bool broken_ = false;
   std::vector<std::string> matched_;
   std::vector<std::string> rawWrites_;
+  std::vector<unsigned long> readTimeouts_;
   std::vector<std::string> violations_;
   std::string payload_;
 };
@@ -1010,6 +1013,7 @@ void testFindUnreadCandidates() {
   expectNoViolations(ch, "find_unread_candidates");
   assert(count == 3 && strcmp(candidates[0].id, "2") == 0 && strcmp(candidates[1].id, "5") == 0 &&
          strcmp(candidates[2].id, "7") == 0);
+  for (unsigned long timeoutMs : ch.readTimeouts()) assert(timeoutMs == 5000);
   puts("testFindUnreadCandidates ok");
 }
 // #endregion FUNC_testFindUnreadCandidates
