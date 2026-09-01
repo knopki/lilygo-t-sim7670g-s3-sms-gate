@@ -81,13 +81,8 @@ bool ModemSourceStore::load(RuntimeModemSourceConfig& config) const {
   ModemSourceRecord record{};
   const size_t readLength = preferences.getBytes(kAppCfgKey, &record, sizeof(record));
   preferences.end();
-  if (readLength != sizeof(record)) {
+  if (readLength != sizeof(record) || !isModemSourceRecordValid(record)) {
     if (migrateV2Record(readLength)) return load(config);
-    Serial.printf("event=modem_source_load_empty_or_invalid bytes=%u\n",
-                  static_cast<unsigned>(readLength));
-    return false;
-  }
-  if (!isModemSourceRecordValid(record)) {
     Serial.printf("event=modem_source_load_empty_or_invalid bytes=%u\n",
                   static_cast<unsigned>(readLength));
     return false;

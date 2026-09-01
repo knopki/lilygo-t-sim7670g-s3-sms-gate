@@ -33,6 +33,12 @@ class String {
   size_t length() const { return data_.size(); }
   bool isEmpty() const { return data_.empty(); }
   const char* c_str() const { return data_.c_str(); }
+  void toCharArray(char* buffer, size_t bufferSize) const {
+    if (buffer == nullptr || bufferSize == 0) return;
+    const size_t length = std::min(data_.size(), bufferSize - 1);
+    std::memcpy(buffer, data_.data(), length);
+    buffer[length] = '\0';
+  }
   char* begin() { return &data_[0]; }
   operator std::string() const { return data_; }
 

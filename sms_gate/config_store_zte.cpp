@@ -92,14 +92,10 @@ bool ZteConfigStore::load(RuntimeZteConfig& config) const {
   const size_t readLength = preferences.getBytes(kAppCfgKey, &record, sizeof(record));
   preferences.end();
 
-  if (readLength != sizeof(record)) {
+  if (readLength != sizeof(record) || !isZteConfigRecordValid(record)) {
     if (migrateV3Record(readLength)) {
       return load(config);
     }
-    Serial.printf("event=zte_load_empty_or_invalid bytes=%u\n", static_cast<unsigned>(readLength));
-    return false;
-  }
-  if (!isZteConfigRecordValid(record)) {
     Serial.printf("event=zte_load_empty_or_invalid bytes=%u\n", static_cast<unsigned>(readLength));
     return false;
   }

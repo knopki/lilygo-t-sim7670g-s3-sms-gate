@@ -78,12 +78,8 @@ bool GpsConfigStore::load(RuntimeGpsConfig& config) const {
   GpsRecord record{};
   const size_t readLength = preferences.getBytes(kAppCfgKey, &record, sizeof(record));
   preferences.end();
-  if (readLength != sizeof(record)) {
+  if (readLength != sizeof(record) || !isGpsRecordValid(record)) {
     if (migrateV2Record(readLength)) return load(config);
-    Serial.printf("event=gps_load_empty_or_invalid bytes=%u\n", static_cast<unsigned>(readLength));
-    return false;
-  }
-  if (!isGpsRecordValid(record)) {
     Serial.printf("event=gps_load_empty_or_invalid bytes=%u\n", static_cast<unsigned>(readLength));
     return false;
   }
