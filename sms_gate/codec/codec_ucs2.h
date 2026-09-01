@@ -130,6 +130,11 @@ inline void appendUcs2HexUnitInternal(uint16_t unit, char* out, size_t outSize, 
   for (int shift = 12; shift >= 0 && used + 1 < outSize; shift -= 4)
     out[used++] = kHex[(unit >> shift) & 0x0F];
 }
+// #region FUNC_decodeUtf8OneForEncode
+// PURPOSE: Decodes one UTF-8 codepoint before UCS-2 encoding, rejecting
+// malformed input.
+// REQUIRES: p points into a readable NUL-terminated byte string; validation
+// may inspect up to three bytes after the leading byte.
 inline bool decodeUtf8OneForEncode(const char*& p, uint32_t& out) {
   const unsigned char lead = static_cast<unsigned char>(*p++);
   if (lead < 0x80) {
@@ -161,6 +166,7 @@ inline bool decodeUtf8OneForEncode(const char*& p, uint32_t& out) {
   if (out < min || out > 0x10FFFF || (out >= 0xD800 && out <= 0xDFFF)) return false;
   return true;
 }
+// #endregion FUNC_decodeUtf8OneForEncode
 
 // #region FUNC_encodeUcs2Hex
 // PURPOSE: Encodes UTF-8 text as UCS-2 hex for modem SMS payloads.

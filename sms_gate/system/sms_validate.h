@@ -35,6 +35,8 @@ constexpr size_t kMaxSmsRecipientLength = 20;
 // #region FUNC_smsValidateDecodeUtf8One
 // PURPOSE: Decodes one UTF-8 codepoint for unit counting, rejecting overlong
 // forms, surrogates, and truncated sequences.
+// REQUIRES: p points into a readable NUL-terminated byte string; validation
+// may inspect up to three bytes after the leading byte.
 inline bool smsValidateDecodeUtf8One(const char*& p, uint32_t& out) {
   const unsigned char lead = static_cast<unsigned char>(*p++);
   if (lead < 0x80) {
