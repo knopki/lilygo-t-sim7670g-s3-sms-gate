@@ -32,6 +32,8 @@ inline void esp_sntp_stop() {}
 // #region CONST_timeSyncThresholds
 // PURPOSE: Keeps source freshness and quarantine decisions consistent.
 namespace {
+TimeSync* gTimeSyncForSntp = nullptr;
+
 constexpr uint32_t kQuorumAgreeMs = 10UL * 1000UL;
 constexpr int64_t kQuarantineDiffMs = 300LL * 1000LL;
 constexpr uint32_t kQuarantineDurationMs = 15UL * 60UL * 1000UL;
@@ -42,6 +44,16 @@ constexpr uint32_t kDisciplineIgnoreLogIntervalMs =
     60UL * 1000UL;  // throttle time_discipline_ignored
 }  // namespace
 // #endregion CONST_timeSyncThresholds
+
+#ifdef ARDUINO
+// lwIP calls this weak hook instead of updating the system clock itself.
+// TimeSync is the sole owner of forward-only clock discipline.
+extern "C" void sntp_sync_time(struct timeval* tv) {
+  if (gTimeSyncForSntp == nullptr || tv == nullptr) return;
+  const int64_t epochMs = static_cast<int64_t>(tv->tv_sec) * 1000 + tv->tv_usec / 1000;
+  gTimeSyncForSntp->feedSntpSync(epochMs);
+}
+#endif
 
 void TimeSync::lockSamples() const { portENTER_CRITICAL(&samplesMux_); }
 
@@ -84,6 +96,7 @@ void TimeSync::begin() {
   modemPollMs_ = 15UL * 1000UL;
   unlockSamples();
   sntpRunning_ = false;
+  if (gTimeSyncForSntp == this) gTimeSyncForSntp = nullptr;
 }
 // #endregion METHOD_TimeSync_begin
 
@@ -495,6 +508,7 @@ const char* TimeSync::sourceName() const { return sourceName(state().source); }
 void TimeSync::startSntp(const char* server1, const char* server2) {
   if (server1 == nullptr || server1[0] == '\0') return;
 #ifdef ARDUINO
+  gTimeSyncForSntp = this;
   configTime(0, 0, server1, server2 && server2[0] ? server2 : nullptr);
   sntpRunning_ = true;
   Serial.printf("event=sntp_begin server=%s\n", server1);
@@ -511,6 +525,7 @@ void TimeSync::startSntp(const char* server1, const char* server2) {
 void TimeSync::stopSntp() {
   if (!sntpRunning_) return;
 #ifdef ARDUINO
+  if (gTimeSyncForSntp == this) gTimeSyncForSntp = nullptr;
   esp_sntp_stop();
   Serial.println("event=sntp_stop");
 #endif

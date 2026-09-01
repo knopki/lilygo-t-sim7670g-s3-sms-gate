@@ -13,23 +13,10 @@
 #include <ESPmDNS.h>
 #include <WiFi.h>
 #include <esp_mac.h>
-#include <esp_sntp.h>
-#include <time.h>
 
 #include "system/millis_deadline.h"
 #include "system/time_sync.h"
 #include "system/watchdog.h"
-
-namespace {
-TimeSync* gTimeSyncForSntp = nullptr;
-// cppcheck-suppress constParameterCallback
-void onSntpSync(struct timeval* tv) {
-  if (gTimeSyncForSntp != nullptr && tv != nullptr) {
-    int64_t epochMs = (int64_t)tv->tv_sec * 1000 + tv->tv_usec / 1000;
-    gTimeSyncForSntp->feedSntpSync(epochMs);
-  }
-}
-}  // namespace
 
 // #region METHOD_WifiManager_buildStationMacAddress
 // PURPOSE: Establishes device identity before Wi-Fi starts without relying on interface state.
@@ -146,22 +133,16 @@ void WifiManager::beginStationAttempt(const RuntimeConfig& config) {
 // #region METHOD_WifiManager_startWallClock
 // PURPOSE: Starts the configured fallback clock after station connection.
 void WifiManager::startWallClock(const RuntimeConfig& config) {
-  if (timeSync_ != nullptr) {
-    gTimeSyncForSntp = timeSync_;
-    esp_sntp_set_time_sync_notification_cb(onSntpSync);
-    if (config.ntpEnabled && config.ntpServer1.length() > 0) {
-      timeSync_->startSntp(config.ntpServer1.c_str(),
-                           config.ntpServer2.length() > 0 ? config.ntpServer2.c_str() : nullptr);
-    } else {
-      timeSync_->stopSntp();
-    }
+  if (timeSync_ == nullptr) {
+    Serial.println("event=sntp_not_started reason=time_sync_unwired");
     return;
   }
-  // Fallback when TimeSync not wired (tests/host): direct configTime.
-  const char* s1 = config.ntpServer1.length() > 0 ? config.ntpServer1.c_str() : "pool.ntp.org";
-  const char* s2 = config.ntpServer2.length() > 0 ? config.ntpServer2.c_str() : "time.nist.gov";
-  configTime(0, 0, s1, s2);
-  Serial.printf("event=sntp_begin server=%s\n", s1);
+  if (config.ntpEnabled && config.ntpServer1.length() > 0) {
+    timeSync_->startSntp(config.ntpServer1.c_str(),
+                         config.ntpServer2.length() > 0 ? config.ntpServer2.c_str() : nullptr);
+  } else {
+    timeSync_->stopSntp();
+  }
 }
 // #endregion METHOD_WifiManager_startWallClock
 
