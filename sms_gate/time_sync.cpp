@@ -43,6 +43,10 @@ constexpr uint32_t kDisciplineIgnoreLogIntervalMs =
 }  // namespace
 // #endregion CONST_timeSyncThresholds
 
+void TimeSync::lockSamples() const { portENTER_CRITICAL(&samplesMux_); }
+
+void TimeSync::unlockSamples() const { portEXIT_CRITICAL(&samplesMux_); }
+
 // #region METHOD_TimeSync_isGnssFresh
 // PURPOSE: Applies the GNSS freshness window used by source arbitration.
 bool TimeSync::isGnssFresh(uint32_t ageMs, uint32_t gpsPollMs) {
@@ -65,6 +69,7 @@ bool TimeSync::isNitzFresh(uint32_t ageMs) { return ageMs < kNitzFreshMs; }
 // #region METHOD_TimeSync_begin
 // PURPOSE: Resets samples and quarantine state before synchronization starts.
 void TimeSync::begin() {
+  lockSamples();
   // cppcheck-suppress useStlAlgorithm
   for (auto& s : samples_) s = TimeSample{};
   // cppcheck-suppress useStlAlgorithm
@@ -75,23 +80,30 @@ void TimeSync::begin() {
   // cppcheck-suppress useStlAlgorithm
   for (auto& l : lastIgnoredLogMs_) l = 0;
   published_ = TimeState{};
-  sntpRunning_ = false;
   gpsPollMs_ = 60UL * 1000UL;
   modemPollMs_ = 15UL * 1000UL;
+  unlockSamples();
+  sntpRunning_ = false;
 }
 // #endregion METHOD_TimeSync_begin
 
 // #region METHOD_TimeSync_isQuarantined
 // PURPOSE: Reports whether a source is temporarily excluded from arbitration.
 bool TimeSync::isQuarantined(TimeSource s, uint32_t nowMs) const {
-  uint8_t idx = static_cast<uint8_t>(s);
-  return quarantineActive_[idx] && !millis_deadline::reached(nowMs, quarantineUntilMs_[idx]);
+  const uint8_t idx = static_cast<uint8_t>(s);
+  lockSamples();
+  const bool quarantined =
+      quarantineActive_[idx] && !millis_deadline::reached(nowMs, quarantineUntilMs_[idx]);
+  unlockSamples();
+  return quarantined;
 }
 // #endregion METHOD_TimeSync_isQuarantined
 
 // #region METHOD_TimeSync_shouldQuarantineAt
 // PURPOSE: Quarantines a source only when two fresh peers establish a quorum.
-bool TimeSync::shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs) {
+bool TimeSync::shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs,
+                                  int64_t* quarantineDiffMs, int64_t* quorumMs,
+                                  uint32_t* quarantineUntilMs) {
   uint8_t idx = static_cast<uint8_t>(sample.source);
   if (quarantineActive_[idx] && !millis_deadline::reached(nowMs, quarantineUntilMs_[idx]))
     return true;
@@ -137,15 +149,9 @@ bool TimeSync::shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs) {
     uint32_t next = dur * 2;
     if (next > kQuarantineMaxMs) next = kQuarantineMaxMs;
     quarantineDurationMs_[idx] = next;
-#ifdef ARDUINO
-    Serial.printf(
-        "event=time_quarantine source=%s diff_ms=%lld quorum_ms=%lld reason=quorum_mismatch "
-        "quarantined_until_ms=%u\n",
-        sourceName(sample.source), (long long)diff, (long long)quorum,
-        (unsigned)quarantineUntilMs_[idx]);
-#else
-    (void)quorum;
-#endif
+    if (quarantineDiffMs != nullptr) *quarantineDiffMs = diff;
+    if (quorumMs != nullptr) *quorumMs = quorum;
+    if (quarantineUntilMs != nullptr) *quarantineUntilMs = quarantineUntilMs_[idx];
     return true;
   }
   return false;
@@ -156,21 +162,46 @@ bool TimeSync::shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs) {
 // #region METHOD_TimeSync_shouldQuarantine
 // PURPOSE: Applies quorum quarantine using the device monotonic clock.
 bool TimeSync::shouldQuarantine(const TimeSample& sample) {
-  return shouldQuarantineAt(sample, millis());
+  lockSamples();
+  const bool quarantined = shouldQuarantineAt(sample, millis());
+  unlockSamples();
+  return quarantined;
 }
 // #endregion METHOD_TimeSync_shouldQuarantine
+
+// #region METHOD_TimeSync_feedSampleAt
+// PURPOSE: Atomically applies quorum handling and publishes one source sample.
+void TimeSync::feedSampleAt(TimeSource source, int64_t epochMs, uint32_t accuracyMs,
+                            uint32_t nowMs) {
+  TimeSample sample;
+  sample.source = source;
+  sample.epochMs = epochMs;
+  sample.receivedMs = nowMs;
+  sample.accuracyMs = accuracyMs;
+  sample.valid = epochMs > 0;
+  int64_t diffMs = 0;
+  int64_t quorumMs = 0;
+  uint32_t quarantineUntilMs = 0;
+  lockSamples();
+  const bool quarantined =
+      shouldQuarantineAt(sample, nowMs, &diffMs, &quorumMs, &quarantineUntilMs);
+  if (!quarantined) samples_[static_cast<uint8_t>(source)] = sample;
+  unlockSamples();
+#ifdef ARDUINO
+  if (quarantineUntilMs != 0) {
+    Serial.printf(
+        "event=time_quarantine source=%s diff_ms=%lld quorum_ms=%lld reason=quorum_mismatch "
+        "quarantined_until_ms=%u\n",
+        sourceName(source), (long long)diffMs, (long long)quorumMs, (unsigned)quarantineUntilMs);
+  }
+#endif
+}
+// #endregion METHOD_TimeSync_feedSampleAt
 
 // #region METHOD_TimeSync_feedGnssSampleAt
 // PURPOSE: Records a GNSS sample after applying quorum quarantine.
 void TimeSync::feedGnssSampleAt(int64_t epochMs, uint32_t accuracyMs, uint32_t nowMs) {
-  TimeSample s;
-  s.source = TimeSource::kGnss;
-  s.epochMs = epochMs;
-  s.receivedMs = nowMs;
-  s.accuracyMs = accuracyMs;
-  s.valid = epochMs > 0;
-  if (shouldQuarantineAt(s, nowMs)) return;
-  samples_[static_cast<uint8_t>(TimeSource::kGnss)] = s;
+  feedSampleAt(TimeSource::kGnss, epochMs, accuracyMs, nowMs);
 }
 
 // #endregion METHOD_TimeSync_feedGnssSampleAt
@@ -178,14 +209,7 @@ void TimeSync::feedGnssSampleAt(int64_t epochMs, uint32_t accuracyMs, uint32_t n
 // #region METHOD_TimeSync_feedNitzSampleAt
 // PURPOSE: Records a NITZ sample after applying quorum quarantine.
 void TimeSync::feedNitzSampleAt(int64_t epochMs, uint32_t accuracyMs, uint32_t nowMs) {
-  TimeSample s;
-  s.source = TimeSource::kNitz;
-  s.epochMs = epochMs;
-  s.receivedMs = nowMs;
-  s.accuracyMs = accuracyMs;
-  s.valid = epochMs > 0;
-  if (shouldQuarantineAt(s, nowMs)) return;
-  samples_[static_cast<uint8_t>(TimeSource::kNitz)] = s;
+  feedSampleAt(TimeSource::kNitz, epochMs, accuracyMs, nowMs);
 }
 
 // #endregion METHOD_TimeSync_feedNitzSampleAt
@@ -193,14 +217,7 @@ void TimeSync::feedNitzSampleAt(int64_t epochMs, uint32_t accuracyMs, uint32_t n
 // #region METHOD_TimeSync_feedSntpSyncAt
 // PURPOSE: Records an SNTP sample after applying quorum quarantine.
 void TimeSync::feedSntpSyncAt(int64_t epochMs, uint32_t nowMs) {
-  TimeSample s;
-  s.source = TimeSource::kSntp;
-  s.epochMs = epochMs;
-  s.receivedMs = nowMs;
-  s.accuracyMs = 50;
-  s.valid = epochMs > 0;
-  if (shouldQuarantineAt(s, nowMs)) return;
-  samples_[static_cast<uint8_t>(TimeSource::kSntp)] = s;
+  feedSampleAt(TimeSource::kSntp, epochMs, 50, nowMs);
 }
 
 // #endregion METHOD_TimeSync_feedSntpSyncAt
@@ -228,15 +245,15 @@ void TimeSync::feedSntpSync(int64_t epochMs) { feedSntpSyncAt(epochMs, millis())
 
 // #region METHOD_TimeSync_arbitrateAt
 // PURPOSE: Selects the highest-priority fresh source that is not quarantined.
-TimeSource TimeSync::arbitrateAt(uint32_t nowMs) const {
+TimeSource TimeSync::arbitrateAtLocked(uint32_t nowMs) const {
   const TimeSource order[] = {TimeSource::kGnss, TimeSource::kSntp, TimeSource::kNitz};
   for (TimeSource src : order) {
-    uint8_t idx = static_cast<uint8_t>(src);
+    const uint8_t idx = static_cast<uint8_t>(src);
     const TimeSample& s = samples_[idx];
     if (!s.valid) continue;
     if (quarantineActive_[idx] && !millis_deadline::reached(nowMs, quarantineUntilMs_[idx]))
       continue;
-    uint32_t age = nowMs - s.receivedMs;
+    const uint32_t age = nowMs - s.receivedMs;
     bool fresh = false;
     if (src == TimeSource::kGnss)
       fresh = isGnssFresh(age, gpsPollMs_);
@@ -247,6 +264,13 @@ TimeSource TimeSync::arbitrateAt(uint32_t nowMs) const {
     if (fresh) return src;
   }
   return TimeSource::kUnsynced;
+}
+
+TimeSource TimeSync::arbitrateAt(uint32_t nowMs) const {
+  lockSamples();
+  const TimeSource source = arbitrateAtLocked(nowMs);
+  unlockSamples();
+  return source;
 }
 // #endregion METHOD_TimeSync_arbitrateAt
 
@@ -330,6 +354,8 @@ void TimeSync::discipline(const TimeSample& chosen) {
 // #region METHOD_TimeSync_loopAt
 // PURPOSE: Publishes the selected source and disciplines the wall clock.
 void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
+  TimeSample selected;
+  lockSamples();
   // Clear expired quarantines and reset backoff once quarantine lifts.
   for (uint8_t i = 1; i < 4; ++i) {
     if (quarantineActive_[i] && millis_deadline::reached(nowMs, quarantineUntilMs_[i])) {
@@ -338,38 +364,44 @@ void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
       quarantineDurationMs_[i] = kQuarantineDurationMs;
     }
   }
-  TimeSource best = arbitrateAt(nowMs);
+  const TimeSource best = arbitrateAtLocked(nowMs);
   if (best == TimeSource::kUnsynced) {
     published_.source = TimeSource::kUnsynced;
     published_.stratum = 0;
     published_.dispersionMs = 0;
     published_.quarantined = false;
     published_.quarantinedUntilEpochMs = 0;
+    unlockSamples();
     return;
   }
-  const TimeSample& s = samples_[static_cast<uint8_t>(best)];
-  disciplineAt(s, wallMs, nowMs);
-  published_.source = best;
-  published_.lastSyncEpochMs = s.epochMs;
+  selected = samples_[static_cast<uint8_t>(best)];
+  unlockSamples();
+
+  disciplineAt(selected, wallMs, nowMs);
+
+  TimeState next;
+  next.source = best;
+  next.lastSyncEpochMs = selected.epochMs;
   // Live "now": sample epoch extrapolated by its age (same formula as
   // disciplineAt) so consumers see a ticking clock between polls.
-  published_.epochMs = s.epochMs + (int64_t)(nowMs - s.receivedMs);
+  next.epochMs = selected.epochMs + (int64_t)(nowMs - selected.receivedMs);
   if (best == TimeSource::kGnss) {
-    published_.stratum = 1;
-    published_.dispersionMs = 150;
+    next.stratum = 1;
+    next.dispersionMs = 150;
   } else if (best == TimeSource::kSntp) {
-    published_.stratum = 2;
-    published_.dispersionMs = 50;
+    next.stratum = 2;
+    next.dispersionMs = 50;
   } else {
-    published_.stratum = 3;
-    published_.dispersionMs = 1500;
+    next.stratum = 3;
+    next.dispersionMs = 1500;
   }
+
+  lockSamples();
   // Publish quarantine state for current best source.
-  uint8_t bidx = static_cast<uint8_t>(best);
+  const uint8_t bidx = static_cast<uint8_t>(best);
   if (quarantineActive_[bidx] && !millis_deadline::reached(nowMs, quarantineUntilMs_[bidx])) {
-    published_.quarantined = true;
-    published_.quarantinedUntilEpochMs =
-        published_.epochMs + (int64_t)(quarantineUntilMs_[bidx] - nowMs);
+    next.quarantined = true;
+    next.quarantinedUntilEpochMs = next.epochMs + (int64_t)(quarantineUntilMs_[bidx] - nowMs);
   } else {
     // If best is not quarantined but any source is, still report max quarantine for observability.
     uint32_t maxRemainingMs = 0;
@@ -381,9 +413,11 @@ void TimeSync::loopAt(uint32_t nowMs, int64_t wallMs) {
         if (remainingMs > maxRemainingMs) maxRemainingMs = remainingMs;
       }
     }
-    published_.quarantined = any;
-    published_.quarantinedUntilEpochMs = any ? published_.epochMs + (int64_t)maxRemainingMs : 0;
+    next.quarantined = any;
+    next.quarantinedUntilEpochMs = any ? next.epochMs + (int64_t)maxRemainingMs : 0;
   }
+  published_ = next;
+  unlockSamples();
 }
 // #endregion METHOD_TimeSync_loopAt
 
@@ -402,9 +436,37 @@ void TimeSync::loop() {
 }
 // #endregion METHOD_TimeSync_loop
 
+// #region METHOD_TimeSync_state
+// PURPOSE: Gives consumers one coherent time-quality snapshot.
+TimeState TimeSync::state() const {
+  lockSamples();
+  const TimeState snapshot = published_;
+  unlockSamples();
+  return snapshot;
+}
+// #endregion METHOD_TimeSync_state
+
+// #region METHOD_TimeSync_setGpsPollMs
+// PURPOSE: Keeps GNSS freshness decisions aligned with its polling schedule.
+void TimeSync::setGpsPollMs(uint32_t ms) {
+  lockSamples();
+  gpsPollMs_ = ms;
+  unlockSamples();
+}
+// #endregion METHOD_TimeSync_setGpsPollMs
+
+// #region METHOD_TimeSync_setModemPollMs
+// PURPOSE: Retains the modem schedule for synchronization configuration.
+void TimeSync::setModemPollMs(uint32_t ms) {
+  lockSamples();
+  modemPollMs_ = ms;
+  unlockSamples();
+}
+// #endregion METHOD_TimeSync_setModemPollMs
+
 // #region METHOD_TimeSync_stratum
 // PURPOSE: Gives NTP consumers the current synchronization quality.
-uint8_t TimeSync::stratum() const { return published_.stratum; }
+uint8_t TimeSync::stratum() const { return state().stratum; }
 // #endregion METHOD_TimeSync_stratum
 
 // #region METHOD_TimeSync_sourceName_TimeSource
@@ -425,7 +487,7 @@ const char* TimeSync::sourceName(TimeSource s) const {
 
 // #region METHOD_TimeSync_sourceName
 // PURPOSE: Gives operators a stable token for the selected time source.
-const char* TimeSync::sourceName() const { return sourceName(published_.source); }
+const char* TimeSync::sourceName() const { return sourceName(state().source); }
 // #endregion METHOD_TimeSync_sourceName
 
 // #region METHOD_TimeSync_startSntp

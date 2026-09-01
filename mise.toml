@@ -45,5 +45,5 @@ c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate tests/zte_form_codec_test.cpp s
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate -I tests/host_stub tests/sms_validate_test.cpp -o /tmp/sms_validate_test && /tmp/sms_validate_test
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate -I tests/host_stub tests/email_builder_test.cpp sms_gate/email_builder.cpp -o /tmp/email_builder_test && /tmp/email_builder_test
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate -I tests/host_stub tests/web_api_test.cpp -o /tmp/web_api_test && /tmp/web_api_test
-c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate -I tests/host_stub tests/time_sync_test.cpp sms_gate/time_sync.cpp sms_gate/gps_client.cpp sms_gate/modem_client.cpp -o /tmp/time_sync_test && /tmp/time_sync_test
+c++ -std=c++17 -Wall -Wextra -Werror -pthread -I sms_gate -I tests/host_stub tests/time_sync_test.cpp sms_gate/time_sync.cpp sms_gate/gps_client.cpp sms_gate/modem_client.cpp -o /tmp/time_sync_test && /tmp/time_sync_test
 """

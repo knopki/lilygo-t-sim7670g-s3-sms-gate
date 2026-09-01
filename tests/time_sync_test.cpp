@@ -9,8 +9,10 @@
 // #endregion MODULE_CONTRACT
 
 #include <assert.h>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <thread>
 #include "../sms_gate/system/time_sync.h"
 #include "../sms_gate/modem/modem_client.h"
 #include "../sms_gate/gps/gps_client.h"
@@ -238,6 +240,48 @@ void testGpsFixMs() {
 }
 // #endregion FUNC_testGpsFixMs
 
+// #region FUNC_testConcurrentSamplePublication
+// PURPOSE: Verifies concurrent producers and arbitration publish only complete samples.
+void testConcurrentSamplePublication() {
+  TimeSync ts;
+  ts.begin();
+  ts.setGpsPollMs(60000);
+  const int64_t base = makeEpochMs(2025, 8, 26, 12, 0, 0);
+  constexpr uint32_t kIterations = 10000;
+  std::atomic<bool> start{false};
+
+  auto waitForStart = [&start]() {
+    while (!start.load(std::memory_order_acquire)) {
+    }
+  };
+  std::thread gnss([&]() {
+    waitForStart();
+    for (uint32_t i = 0; i < kIterations; ++i) ts.feedGnssSampleAt(base + i, 100, i);
+  });
+  std::thread nitz([&]() {
+    waitForStart();
+    for (uint32_t i = 0; i < kIterations; ++i) ts.feedNitzSampleAt(base + i, 1500, i);
+  });
+  std::thread sntp([&]() {
+    waitForStart();
+    for (uint32_t i = 0; i < kIterations; ++i) ts.feedSntpSyncAt(base + i, i);
+  });
+
+  start.store(true, std::memory_order_release);
+  for (uint32_t i = 0; i < kIterations; ++i) ts.loopAt(i, base + i);
+  gnss.join();
+  nitz.join();
+  sntp.join();
+
+  ts.loopAt(kIterations, base + kIterations);
+  const TimeState state = ts.state();
+  assert(state.source == TimeSource::kGnss);
+  assert(state.lastSyncEpochMs >= base);
+  assert(state.lastSyncEpochMs < base + kIterations);
+  puts("testConcurrentSamplePublication ok");
+}
+// #endregion FUNC_testConcurrentSamplePublication
+
 int main() {
   testFreshness();
   testArbitrationPriority();
@@ -248,6 +292,7 @@ int main() {
   testCclkToEpoch();
   testPublishedSyncTimes();
   testGpsFixMs();
+  testConcurrentSamplePublication();
   puts("all time_sync tests passed");
   return 0;
 }

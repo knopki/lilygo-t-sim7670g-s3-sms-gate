@@ -15,6 +15,7 @@
 #define SYSTEM_TIME_SYNC_H
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
 #include <stdint.h>
 #include <sys/time.h>
 
@@ -99,7 +100,10 @@ class TimeSync {
   // #endregion METHOD_TimeSync_loopAt
 
   // NTP server helpers.
-  const TimeState& state() const { return published_; }
+  // #region METHOD_TimeSync_state
+  // PURPOSE: Gives consumers one coherent time-quality snapshot.
+  TimeState state() const;
+  // #endregion METHOD_TimeSync_state
   // #region METHOD_TimeSync_stratum
   // PURPOSE: Gives NTP consumers the current synchronization quality.
   uint8_t stratum() const;
@@ -124,8 +128,14 @@ class TimeSync {
   // #endregion METHOD_TimeSync_stopSntp
 
   // Poll interval for GNSS freshness (default 60s).
-  void setGpsPollMs(uint32_t ms) { gpsPollMs_ = ms; }
-  void setModemPollMs(uint32_t ms) { modemPollMs_ = ms; }
+  // #region METHOD_TimeSync_setGpsPollMs
+  // PURPOSE: Keeps GNSS freshness decisions aligned with its polling schedule.
+  void setGpsPollMs(uint32_t ms);
+  // #endregion METHOD_TimeSync_setGpsPollMs
+  // #region METHOD_TimeSync_setModemPollMs
+  // PURPOSE: Retains the modem schedule for synchronization configuration.
+  void setModemPollMs(uint32_t ms);
+  // #endregion METHOD_TimeSync_setModemPollMs
 
   // #region METHOD_TimeSync_isGnssFresh
   // PURPOSE: Keeps stale GNSS observations out of arbitration.
@@ -148,6 +158,9 @@ class TimeSync {
   // #endregion METHOD_TimeSync_isQuarantined
 
  private:
+  void lockSamples() const;
+  void unlockSamples() const;
+  TimeSource arbitrateAtLocked(uint32_t nowMs) const;
   TimeSource arbitrateAt(uint32_t nowMs) const;
   // cppcheck-suppress unusedPrivateFunction
   TimeSource arbitrate();
@@ -156,10 +169,18 @@ class TimeSync {
   int64_t disciplineAt(const TimeSample& chosen, int64_t wallMs, uint32_t nowMs);
   // cppcheck-suppress unusedPrivateFunction
   void discipline(const TimeSample& chosen);
-  bool shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs);
+  // #region METHOD_TimeSync_feedSampleAt
+  // PURPOSE: Atomically applies quorum handling and publishes one source sample.
+  void feedSampleAt(TimeSource source, int64_t epochMs, uint32_t accuracyMs, uint32_t nowMs);
+  // #endregion METHOD_TimeSync_feedSampleAt
+  bool shouldQuarantineAt(const TimeSample& sample, uint32_t nowMs,
+                          int64_t* quarantineDiffMs = nullptr, int64_t* quorumMs = nullptr,
+                          uint32_t* quarantineUntilMs = nullptr);
   // cppcheck-suppress unusedPrivateFunction
   bool shouldQuarantine(const TimeSample& sample);
 
+  // Serializes producer tasks with loop arbitration; never held during clock I/O or logging.
+  mutable portMUX_TYPE samplesMux_ = portMUX_INITIALIZER_UNLOCKED;
   TimeSample samples_[4] = {};
   TimeState published_ = {};
   uint32_t quarantineUntilMs_[4] = {};
