@@ -15,7 +15,7 @@
 #include <Arduino.h>
 #include <WebServer.h>
 
-#include "persistence/config_store.h"
+#include "persistence/config_store_zte.h"
 #include "system/task_control.h"
 #include "system/web_api.h"
 #include "zte/zte_client.h"

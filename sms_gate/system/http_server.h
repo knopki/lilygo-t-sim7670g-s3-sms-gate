@@ -19,7 +19,7 @@
 #include <Arduino.h>
 #include <WebServer.h>
 
-#include "persistence/config_store.h"
+#include "persistence/config_store_network.h"
 #include "gps/gps_service.h"
 #include "modem/modem_service.h"
 #include "smtp/smtp_service.h"

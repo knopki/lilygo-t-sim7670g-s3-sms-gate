@@ -18,7 +18,7 @@
 #include <Arduino.h>
 #include <DNSServer.h>
 
-#include "persistence/config_store.h"
+#include "persistence/config_store_network.h"
 #include "system/time_sync.h"
 #include "system/web_api.h"
 

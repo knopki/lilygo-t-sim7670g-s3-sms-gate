@@ -11,7 +11,7 @@
 #include <WiFi.h>
 #include <esp_system.h>
 
-#include "persistence/config_store.h"
+#include "persistence/config_store_network.h"
 #include "gps/gps_service.h"
 #include "system/http_server.h"
 #include "modem/modem_service.h"

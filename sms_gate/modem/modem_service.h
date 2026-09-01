@@ -13,7 +13,7 @@
 #include <Arduino.h>
 #include <WebServer.h>
 
-#include "persistence/config_store.h"
+#include "persistence/config_store_modem.h"
 #include "modem/concat_cache.h"
 #include "modem/modem_client.h"
 #include "system/task_control.h"

@@ -18,7 +18,7 @@
 #include <Arduino.h>
 #include <WebServer.h>
 
-#include "persistence/config_store.h"
+#include "persistence/config_store_smtp.h"
 #include "smtp/smtp_client.h"
 #include "system/web_api.h"
 
