@@ -339,7 +339,7 @@ String ZteService::replySnippet(const char* body) const {
 // PURPOSE: Makes SMTP acceptance the gate for deleting the source SMS.
 bool ZteService::forwardSms(const ZteSms& sms) {
   const unsigned long startedAt = millis();
-  Serial.printf("event=zte_forward_begin id=%s number=%s heap=%u\n", sms.id, sms.number,
+  Serial.printf("event=zte_forward_begin id=%s heap=%u\n", sms.id,
                 static_cast<unsigned>(ESP.getFreeHeap()));
   SecureSmtpChannel channel;
   SmtpClient client(channel);
@@ -528,7 +528,7 @@ void ZteService::runSend() {
   const String to = sendTo_;
   const String text = sendText_;
   const unsigned long startedAt = millis();
-  Serial.printf("event=zte_send_begin to=%s units=%u epoch=%ld heap=%u\n", to.c_str(),
+  Serial.printf("event=zte_send_begin units=%u epoch=%ld heap=%u\n",
                 static_cast<unsigned>(zteSmsUtf16Units(text.c_str())),
                 static_cast<long>(time(nullptr)), static_cast<unsigned>(ESP.getFreeHeap()));
 
@@ -629,14 +629,10 @@ void ZteService::runSend() {
   }
   sendMessage_ = message;
   sendSuccess_ = confirmed;
-  if (!confirmed) {
-    Serial.printf("event=zte_send_form form=%s\n", modem.lastSendForm());
-  }
   free(scratch);
-  Serial.printf(
-      "event=zte_send_complete result=%s confirmed=%s stage=%s elapsed_ms=%lu detail=%s\n",
-      zteResultName(result), confirmed ? "true" : "false", sendStage.c_str(), millis() - startedAt,
-      replyDetail.c_str());
+  Serial.printf("event=zte_send_complete result=%s confirmed=%s stage=%s elapsed_ms=%lu\n",
+                zteResultName(result), confirmed ? "true" : "false", sendStage.c_str(),
+                millis() - startedAt);
   sendRunning_ = false;
   sendDone_ = true;
 }

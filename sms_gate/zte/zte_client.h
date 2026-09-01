@@ -157,16 +157,11 @@ class ZteModem {
   ZteResult readSendStatus(ZteSendStatus& out);
   // #endregion METHOD_ZteModem_readSendStatus
 
-  // Exact form body of the last SEND_SMS attempt ("" before the first
-  // send), so callers can log the request bytes for byte-level protocol
-  // diagnosis against a known-good browser capture.
-  const char* lastSendForm() const { return lastSendForm_; }
-
   const char* waVersion() const { return waVersion_; }
   // Stage at which the last operation failed ("" on success); stable token.
   const char* failedStage() const { return failedStage_; }
   // Read-only view of the last response body (the scratch buffer; possibly
-  // stale after later requests), so callers can log what the modem replied.
+  // stale after later requests), for bounded operator-facing failure detail.
   const char* lastBody() const { return scratch_ != nullptr ? scratch_ : ""; }
   // Length of the last response body (0 means the modem answered 200 with
   // an empty body — its rejection signature for malformed SEND_SMS forms).
@@ -199,7 +194,6 @@ class ZteModem {
   char waVersion_[96];
   size_t bodyLength_ = 0;
   const char* failedStage_ = "";
-  char lastSendForm_[1792] = "";
 };
 // #endregion CLASS_ZteModem
 #endif  // ZTE_ZTE_CLIENT_H

@@ -811,8 +811,6 @@ ZteResult ZteModem::sendSms(const char* number, const char* textUtf8) {
     fail("send_form");
     return ZteResult::kProtocolError;
   }
-  snprintf(lastSendForm_, sizeof(lastSendForm_), "%s", formBody);
-
   result = requestPost(formBody);
   if (result != ZteResult::kSuccess) {
     return result;

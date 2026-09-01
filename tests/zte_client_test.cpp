@@ -857,13 +857,13 @@ void testSendSmsAsciiUsesGsm7() {
   ZteModem modem(channel, scratch.data(), scratch.size());
   assert(modem.login("192.168.0.1", "admin") == ZteResult::kSuccess);
   assert(modem.sendSms("+79685557161", "test") == ZteResult::kSuccess);
-  assert(strstr(modem.lastSendForm(), "encode_type=GSM7_default") != nullptr);
-  assert(strstr(modem.lastSendForm(), "Number=%2B79685557161") != nullptr);
   assert(countOccurrences(channel.written, "Number=%2B79685557161&") == 1);
   assert(countOccurrences(channel.written,
                           "&MessageBody=0074006500730074&ID=-1&encode_type=GSM7_default&") == 1);
-  // Exact boundary again for the ASCII path.
-  assert(strlen(strstr(modem.lastSendForm(), "AD=")) == 35);  // AD= + 32 hex + '\0'.
+  // Exact boundary again for the ASCII path: the form is the final request.
+  const size_t ad = channel.written.rfind("AD=");
+  assert(ad != std::string::npos);
+  assert(channel.written.size() - ad == 35);  // AD= + 32 hex.
   puts("testSendSmsAsciiUsesGsm7 ok");
 }
 // #endregion FUNC_testSendSmsAsciiUsesGsm7
