@@ -130,6 +130,12 @@ class WifiManager {
   String buildDeviceSuffix() const;
   // #endregion METHOD_buildDeviceSuffix
 
+  // #region METHOD_enterFallback
+  // PURPOSE: Preserves a protected configuration path when saved STA access is unavailable.
+  void enterFallback(const RuntimeConfig& config, const __FlashStringHelper* error,
+                     const char* eventName);
+  // #endregion METHOD_enterFallback
+
   TimeSync* timeSync_ = nullptr;
   String stationMacAddress_;
   String accessPointSsid_;

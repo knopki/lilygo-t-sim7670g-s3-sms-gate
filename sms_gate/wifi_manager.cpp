@@ -182,16 +182,24 @@ void WifiManager::onStationConnected(const RuntimeConfig& config, bool deferAcce
 }
 // #endregion METHOD_WifiManager_onStationConnected
 
-// #region METHOD_WifiManager_onStationFailed
-// PURPOSE: Records failure and enters the protected reconnect path.
-void WifiManager::onStationFailed(const RuntimeConfig& config) {
-  lastConnectionError_ = F("Could not connect to the saved Wi-Fi network.");
+// #region METHOD_WifiManager_enterFallback
+// PURPOSE: Preserves recovery access and schedules a later STA retry for any lost saved network.
+void WifiManager::enterFallback(const RuntimeConfig& config, const __FlashStringHelper* error,
+                                const char* eventName) {
+  lastConnectionError_ = error;
   if (!accessPointActive_) {
     startAccessPoint(config);
   }
   connectionState_ = ConnectionState::kFallbackAp;
   nextReconnectAt_ = millis() + kReconnectIntervalMs;
-  Serial.println("event=sta_connect_failed action=fallback_ap");
+  Serial.printf("event=%s action=fallback_ap\n", eventName);
+}
+// #endregion METHOD_WifiManager_enterFallback
+
+// #region METHOD_WifiManager_onStationFailed
+// PURPOSE: Records failure and enters the protected reconnect path.
+void WifiManager::onStationFailed(const RuntimeConfig& config) {
+  enterFallback(config, F("Could not connect to the saved Wi-Fi network."), "sta_connect_failed");
 }
 // #endregion METHOD_WifiManager_onStationFailed
 
@@ -307,6 +315,8 @@ void WifiManager::loop(const RuntimeConfig& config) {
     } else if (now - connectionAttemptStartedAt_ >= kConnectTimeoutMs) {
       onStationFailed(config);
     }
+  } else if (connectionState_ == ConnectionState::kOnline && WiFi.status() != WL_CONNECTED) {
+    enterFallback(config, F("Connection to the saved Wi-Fi network was lost."), "sta_disconnected");
   } else if (connectionState_ == ConnectionState::kFallbackAp && config.ssid.length() > 0 &&
              now >= nextReconnectAt_) {
     beginStationAttempt(config);
