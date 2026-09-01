@@ -5,7 +5,7 @@
 // StatusCache for trivially copyable snapshots.
 // - NOT: HTTP routing, NVS persistence, and SMTP/ZTE/modem dialogs.
 // INVARIANTS:
-// - The stop flag is always cleared on return;
+// - A timed-out task retains its asserted stop flag until it exits;
 // - the cache never exposes its portMUX across String construction.
 // #endregion MODULE_CONTRACT
 
@@ -27,11 +27,13 @@ constexpr uint32_t kServiceTaskStack = 16384;
 constexpr unsigned long kPollSliceMs = 250;
 
 // #region FUNC_stopTask
-// PURPOSE: Bounds task shutdown so shared resources can be reclaimed predictably.
+// PURPOSE: Bounds task shutdown without allowing an unresponsive task to resume.
+// ENSURES: Retains the stop flag after a timeout while the task handle remains valid.
 // cppcheck-suppress constParameterReference
 inline bool stopTask(TaskHandle_t& handle, volatile bool& stopFlag,
                      unsigned long timeoutMs = kTaskStopTimeoutMs) {
   if (handle == nullptr) {
+    stopFlag = false;
     return true;
   }
   stopFlag = true;
@@ -39,8 +41,9 @@ inline bool stopTask(TaskHandle_t& handle, volatile bool& stopFlag,
   while (handle != nullptr && !millis_deadline::reached(millis(), deadline)) {
     delay(kTaskStopPollMs);
   }
+  if (handle != nullptr) return false;
   stopFlag = false;
-  return handle == nullptr;
+  return true;
 }
 // #endregion FUNC_stopTask
 

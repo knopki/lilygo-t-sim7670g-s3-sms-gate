@@ -129,8 +129,21 @@ struct SerialStub {
 };
 inline SerialStub Serial;
 
-inline unsigned long millis() { return 0; }
-inline void delay(unsigned long) {}
+namespace arduino_test {
+inline unsigned long nowMs = 0;
+inline void (*delayHook)(unsigned long) = nullptr;
+
+inline void resetClock() {
+  nowMs = 0;
+  delayHook = nullptr;
+}
+}  // namespace arduino_test
+
+inline unsigned long millis() { return arduino_test::nowMs; }
+inline void delay(unsigned long ms) {
+  arduino_test::nowMs += ms;
+  if (arduino_test::delayHook != nullptr) arduino_test::delayHook(ms);
+}
 inline void yield() {}
 
 // ESP stub
