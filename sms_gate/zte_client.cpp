@@ -303,8 +303,14 @@ ZteResult ZteModem::loginSession() {
     fail("login_encode");
     return ZteResult::kProtocolError;
   }
-  char formBody[192];
-  snprintf(formBody, sizeof(formBody), "isTest=false&goformId=LOGIN&password=%s", encoded);
+  char formBody[sizeof("isTest=false&goformId=LOGIN&password=") - 1 +
+                3 * (((kMaxZtePasswordLength + 2) / 3) * 4) + 1];
+  size_t used = 0;
+  if (!appendLiteral("isTest=false&goformId=LOGIN&password=", formBody, sizeof(formBody), used) ||
+      !appendFormEscaped(encoded, formBody, sizeof(formBody), used)) {
+    fail("login_form");
+    return ZteResult::kProtocolError;
+  }
   ZteResult result = requestPost(formBody);
   if (result != ZteResult::kSuccess) {
     return result;

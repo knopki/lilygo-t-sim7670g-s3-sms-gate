@@ -374,7 +374,7 @@ void testLoginSuccess() {
   assert(modem.failedStage()[0] == '\0');
 
   assert(countOccurrences(channel.written, "POST /goform/goform_set_cmd_process HTTP/1.1") == 1);
-  assert(countOccurrences(channel.written, "isTest=false&goformId=LOGIN&password=YWRtaW4=") == 1);
+  assert(countOccurrences(channel.written, "isTest=false&goformId=LOGIN&password=YWRtaW4%3D") == 1);
   assert(countOccurrences(channel.written, "Referer: http://192.168.0.1/index.html") == 2);
   assert(countOccurrences(channel.written, "Host: 192.168.0.1") == 2);
 
@@ -386,6 +386,21 @@ void testLoginSuccess() {
   puts("testLoginSuccess ok");
 }
 // #endregion FUNC_testLoginSuccess
+
+// #region FUNC_testLoginEscapesBase64Password
+// PURPOSE: Preserves Base64 characters that form decoding would otherwise reinterpret.
+void testLoginEscapesBase64Password() {
+  FakeZteChannel channel;
+  channel.enqueue(loginResponse());
+  channel.enqueue(versionsResponse());
+  std::vector<char> scratch(4096);
+  ZteModem modem(channel, scratch.data(), scratch.size());
+  assert(modem.login("192.168.0.1", "00>") == ZteResult::kSuccess);
+  // Base64("00>") is "MDA+"; a raw '+' is decoded by form parsers as a space.
+  assert(countOccurrences(channel.written, "isTest=false&goformId=LOGIN&password=MDA%2B") == 1);
+  puts("testLoginEscapesBase64Password ok");
+}
+// #endregion FUNC_testLoginEscapesBase64Password
 
 // #region FUNC_testLoginRejected
 // PURPOSE: Keeps password and session-cookie failures diagnostically distinct.
@@ -1002,6 +1017,7 @@ int main() {
   testRecordValidation();
   testV3MigrationValidation();
   testLoginSuccess();
+  testLoginEscapesBase64Password();
   testLoginRejected();
   testFindOldestAscending();
   testFindOldestDescending();
