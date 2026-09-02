@@ -1,7 +1,7 @@
 // #region MODULE_CONTRACT
 // PURPOSE: Prevents concurrent modem tasks from corrupting shared Serial1 I/O.
 // SCOPE:
-// - lazy-created FreeRTOS mutex, take/give helpers.
+// - thread-safe lazy FreeRTOS mutex initialization, take/give helpers.
 // - NOT: AT parsing, NVS, HTTP.
 // INVARIANTS:
 // - Mutex is created once and never deleted;
@@ -21,10 +21,7 @@ namespace modem_lock {
 // #region FUNC_mutex
 // PURPOSE: Gives every modem task the same lock so Serial1 access stays serialized.
 inline SemaphoreHandle_t mutex() {
-  static SemaphoreHandle_t handle = nullptr;
-  if (handle == nullptr) {
-    handle = xSemaphoreCreateMutex();
-  }
+  static SemaphoreHandle_t handle = xSemaphoreCreateMutex();
   return handle;
 }
 // #endregion FUNC_mutex
