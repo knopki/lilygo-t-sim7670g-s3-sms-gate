@@ -174,6 +174,8 @@ class ModemClient {
   ModemResult submitData(const char* payload);
   // Sends one text beyond a single segment as UCS2 concat PDU parts.
   ModemResult sendMultipartUcs2(const char* number, const char* textUtf8, size_t units);
+  // Best-effort state repair that preserves the primary dialog result.
+  void restoreUcs2Charset();
   void fail(const char* stage);
 
   ModemChannel& channel_;

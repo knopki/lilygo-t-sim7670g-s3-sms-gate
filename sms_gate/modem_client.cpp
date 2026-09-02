@@ -1326,6 +1326,23 @@ ModemResult ModemClient::selectReadStorage(const char* mem) {
 }
 // #endregion METHOD_ModemClient_selectReadStorage
 
+// #region METHOD_ModemClient_restoreUcs2Charset
+// PURPOSE: Returns the modem to the UCS2 receive charset after an outgoing
+// SMS dialog without replacing that dialog's result or failure stage when
+// recovery itself fails.
+void ModemClient::restoreUcs2Charset() {
+  const char* const previousStage = failedStage_;
+  ModemResult result = sendCommand("AT+CSCS=\"UCS2\"", 3000);
+  if (result == ModemResult::kSuccess) result = readResponse();
+  if (result != ModemResult::kSuccess) {
+#ifdef ARDUINO
+    Serial.printf("event=modem_charset_restore_failed result=%d\n", static_cast<int>(result));
+#endif
+  }
+  failedStage_ = previousStage;
+}
+// #endregion METHOD_ModemClient_restoreUcs2Charset
+
 // #region METHOD_ModemClient_submitData
 // PURPOSE: Drives the one shared CMGS data dialog — ">" prompt wait,
 // payload plus Ctrl-Z, then +CMGS/OK confirmation — so text mode and every
@@ -1404,14 +1421,15 @@ ModemResult ModemClient::submitData(const char* payload) {
 // #region METHOD_ModemClient_sendMultipartUcs2
 // PURPOSE: Delivers texts beyond one segment as a reassemblable UCS2
 // concatenation (SMS-SUBMIT PDU, TP-UDHI) instead of letting text mode
-// truncate them in the air; restores text mode on every outcome because
-// receive/status rely on it.
+// truncate them in the air; restores text mode and the UCS2 receive charset
+// on every outcome because receive/status rely on them.
 ModemResult ModemClient::sendMultipartUcs2(const char* number, const char* textUtf8, size_t units) {
   char hexBody[1400] = "";
   // Exact-length check: encodeUcs2Hex truncates silently, which must fail
   // the send instead of delivering a cut message.
   if (codec::encodeUcs2Hex(textUtf8, hexBody, sizeof(hexBody)) != units * 4) {
     fail("send_encode");
+    restoreUcs2Charset();
     return ModemResult::kProtocolError;
   }
   uint16_t partStart[kMaxSmsSendMultipartParts];
@@ -1420,6 +1438,7 @@ ModemResult ModemClient::sendMultipartUcs2(const char* number, const char* textU
   for (size_t off = 0; off < units;) {
     if (partCount >= kMaxSmsSendMultipartParts) {
       fail("send_parts");
+      restoreUcs2Charset();
       return ModemResult::kProtocolError;
     }
     size_t len = units - off < kUcs2PduPartUnits ? units - off : kUcs2PduPartUnits;
@@ -1436,6 +1455,7 @@ ModemResult ModemClient::sendMultipartUcs2(const char* number, const char* textU
   }
   if (sendCommand("AT+CMGF=0", 3000) != ModemResult::kSuccess) {
     fail("cmgf");
+    restoreUcs2Charset();
     return ModemResult::kProtocolError;  // write failed: mode unchanged
   }
   ModemResult result = readResponse();
@@ -1444,6 +1464,7 @@ ModemResult ModemClient::sendMultipartUcs2(const char* number, const char* textU
     // Mode state is unknown after a failed switch: put text mode back.
     sendCommand("AT+CMGF=1", 3000);
     readResponse();
+    restoreUcs2Charset();
     return result;
   }
 #ifdef ARDUINO
@@ -1474,10 +1495,11 @@ ModemResult ModemClient::sendMultipartUcs2(const char* number, const char* textU
     }
     result = submitData(pduHex);
   }
-  // Receive/status run in text mode: restore it on every outcome; a failed
-  // restore surfaces at the next poll, not as a false send result.
+  // Receive/status run in text+UCS2 mode: restore it on every outcome; a
+  // failed restore surfaces at the next poll, not as a false send result.
   sendCommand("AT+CMGF=1", 3000);
   readResponse();
+  restoreUcs2Charset();
   return result;
 }
 // #endregion METHOD_ModemClient_sendMultipartUcs2
@@ -1579,6 +1601,7 @@ ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
     Serial.printf("event=modem_send_diag stage=cscs_reply_failed cscs=%s result=%d\n", cscs,
                   (int)r);
 #endif
+    if (directGsm) restoreUcs2Charset();
     return r;
   }
 #ifdef ARDUINO
@@ -1590,6 +1613,7 @@ ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
     const char* csmp = directGsm ? "AT+CSMP=17,167,0,0" : "AT+CSMP=17,167,0,8";
     if (sendCommand(csmp, 3000) != ModemResult::kSuccess) {
       fail("csmp");
+      if (directGsm) restoreUcs2Charset();
       return ModemResult::kProtocolError;
     }
     r = readResponse();
@@ -1598,6 +1622,7 @@ ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
 #ifdef ARDUINO
       Serial.printf("event=modem_send_diag stage=csmp_failed csmp=%s result=%d\n", csmp, (int)r);
 #endif
+      if (directGsm) restoreUcs2Charset();
       return r;
     }
   }
@@ -1609,6 +1634,7 @@ ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
   char withCr[192];
   if (cmdLen + 2 >= sizeof(withCr)) {
     fail("cmgs_prompt");
+    if (directGsm) restoreUcs2Charset();
     return ModemResult::kProtocolError;
   }
   memcpy(withCr, cmd, cmdLen);
@@ -1616,8 +1642,11 @@ ModemResult ModemClient::sendSms(const char* number, const char* textUtf8) {
   withCr[cmdLen++] = '\n';
   if (!channel_.write(withCr, cmdLen)) {
     fail("cmgs_prompt");
+    if (directGsm) restoreUcs2Charset();
     return ModemResult::kTimeout;
   }
-  return submitData(bodyForAt);
+  r = submitData(bodyForAt);
+  if (directGsm) restoreUcs2Charset();
+  return r;
 }
 // #endregion METHOD_ModemClient_sendSms

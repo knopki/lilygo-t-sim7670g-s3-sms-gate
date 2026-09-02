@@ -1126,6 +1126,7 @@ void testModemSendGsmSafeAscii() {
   ch.addScript("AT+CSCS=\"GSM\"", {"OK"});
   ch.addScript("AT+CSMP=17,167,0,0", {"OK"});
   ch.addScript("AT+CMGS=\"+79990000000\"", {">", "+CMGS: 123", "OK"});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
   ModemClient client(ch, scratch, sizeof(scratch));
   // A prior failed attempt must not mislabel the next send: the best-effort
   // sync and the successful dialog leave no stale stage behind.
@@ -1137,12 +1138,13 @@ void testModemSendGsmSafeAscii() {
   assert(strcmp(client.failedStage(), "") == 0);
   assert(ch.dataPayload() == std::string("Hello 123!?\x1A"));
   const std::vector<std::string>& seq = ch.matchedCommands();
-  assert(seq.size() == 5);
+  assert(seq.size() == 6);
   assert(seq[0] == "AT");
   assert(seq[1] == "AT+CMGF=1");
   assert(seq[2] == "AT+CSCS=\"GSM\"");
   assert(seq[3] == "AT+CSMP=17,167,0,0");
   assert(seq[4] == "AT+CMGS=\"+79990000000\"");
+  assert(seq[5] == "AT+CSCS=\"UCS2\"");
   puts("testModemSendGsmSafeAscii ok");
 }
 // #endregion FUNC_testModemSendGsmSafeAscii
@@ -1234,8 +1236,10 @@ void testModemSendPromptTimeout() {
   ch.addScript("AT+CSMP=17,167,0,0", {"OK"});
   // No '>' prompt -> timeout (empty script returns -1)
   ch.addScript("AT+CMGS=\"+79990000000\"", {});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
   ModemClient client(ch, scratch, sizeof(scratch));
   assert(client.sendSms("+79990000000", "Hi") == ModemResult::kTimeout);
+  expectNoViolations(ch, "send_prompt_timeout_charset_restore");
   assert(strcmp(client.failedStage(), "cmgs_prompt") == 0);
   puts("testModemSendPromptTimeout ok");
 }
@@ -1250,9 +1254,11 @@ void testModemSendCmsError() {
   ch.addScript("AT+CMGF=1", {"OK"});
   ch.addScript("AT+CSCS=\"GSM\"", {"OK"});
   ch.addScript("AT+CSMP=17,167,0,0", {"OK"});
-  ch.addScript("AT+CMGS=\"+79990000000\"", {">", "+CMS ERROR: 500", "ERROR"});
+  ch.addScript("AT+CMGS=\"+79990000000\"", {">", "+CMS ERROR: 500"});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
   ModemClient client(ch, scratch, sizeof(scratch));
   assert(client.sendSms("+79990000000", "Hi") == ModemResult::kSendRejected);
+  expectNoViolations(ch, "send_cms_error_charset_restore");
   assert(strcmp(client.failedStage(), "cms_error") == 0);
   puts("testModemSendCmsError ok");
 }
@@ -1269,8 +1275,10 @@ void testModemSendProtocolError() {
   ch.addScript("AT+CSMP=17,167,0,0", {"OK"});
   // OK without +CMGS -> protocol error
   ch.addScript("AT+CMGS=\"+79990000000\"", {">", "OK"});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
   ModemClient client(ch, scratch, sizeof(scratch));
   assert(client.sendSms("+79990000000", "Hi") == ModemResult::kProtocolError);
+  expectNoViolations(ch, "send_protocol_error_charset_restore");
   assert(strcmp(client.failedStage(), "protocol") == 0);
   puts("testModemSendProtocolError ok");
 }
@@ -1290,6 +1298,7 @@ void testModemSendMultipartTwoParts() {
   ch.addScript("AT+CMGS=153", {">", "+CMGS: 1", "OK"});
   ch.addScript("AT+CMGS=45", {">", "+CMGS: 2", "OK"});
   ch.addScript("AT+CMGF=1", {"OK"});  // text mode restored after success
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
   ModemClient client(ch, scratch, sizeof(scratch));
   const ModemResult twoPartsResult = client.sendSms("+79990000000", text.c_str());
   expectNoViolations(ch, "multipart_two_parts");
@@ -1298,9 +1307,10 @@ void testModemSendMultipartTwoParts() {
   std::string units13;
   for (int i = 0; i < 67; ++i) units67 += "041F";
   for (int i = 0; i < 13; ++i) units13 += "041F";
-  assert(ch.matchedCommands().size() == 5);
+  assert(ch.matchedCommands().size() == 6);
   assert(ch.matchedCommands()[1] == "AT+CMGF=0");
   assert(ch.matchedCommands()[4] == "AT+CMGF=1");
+  assert(ch.matchedCommands()[5] == "AT+CSCS=\"UCS2\"");
   // UDL 8C/20, UDH 05 0003 01 02 01/02: ref 1, total 2, seq 1 and 2.
   assert(fakePayloadPart(ch, 0) == "0041000B919799000000F000088C050003010201" + units67 + "\x1A");
   assert(fakePayloadPart(ch, 1) == "0041000B919799000000F0000820050003010202" + units13 + "\x1A");
@@ -1322,6 +1332,7 @@ void testModemSendMultipartThreeParts() {
   ch.addScript("AT+CMGS=153", {">", "+CMGS: 2", "OK"});
   ch.addScript("AT+CMGS=73", {">", "+CMGS: 3", "OK"});
   ch.addScript("AT+CMGF=1", {"OK"});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
   ModemClient client(ch, scratch, sizeof(scratch));
   const ModemResult threePartsResult = client.sendSms("+79990000000", text.c_str());
   expectNoViolations(ch, "multipart_three_parts");
@@ -1349,6 +1360,7 @@ void testModemSendMultipartPart2Fails() {
   ch.addScript("AT+CMGS=153", {">", "+CMGS: 1", "OK"});
   ch.addScript("AT+CMGS=45", {">", "+CMS ERROR: 500"});
   ch.addScript("AT+CMGF=1", {"OK"});  // restore must run after the failure too
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
   ModemClient client(ch, scratch, sizeof(scratch));
   const ModemResult failResult = client.sendSms("+79990000000", text.c_str());
   expectNoViolations(ch, "multipart_part2_fails");
@@ -1375,6 +1387,7 @@ void testModemSendSurrogateNotSplit() {
   ch.addScript("AT+CMGS=151", {">", "+CMGS: 1", "OK"});
   ch.addScript("AT+CMGS=43", {">", "+CMGS: 2", "OK"});
   ch.addScript("AT+CMGF=1", {"OK"});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
   ModemClient client(ch, scratch, sizeof(scratch));
   const ModemResult surrogateResult = client.sendSms("+79990000000", text.c_str());
   expectNoViolations(ch, "multipart_surrogate");
@@ -1403,6 +1416,7 @@ void testModemSendSegmentBoundaries() {
     ch.addScript("AT+CSCS=\"GSM\"", {"OK"});
     ch.addScript("AT+CSMP=17,167,0,0", {"OK"});
     ch.addScript("AT+CMGS=\"+79990000000\"", {">", "+CMGS: 1", "OK"});
+    ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
     ModemClient client(ch, scratch, sizeof(scratch));
     const ModemResult gsm160 = client.sendSms("+79990000000", std::string(160, 'a').c_str());
     expectNoViolations(ch, "boundary_gsm_160");
@@ -1451,6 +1465,7 @@ void testModemSendMaxUnitsMultipart() {
   ch.addScript("AT+CMGF=0", {"OK"});
   for (int part = 1; part <= 5; ++part) ch.addScript("AT+CMGS=153", {">", "+CMGS: 1", "OK"});
   ch.addScript("AT+CMGF=1", {"OK"});
+  ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
   ModemClient client(ch, scratch, sizeof(scratch));
   const ModemResult maxResult = client.sendSms("+79990000000", text.c_str());
   expectNoViolations(ch, "max_units_multipart");
@@ -1490,10 +1505,11 @@ void testModemSendAstralMaxUnitsMultipart() {
     for (int part = 1; part <= 5; ++part) ch.addScript("AT+CMGS=151", {">", "+CMGS: 1", "OK"});
     ch.addScript(addBmp ? "AT+CMGS=29" : "AT+CMGS=27", {">", "+CMGS: 1", "OK"});
     ch.addScript("AT+CMGF=1", {"OK"});
+    ch.addScript("AT+CSCS=\"UCS2\"", {"OK"});
     ModemClient client(ch, scratch, sizeof(scratch));
     assert(client.sendSms("+79990000000", text.c_str()) == ModemResult::kSuccess);
     expectNoViolations(ch, addBmp ? "astral_335_units" : "astral_334_units");
-    assert(ch.matchedCommands().size() == 9);
+    assert(ch.matchedCommands().size() == 10);
     for (int part = 1; part <= 5; ++part) {
       char prefix[48];
       snprintf(prefix, sizeof(prefix), "0041000B919799000000F000088A05000301060%d", part);
