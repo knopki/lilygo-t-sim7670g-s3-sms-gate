@@ -73,6 +73,14 @@ SmtpConfigRecord buildSmtpConfigRecord(const RuntimeSmtpConfig& config) {
 // PURPOSE: Commits only shared-valid SMTP policy so forms and NVS cannot diverge.
 bool SmtpConfigStore::save(const RuntimeSmtpConfig& config) const {
   Serial.println("event=smtp_save_begin");
+  if (config.host.length() >= sizeof(SmtpConfigRecord::host) ||
+      config.username.length() >= sizeof(SmtpConfigRecord::username) ||
+      config.password.length() >= sizeof(SmtpConfigRecord::password) ||
+      config.fromAddress.length() >= sizeof(SmtpConfigRecord::fromAddress) ||
+      config.recipientAddress.length() >= sizeof(SmtpConfigRecord::recipientAddress)) {
+    Serial.println("event=smtp_save_failed reason=field_too_long");
+    return false;
+  }
   const SmtpConfigRecord record = buildSmtpConfigRecord(config);
   if (!isSmtpConfigRecordValid(record)) {
     Serial.println("event=smtp_save_failed reason=invalid_fields");

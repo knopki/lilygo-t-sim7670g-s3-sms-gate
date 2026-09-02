@@ -33,7 +33,7 @@ description = "Run all host tests"
 run = """
 set -e
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate tests/config_record_test.cpp -o /tmp/config_record_test && /tmp/config_record_test
-c++ -std=c++17 -Wall -Wextra -Werror -I tests/host_stub -I sms_gate tests/config_store_migration_test.cpp sms_gate/config_store_gps.cpp sms_gate/config_store_modem.cpp sms_gate/config_store_zte.cpp -o /tmp/config_store_migration_test && /tmp/config_store_migration_test
+c++ -std=c++17 -Wall -Wextra -Werror -I tests/host_stub -I sms_gate tests/config_store_migration_test.cpp sms_gate/config_store_gps.cpp sms_gate/config_store_modem.cpp sms_gate/config_store_network.cpp sms_gate/config_store_smtp.cpp sms_gate/config_store_zte.cpp -o /tmp/config_store_migration_test && /tmp/config_store_migration_test
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate tests/ntp_validate_test.cpp -o /tmp/ntp_validate_test && /tmp/ntp_validate_test
 c++ -std=c++17 -Wall -Wextra -Werror -I sms_gate tests/millis_deadline_test.cpp -o /tmp/millis_deadline_test && /tmp/millis_deadline_test
 c++ -std=c++17 -Wall -Wextra -Werror -I tests/host_stub -I sms_gate tests/task_control_test.cpp -o /tmp/task_control_test && /tmp/task_control_test

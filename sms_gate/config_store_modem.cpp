@@ -107,6 +107,10 @@ bool ModemSourceStore::load(RuntimeModemSourceConfig& config) const {
 // PURPOSE: Commits only shared-valid modem policy so forms and NVS cannot diverge.
 bool ModemSourceStore::save(const RuntimeModemSourceConfig& config) const {
   Serial.println("event=modem_source_save_begin");
+  if (config.label.length() >= sizeof(ModemSourceRecord::label)) {
+    Serial.println("event=modem_source_save_failed reason=field_too_long");
+    return false;
+  }
   const ModemSourceRecord record = buildModemSourceRecord(config);
   if (!isModemSourceRecordValid(record)) {
     Serial.println("event=modem_source_save_failed reason=invalid_fields");

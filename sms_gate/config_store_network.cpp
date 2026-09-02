@@ -106,13 +106,21 @@ bool ConfigStore::load(RuntimeConfig& config) const {
 // whole checksummed record.
 bool ConfigStore::save(const RuntimeConfig& config) const {
   Serial.println("event=config_save_begin");
+  if (config.ssid.length() >= sizeof(ConfigRecord::ssid) ||
+      config.wifiPassword.length() >= sizeof(ConfigRecord::wifiPassword) ||
+      config.adminPassword.length() >= sizeof(ConfigRecord::adminPassword) ||
+      config.ntpServer1.length() >= sizeof(ConfigRecord::ntpServer1) ||
+      config.ntpServer2.length() >= sizeof(ConfigRecord::ntpServer2)) {
+    Serial.println("event=config_save_failed reason=field_too_long");
+    return false;
+  }
   ConfigRecord record{};
   record.magic = kConfigMagic;
   record.version = kConfigVersion;
   config.ssid.toCharArray(record.ssid, sizeof(record.ssid));
   config.wifiPassword.toCharArray(record.wifiPassword, sizeof(record.wifiPassword));
   config.adminPassword.toCharArray(record.adminPassword, sizeof(record.adminPassword));
-  // NTP servers: store printable, truncated to field size; empty allowed.
+  // Empty NTP servers are allowed.
   config.ntpServer1.toCharArray(record.ntpServer1, sizeof(record.ntpServer1));
   config.ntpServer2.toCharArray(record.ntpServer2, sizeof(record.ntpServer2));
   record.ntpEnabled = config.ntpEnabled ? 1 : 0;

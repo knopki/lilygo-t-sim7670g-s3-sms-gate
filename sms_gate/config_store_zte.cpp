@@ -117,6 +117,12 @@ bool ZteConfigStore::load(RuntimeZteConfig& config) const {
 // PURPOSE: Commits only shared-valid ZTE policy so forms and NVS cannot diverge.
 bool ZteConfigStore::save(const RuntimeZteConfig& config) const {
   Serial.println("event=zte_save_begin");
+  if (config.host.length() >= sizeof(ZteConfigRecord::host) ||
+      config.password.length() >= sizeof(ZteConfigRecord::password) ||
+      config.label.length() >= sizeof(ZteConfigRecord::label)) {
+    Serial.println("event=zte_save_failed reason=field_too_long");
+    return false;
+  }
   const ZteConfigRecord record = buildZteConfigRecord(config);
   if (!isZteConfigRecordValid(record)) {
     Serial.println("event=zte_save_failed reason=invalid_fields");

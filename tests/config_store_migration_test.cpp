@@ -1,18 +1,46 @@
 // #region MODULE_CONTRACT
-// PURPOSE: Proves legacy blobs migrate when their byte length matches the current schema.
+// PURPOSE: Proves persisted profiles migrate without silently truncating runtime values.
 // SCOPE:
 // - Exercises GPS v2, modem v2, and ZTE v3 in-place migrations through their NVS stores.
+// - Verifies all text persistence stores reject source fields larger than their record capacity.
 // - NOT: Hardware NVS behavior or web configuration.
 // #endregion MODULE_CONTRACT
 
 #include <assert.h>
 #include <string.h>
 
+#include <string>
+#include <vector>
+
 #include <Preferences.h>
 
 #include "../sms_gate/persistence/config_store_gps.h"
 #include "../sms_gate/persistence/config_store_modem.h"
+#include "../sms_gate/persistence/config_store_network.h"
+#include "../sms_gate/persistence/config_store_smtp.h"
 #include "../sms_gate/persistence/config_store_zte.h"
+
+namespace {
+
+// #region FUNC_repeatedString
+// PURPOSE: Produces exact source-length boundaries for persistence rejection tests.
+String repeatedString(size_t length) { return String(std::string(length, 'x').c_str()); }
+// #endregion FUNC_repeatedString
+
+// #region FUNC_assertStoredRecordUnchanged
+// PURPOSE: Confirms a rejected save cannot replace the last valid NVS record.
+void assertStoredRecordUnchanged(const std::vector<uint8_t>& expected) {
+  assert(Preferences::bytes() == expected);
+}
+// #endregion FUNC_assertStoredRecordUnchanged
+
+}  // namespace
+
+// ConfigStore::load references this production validator; save tests below do not.
+// #region FUNC_isValidPassword
+// PURPOSE: Satisfies the unrelated load-path link dependency in this save-focused host test.
+bool isValidPassword(const String&) { return false; }
+// #endregion FUNC_isValidPassword
 
 // #region FUNC_testGpsV2MigrationAtEqualLength
 // PURPOSE: Preserves GNSS settings when v2 and v3 records occupy the same blob length.
@@ -105,9 +133,101 @@ void testZteV3MigrationAtEqualLength() {
 }
 // #endregion FUNC_testZteV3MigrationAtEqualLength
 
+// #region FUNC_testTextStoreRejectsOversizeSourceFields
+// PURPOSE: Prevents String::toCharArray truncation from being checksummed and persisted.
+void testTextStoreRejectsOversizeSourceFields() {
+  RuntimeConfig network;
+  network.ssid = "test-network";
+  network.wifiPassword = "network-password";
+  network.adminPassword = "admin-password";
+  network.ntpServer1 = "pool.ntp.org";
+  network.ntpServer2 = "time.nist.gov";
+  ConfigStore networkStore;
+  assert(networkStore.save(network));
+  const std::vector<uint8_t> networkRecord = Preferences::bytes();
+  network.ssid = repeatedString(sizeof(ConfigRecord::ssid));
+  assert(!networkStore.save(network));
+  assertStoredRecordUnchanged(networkRecord);
+  network.ssid = "test-network";
+  network.wifiPassword = repeatedString(sizeof(ConfigRecord::wifiPassword));
+  assert(!networkStore.save(network));
+  assertStoredRecordUnchanged(networkRecord);
+  network.wifiPassword = "network-password";
+  network.adminPassword = repeatedString(sizeof(ConfigRecord::adminPassword));
+  assert(!networkStore.save(network));
+  assertStoredRecordUnchanged(networkRecord);
+  network.adminPassword = "admin-password";
+  network.ntpServer1 = repeatedString(sizeof(ConfigRecord::ntpServer1));
+  assert(!networkStore.save(network));
+  assertStoredRecordUnchanged(networkRecord);
+  network.ntpServer1 = "pool.ntp.org";
+  network.ntpServer2 = repeatedString(sizeof(ConfigRecord::ntpServer2));
+  assert(!networkStore.save(network));
+  assertStoredRecordUnchanged(networkRecord);
+
+  RuntimeSmtpConfig smtp;
+  smtp.host = "smtp.example.com";
+  smtp.username = "user@example.com";
+  smtp.password = "smtp-password";
+  smtp.fromAddress = "device@example.com";
+  smtp.recipientAddress = "owner@example.com";
+  SmtpConfigStore smtpStore;
+  assert(smtpStore.save(smtp));
+  const std::vector<uint8_t> smtpRecord = Preferences::bytes();
+  smtp.host = repeatedString(sizeof(SmtpConfigRecord::host));
+  assert(!smtpStore.save(smtp));
+  assertStoredRecordUnchanged(smtpRecord);
+  smtp.host = "smtp.example.com";
+  smtp.username = repeatedString(sizeof(SmtpConfigRecord::username));
+  assert(!smtpStore.save(smtp));
+  assertStoredRecordUnchanged(smtpRecord);
+  smtp.username = "user@example.com";
+  smtp.password = repeatedString(sizeof(SmtpConfigRecord::password));
+  assert(!smtpStore.save(smtp));
+  assertStoredRecordUnchanged(smtpRecord);
+  smtp.password = "smtp-password";
+  smtp.fromAddress = repeatedString(sizeof(SmtpConfigRecord::fromAddress));
+  assert(!smtpStore.save(smtp));
+  assertStoredRecordUnchanged(smtpRecord);
+  smtp.fromAddress = "device@example.com";
+  smtp.recipientAddress = repeatedString(sizeof(SmtpConfigRecord::recipientAddress));
+  assert(!smtpStore.save(smtp));
+  assertStoredRecordUnchanged(smtpRecord);
+
+  RuntimeZteConfig zte;
+  zte.host = "192.168.1.1";
+  zte.password = "modem-password";
+  zte.label = "modem";
+  ZteConfigStore zteStore;
+  assert(zteStore.save(zte));
+  const std::vector<uint8_t> zteRecord = Preferences::bytes();
+  zte.host = repeatedString(sizeof(ZteConfigRecord::host));
+  assert(!zteStore.save(zte));
+  assertStoredRecordUnchanged(zteRecord);
+  zte.host = "192.168.1.1";
+  zte.password = repeatedString(sizeof(ZteConfigRecord::password));
+  assert(!zteStore.save(zte));
+  assertStoredRecordUnchanged(zteRecord);
+  zte.password = "modem-password";
+  zte.label = repeatedString(sizeof(ZteConfigRecord::label));
+  assert(!zteStore.save(zte));
+  assertStoredRecordUnchanged(zteRecord);
+
+  RuntimeModemSourceConfig modem;
+  modem.label = "modem";
+  ModemSourceStore modemStore;
+  assert(modemStore.save(modem));
+  const std::vector<uint8_t> modemRecord = Preferences::bytes();
+  modem.label = repeatedString(sizeof(ModemSourceRecord::label));
+  assert(!modemStore.save(modem));
+  assertStoredRecordUnchanged(modemRecord);
+}
+// #endregion FUNC_testTextStoreRejectsOversizeSourceFields
+
 int main() {
   testGpsV2MigrationAtEqualLength();
   testModemV2MigrationAtEqualLength();
   testZteV3MigrationAtEqualLength();
+  testTextStoreRejectsOversizeSourceFields();
   return 0;
 }
