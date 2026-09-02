@@ -11,6 +11,7 @@ import {
 	bindFieldDependencies,
 	fillFields,
 	poll,
+	setBanner,
 	submitSettingsForm,
 } from "/js/main.js";
 
@@ -22,6 +23,8 @@ const SOURCE_LABELS = {
 };
 
 const ntpForm = document.getElementById("ntp-form");
+const saveButton = ntpForm.querySelector('button[type="submit"]');
+let configLoaded = false;
 
 // The firmware starts SNTP and consumes the server addresses only while the
 // enable flag is on (wifi_manager.cpp gates startSntp on ntpEnabled).
@@ -69,21 +72,36 @@ async function loadTime() {
  * @purpose Restores NTP controls so changes start from device state.
  */
 async function loadConfig() {
-	const { response, payload } = await apiFetch("/api/ntp");
-	if (!response.ok || !payload) {
-		return;
+	try {
+		const { response, payload } = await apiFetch("/api/ntp");
+		if (!response.ok || !payload) {
+			if (response.status !== 401) {
+				setBanner(
+					"error",
+					"NTP settings could not be loaded. Saving is disabled.",
+				);
+			}
+			return;
+		}
+		fillFields(ntpForm, {
+			ntp_enabled: payload.ntp_enabled === true,
+			ntp_server1: payload.ntp_server1 ?? "",
+			ntp_server2: payload.ntp_server2 ?? "",
+		});
+		syncForm();
+		configLoaded = true;
+		saveButton.disabled = false;
+	} catch (_error) {
+		setBanner("error", "NTP settings could not be loaded. Saving is disabled.");
 	}
-	fillFields(ntpForm, {
-		ntp_enabled: payload.ntp_enabled === true,
-		ntp_server1: payload.ntp_server1 ?? "",
-		ntp_server2: payload.ntp_server2 ?? "",
-	});
-	syncForm();
 }
 // #endregion FUNC_loadConfig
 
 ntpForm.addEventListener("submit", (event) => {
 	event.preventDefault();
+	if (!configLoaded) {
+		return;
+	}
 	const elements = ntpForm.elements;
 	submitSettingsForm("/api/ntp", {
 		ntp_enabled: elements.ntp_enabled.checked ? "1" : "0",

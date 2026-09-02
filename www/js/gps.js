@@ -11,10 +11,13 @@ import {
 	bindFieldDependencies,
 	fillFields,
 	poll,
+	setBanner,
 	submitSettingsForm,
 } from "/js/main.js";
 
 const gpsForm = document.getElementById("gps-form");
+const saveButton = gpsForm.querySelector('button[type="submit"]');
+let configLoaded = false;
 
 // Polling requires the GNSS module task; time sync and the poll interval
 // only matter while polling runs.
@@ -69,22 +72,37 @@ async function loadStatus() {
  * @purpose Prevents stale browser values from overwriting saved GNSS settings.
  */
 async function loadConfig() {
-	const { response, payload } = await apiFetch("/api/gps");
-	if (!response.ok || !payload) {
-		return;
+	try {
+		const { response, payload } = await apiFetch("/api/gps");
+		if (!response.ok || !payload) {
+			if (response.status !== 401) {
+				setBanner(
+					"error",
+					"GPS settings could not be loaded. Saving is disabled.",
+				);
+			}
+			return;
+		}
+		fillFields(gpsForm, {
+			module_enabled: payload.module_enabled === true,
+			poll_enabled: payload.poll_enabled === true,
+			time_sync: payload.time_sync_enabled === true,
+			poll_interval: String(payload.poll_interval ?? ""),
+		});
+		syncForm();
+		configLoaded = true;
+		saveButton.disabled = false;
+	} catch (_error) {
+		setBanner("error", "GPS settings could not be loaded. Saving is disabled.");
 	}
-	fillFields(gpsForm, {
-		module_enabled: payload.module_enabled === true,
-		poll_enabled: payload.poll_enabled === true,
-		time_sync: payload.time_sync_enabled === true,
-		poll_interval: String(payload.poll_interval ?? ""),
-	});
-	syncForm();
 }
 // #endregion FUNC_loadConfig
 
 gpsForm.addEventListener("submit", (event) => {
 	event.preventDefault();
+	if (!configLoaded) {
+		return;
+	}
 	const elements = gpsForm.elements;
 	submitSettingsForm("/api/gps", {
 		module_enabled: elements.module_enabled.checked ? "1" : "0",

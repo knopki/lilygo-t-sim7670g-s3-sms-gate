@@ -11,10 +11,13 @@ import {
 	bindFieldDependencies,
 	fillFields,
 	poll,
+	setBanner,
 	submitSettingsForm,
 } from "/js/main.js";
 
 const sourceForm = document.getElementById("source-form");
+const saveButton = sourceForm.querySelector('button[type="submit"]');
+let configLoaded = false;
 
 // A field is editable only while the firmware actually consumes it: polling
 // needs the module task, SMS forwarding and NITZ need polling, the interval
@@ -156,15 +159,34 @@ function applyConfig(payload) {
  * @purpose Prevents stale browser values from overwriting the saved modem profile.
  */
 async function loadConfig() {
-	const { response, payload } = await apiFetch("/api/modem/source");
-	if (response.ok && payload) {
+	try {
+		const { response, payload } = await apiFetch("/api/modem/source");
+		if (!response.ok || !payload) {
+			if (response.status !== 401) {
+				setBanner(
+					"error",
+					"Modem settings could not be loaded. Saving is disabled.",
+				);
+			}
+			return;
+		}
 		applyConfig(payload);
+		configLoaded = true;
+		saveButton.disabled = false;
+	} catch (_error) {
+		setBanner(
+			"error",
+			"Modem settings could not be loaded. Saving is disabled.",
+		);
 	}
 }
 // #endregion FUNC_loadConfig
 
 sourceForm.addEventListener("submit", (event) => {
 	event.preventDefault();
+	if (!configLoaded) {
+		return;
+	}
 	const elements = sourceForm.elements;
 	submitSettingsForm("/api/modem/source", {
 		module_enabled: elements.module_enabled.checked ? "1" : "0",
