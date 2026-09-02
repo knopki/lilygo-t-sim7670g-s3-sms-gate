@@ -721,7 +721,8 @@ ZteResult ZteModem::readInboxStatus(ZteInboxStatus& out) {
   }
   uint32_t usedValue = 0;
   uint32_t totalValue = 0;
-  if (!parseUint32String(used, usedValue) || !parseUint32String(total, totalValue)) {
+  if (!parseUint32String(used, usedValue) || !parseUint32String(total, totalValue) ||
+      usedValue > UINT16_MAX || totalValue > UINT16_MAX) {
     fail("capacity");
     return ZteResult::kProtocolError;
   }

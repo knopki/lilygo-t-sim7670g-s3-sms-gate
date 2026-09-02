@@ -768,6 +768,23 @@ void testInboxStatus() {
 }
 // #endregion FUNC_testInboxStatus
 
+// #region FUNC_testInboxStatusCounterOverflow
+// PURPOSE: Rejects storage counters that cannot fit the status API's uint16_t fields.
+void testInboxStatusCounterOverflow() {
+  FakeZteChannel channel;
+  channel.enqueue(loginResponse());
+  channel.enqueue(versionsResponse());
+  channel.enqueue(httpResponse("{\"sms_nv_total\":\"100\",\"sms_nvused_total\":\"65536\"}"));
+  std::vector<char> scratch(4096);
+  ZteModem modem(channel, scratch.data(), scratch.size());
+  assert(modem.login("192.168.0.1", "admin") == ZteResult::kSuccess);
+  ZteInboxStatus status{};
+  assert(modem.readInboxStatus(status) == ZteResult::kProtocolError);
+  assert(strcmp(modem.failedStage(), "capacity") == 0);
+  puts("testInboxStatusCounterOverflow ok");
+}
+// #endregion FUNC_testInboxStatusCounterOverflow
+
 // #region FUNC_testHttpFailures
 // PURPOSE: Keeps transport and framing failures diagnostically distinct.
 void testHttpFailures() {
@@ -1046,6 +1063,7 @@ int main() {
   testCleanupOutgoing();
   testCleanupOutgoingDeleteRejected();
   testInboxStatus();
+  testInboxStatusCounterOverflow();
   testSendSmsFlow();
   testSendSmsAsciiUsesGsm7();
   testSendSmsEmptyReply();
