@@ -9,6 +9,7 @@
 const banner = document.getElementById("banner");
 const pollers = new Set();
 const FETCH_TIMEOUT_MS = 8000;
+const MAX_STATUS_READ_RETRIES = 3;
 let busy = false;
 let reachabilityBanner = false;
 
@@ -196,8 +197,8 @@ export async function submitSettingsForm(path, fields, onOk) {
 // #endregion FUNC_submitSettingsForm
 
 // Starts a long-running device operation (test or SMS send) and polls its
-// status endpoint every 1.5 s. The UI stays busy only while the operation
-// reports running; lost, malformed, or rejected status releases the controls.
+// status endpoint every 1.5 s. The UI stays busy while the operation reports
+// running and across a bounded number of lost or malformed status reads.
 // #region FUNC_runAsyncOperation
 /**
  * @purpose Keeps long device operations observable without blocking the page.
@@ -227,11 +228,18 @@ export async function runAsyncOperation(path, fields, pollPath = path) {
 	}
 	setBanner("ok", started.payload?.message || "The operation is running…");
 	let controller;
+	let statusReadRetries = 0;
 	const stopPolling = (message) => {
 		controller.stop();
 		setBusy(false);
 		if (message) {
 			setBanner("error", message);
+		}
+	};
+	const retryStatusRead = () => {
+		statusReadRetries += 1;
+		if (statusReadRetries > MAX_STATUS_READ_RETRIES) {
+			stopPolling("The operation status could not be read. Try again.");
 		}
 	};
 	controller = poll(
@@ -241,7 +249,7 @@ export async function runAsyncOperation(path, fields, pollPath = path) {
 			try {
 				({ response, payload } = await apiFetch(pollPath));
 			} catch (_error) {
-				stopPolling("The operation status could not be read. Try again.");
+				retryStatusRead();
 				return;
 			}
 			if (response.status === 401) {
@@ -249,9 +257,10 @@ export async function runAsyncOperation(path, fields, pollPath = path) {
 				return;
 			}
 			if (!response.ok || !payload) {
-				stopPolling("The operation status could not be read. Try again.");
+				retryStatusRead();
 				return;
 			}
+			statusReadRetries = 0;
 			if (payload.running === true) {
 				return;
 			}
