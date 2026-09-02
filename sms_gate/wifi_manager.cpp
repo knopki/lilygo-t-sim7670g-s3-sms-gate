@@ -137,7 +137,7 @@ void WifiManager::startWallClock(const RuntimeConfig& config) {
     Serial.println("event=sntp_not_started reason=time_sync_unwired");
     return;
   }
-  if (config.ntpEnabled && config.ntpServer1.length() > 0) {
+  if (config.ntpEnabled && (config.ntpServer1.length() > 0 || config.ntpServer2.length() > 0)) {
     timeSync_->startSntp(config.ntpServer1.c_str(),
                          config.ntpServer2.length() > 0 ? config.ntpServer2.c_str() : nullptr);
   } else {

@@ -61,6 +61,12 @@ int main() {
   EXPECT(strcmp(out1, "ntp.local") == 0, "set server kept");
   EXPECT(strcmp(out2, "") == 0, "empty slot stays empty");
 
+  // A second server without the first remains a valid configuration.
+  EXPECT(runSanitize(true, "", "ntp-backup.local", out1, out2) == NtpSanitizeResult::kOk,
+         "second server only ok");
+  EXPECT(strcmp(out1, "") == 0, "first slot remains empty");
+  EXPECT(strcmp(out2, "ntp-backup.local") == 0, "second server preserved");
+
   // Disabled + both empty stays empty.
   EXPECT(runSanitize(false, "", "", out1, out2) == NtpSanitizeResult::kOk, "disabled empty ok");
   EXPECT(strcmp(out1, "") == 0 && strcmp(out2, "") == 0, "no defaults when disabled");

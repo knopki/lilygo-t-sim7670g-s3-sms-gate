@@ -506,14 +506,16 @@ const char* TimeSync::sourceName() const { return sourceName(state().source); }
 // #region METHOD_TimeSync_startSntp
 // PURPOSE: Starts SNTP against the validated operator server list.
 void TimeSync::startSntp(const char* server1, const char* server2) {
-  if (server1 == nullptr || server1[0] == '\0') return;
+  const char* primary = server1 != nullptr && server1[0] != '\0' ? server1 : server2;
+  if (primary == nullptr || primary[0] == '\0') return;
 #ifdef ARDUINO
   gTimeSyncForSntp = this;
-  configTime(0, 0, server1, server2 && server2[0] ? server2 : nullptr);
+  const char* secondary =
+      primary == server1 && server2 != nullptr && server2[0] != '\0' ? server2 : nullptr;
+  configTime(0, 0, primary, secondary);
   sntpRunning_ = true;
-  Serial.printf("event=sntp_begin server=%s\n", server1);
+  Serial.printf("event=sntp_begin server=%s\n", primary);
 #else
-  (void)server2;
   sntpRunning_ = true;
 #endif
 }
