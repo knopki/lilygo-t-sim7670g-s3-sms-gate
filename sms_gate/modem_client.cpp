@@ -832,10 +832,10 @@ ModemResult ModemClient::readResponse() {
 // CMEE=2 -> CMGF=1 -> CSCS="UCS2" -> CSDH=1 -> CPMS="ME" -> CNMI=2,1.
 ModemResult ModemClient::init() {
   for (int attempt = 0; attempt < kModemInitRetries; ++attempt) {
-    if (sendCommand("AT", kModemDefaultTimeoutMs) != ModemResult::kSuccess) continue;
-    ModemResult r = readResponse();
+    ModemResult r = sendCommand("AT", kModemDefaultTimeoutMs);
+    if (r == ModemResult::kSuccess) r = readResponse();
     if (r == ModemResult::kSuccess) break;
-    if (attempt == 9) {
+    if (attempt == kModemInitRetries - 1) {
       fail("not_present");
       return ModemResult::kNotPresent;
     }

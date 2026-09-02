@@ -1547,6 +1547,29 @@ void testInitNotPresent() {
 }
 // #endregion FUNC_testInitNotPresent
 
+// #region FUNC_testInitWriteFailureNotPresent
+// PURPOSE: Ensures repeated UART write failures cannot report a ready modem.
+void testInitWriteFailureNotPresent() {
+  class WriteFailureChannel : public ModemChannel {
+   public:
+    bool write(const char*, size_t) override {
+      ++writes;
+      return false;
+    }
+    int readLine(char*, size_t, unsigned long) override { return -1; }
+    void purge() override {}
+
+    int writes = 0;
+  } ch;
+  char scratch[256];
+  ModemClient client(ch, scratch, sizeof(scratch));
+  assert(client.init() == ModemResult::kNotPresent);
+  assert(ch.writes == 10);
+  assert(strcmp(client.failedStage(), "not_present") == 0);
+  puts("testInitWriteFailureNotPresent ok");
+}
+// #endregion FUNC_testInitWriteFailureNotPresent
+
 // #region FUNC_testDeleteCmsError
 // PURPOSE: Maps delete-time CMS errors to the stable protocol result.
 void testDeleteCmsError() {
@@ -1644,6 +1667,7 @@ int main() {
   testModemSendProtocolError();
   testInitSuccess();
   testInitNotPresent();
+  testInitWriteFailureNotPresent();
   testDeleteCmsError();
   testReadCmsError();
   testReadMissingOk();
