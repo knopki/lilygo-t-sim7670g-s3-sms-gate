@@ -45,6 +45,11 @@ HttpServer::HttpServer(WebServer& server, ConfigStore& store, RuntimeConfig& con
 // #region METHOD_requireAuthentication
 // PURPOSE: Guards protected routes with Digest authentication.
 bool HttpServer::requireAuthentication() {
+  if (config_.adminPassword.length() == 0) {
+    Serial.println("event=http_auth_rejected reason=admin_password_unconfigured");
+    sendJsonError(kHttpForbidden, F("Initial setup is not complete."));
+    return false;
+  }
   if (server_.authenticate(kAdminUser, config_.adminPassword.c_str())) {
     return true;
   }
