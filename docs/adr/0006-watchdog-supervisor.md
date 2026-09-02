@@ -1,55 +1,127 @@
-# ADR-0006: Watchdog supervisor (TWDT 60s + boot-loop safe-mode)
+# ADR-0006: Watchdog supervisor (TWDT 60 s and boot-loop safe mode)
 
 - **Status:** Accepted
 - **Date:** 2026-08-26
-- **Decides:** watchdog supervisor architecture
-- **Context:** see below
-- **Depends:** ADR-0004 (SIM7670G), task_control (FreeRTOS tasks)
 
 ## Context
 
-Устройство работает автономно (LilyGO T-SIM7670G-S3, ESP32-S3). До этого WDT не было — любой зависший `loop()` или `modem_poll`/`gps_poll`/`zte_poll` оставлял шлюз немым до питания. При этом нормальная работа включает длительные блокировки: `WifiManager::testStationCandidate` 30 с, `modem_lock::take(12-15с)`, SMTP TLS 20–30 с, `zte_send` до 20 с. `loop()` обслуживает `WebServer::handleClient()` — зависание HTTP-хендлера тоже должно рестартовать.
+The device works without operator control. The device is a LilyGO
+T-SIM7670G-S3 with an ESP32-S3. The firmware had no watchdog. A stalled
+`loop()`, `modem_poll`, `gps_poll`, or `zte_poll` left the gateway silent until
+the operator removed power.
 
-Требования (уточнены):
-1. Рестарт **только по зависанию**, не по `STA offline` / отсутствию SIM / SMTP.
-2. TWDT таймаут **60 с** ( > 30 с worst-case + запас).
-3. Перед `esp_restart()` дёрнуть **модем RESET** (GPIO17 LOW 200 мс) — залипший SIM7670G не переживает рестарт ESP.
-4. После **3 watchdog-рестартов без стабильного окна 5 мин** уйти в **safe-mode**: не стартовать `modem_poll`/`gps_poll`/`zte_poll`, оставить AP+HTTP для диагностики. Сброс safe-mode — `POST /api/watchdog/clear` или 5 мин аптайма.
+Normal operation has long blocking operations:
 
-Опции:
-- **Только `enableLoopWDT` из Arduino menuconfig.** Просто, но не покрывает poll-задачи и не даёт safe-mode / модем-RESET.
-- **Внешний WDT чип.** Надёжнее, но на плате его нет — YAGNI.
-- **TWDT + RTC-супервизор (выбран).** Использует встроенные `MWDT0/RWDT/TWDT` (panic → `ESP_RST_TASK_WDT`), RTC_NOINIT счётчик, единый `triggerRestart()`. Покрывает loop + все poll-задачи, без NVS-миграции.
+- `WifiManager::testStationCandidate` can block for 30 s.
+- `modem_lock::take` can block for 12 to 15 s.
+- SMTP TLS can block for 20 to 30 s.
+- `zte_send` can block for up to 20 s.
+
+The `loop()` function also calls `WebServer::handleClient()`. A stalled HTTP
+handler must also cause a restart.
+
+The requirements are:
+
+1. Restart only when the firmware stalls. Do not restart because the station
+   is offline, the SIM is absent, or SMTP fails.
+2. Set the TWDT timeout to 60 s. This value is greater than the 30 s worst-case
+   operation and provides additional time.
+3. Set the modem RESET signal LOW for 200 ms before `esp_restart()`. A stalled
+   SIM7670G can remain stalled after an ESP restart.
+4. Enter safe mode after three watchdog restarts without a stable five-minute
+   window. In safe mode, do not start `modem_poll`, `gps_poll`, or `zte_poll`.
+   Keep the AP and HTTP server available for diagnosis. Exit safe mode with
+   `POST /api/watchdog/clear` or after five minutes of uptime.
+
+The following options were considered:
+
+- **Use only `enableLoopWDT` from the Arduino menuconfig.** This option is
+  simple, but it does not cover poll tasks and does not provide safe mode or a
+  modem reset.
+- **Use an external watchdog chip.** This option is more reliable, but the
+  board has no such chip. It is not needed for this scope.
+- **Use TWDT with an RTC supervisor (selected).** This option uses the built-in
+  `MWDT0`, `RWDT`, and `TWDT` functions. A panic causes
+  `ESP_RST_TASK_WDT`. An `RTC_NOINIT` counter and one `triggerRestart()`
+  function provide the restart policy. The option covers `loop()` and all poll
+  tasks without an NVS migration.
 
 ## Decision
 
-Вводится модуль `system/watchdog.*` — единственный владелец `esp_task_wdt_*` и `esp_restart()`:
+Add `system/watchdog.*`. This module is the only owner of
+`esp_task_wdt_*` and `esp_restart()`.
 
-- **TWDT:** `timeout_ms=60000, idle_core_mask=0, trigger_panic=true`. `watchdog::begin()` инициализирует/реконфигурирует и делает `add(loopTask)`. Каждая poll-задача: `addCurrentTask(name)` при старте, `reset()` каждый `kPollSliceMs=250 мс` в idle-ожиданиях, `removeCurrentTask()` перед `vTaskDelete`.
-- **Кормление loop:** `watchdog::feedLoop()` в начале `loopFirmware()` → `esp_task_wdt_reset()` + обновление `lastFeedLoopMs`.
-- **Супервизор:** `watchdog::loop()` в каждом `loopFirmware()`: (a) если `now - lastFeedLoopMs > 180 с` → `triggerRestart("loop_stall")` (fallback если TWDT не сработал), (b) если `millis() > 5 мин` → сброс RTC `bootCount/safeMode`.
-- **Boot-loop:** `RTC_NOINIT_ATTR RtcState {magic, bootCount, lastWasWatchdog, safeMode}`. `begin()` инкрементирует `bootCount` только если `lastWasWatchdog==1` или `reset_reason ∈ {TASK_WDT,WDT,INT_WDT,PANIC,SW+mark}`; `POWERON/BROWNOUT/EXT` сбрасывает. При `bootCount ≥3` → `safeMode=true`: `sms_gate.ino` сразу поднимает защищённый fallback AP и не начинает STA-подключение; `WifiManager` удерживает этот AP, а `syncPollTask()/syncTask()` дополнительно запрещают создание poll-задач независимо от HTTP save-хендлера. `POST /api/watchdog/clear` снимает блокировку, возобновляет STA-подключение и перезапускает poll-сервисы. Перед каждым `esp_restart()` ставим `lastWasWatchdog=1`, делаем `resetModemHardware()` (RESET LOW 200 мс + DTR LOW).
-- **Наблюдаемость:** `event=watchdog_init/boot/boot_count/safe_mode/stall_trigger/trigger/stable_clear`, `GET /api/watchdog {safe_mode,boot_count,timeout_sec,last_reset_reason,uptime_ms}`, `POST /api/watchdog/clear` (Digest). `bootTrace` уже логирует `reset_reason`.
-- **Исключения чтобы не ложно сработать:** `WifiManager::testStationCandidate` теперь кормит `watchdog::feedLoop()` каждую итерацию `delay(100)`; SMTP/modem/ZTE задачи кормят WDT в каждом `vTaskDelay` слайсе.
+- **TWDT:** Use `timeout_ms=60000`, `idle_core_mask=0`, and
+  `trigger_panic=true`. `watchdog::begin()` initializes or reconfigures the
+  TWDT and adds `loopTask`. Each poll task calls `addCurrentTask(name)` when it
+  starts. It calls `reset()` during each 250 ms idle wait and calls
+  `removeCurrentTask()` before `vTaskDelete`.
+- **Feed the loop task:** Call `watchdog::feedLoop()` at the start of
+  `loopFirmware()`. The function calls `esp_task_wdt_reset()` and updates
+  `lastFeedLoopMs`.
+- **Supervisor:** Call `watchdog::loop()` during every `loopFirmware()` call.
+  If `now - lastFeedLoopMs > 180 s`, call `triggerRestart("loop_stall")` as a
+  fallback if TWDT does not act. If `millis() > 5 min`, clear the RTC
+  `bootCount` and `safeMode` values.
+- **Boot-loop protection:** Store
+  `RTC_NOINIT_ATTR RtcState {magic, bootCount, lastWasWatchdog, safeMode}`.
+  In `begin()`, increment `bootCount` only when `lastWasWatchdog == 1` or the
+  reset reason is one of `TASK_WDT`, `WDT`, `INT_WDT`, `PANIC`, or
+  `SW+mark`. Clear the count for `POWERON`, `BROWNOUT`, and `EXT` reset
+  reasons. Set `safeMode=true` when `bootCount >= 3`.
 
-`sms_gate.ino` вызывает `watchdog::begin()` первым после `Serial.begin()`, `feedLoop()+loop()` в начале `loopFirmware()`.
+  In safe mode, `sms_gate.ino` immediately starts the protected fallback AP
+  and does not start the STA connection. `WifiManager` keeps this AP active.
+  `syncPollTask()` and `syncTask()` also prevent poll task creation. This
+  second check applies even when an HTTP save handler runs. `POST
+  /api/watchdog/clear` removes the block, resumes STA connection, and restarts
+  the poll services.
+
+  Before each `esp_restart()`, set `lastWasWatchdog=1` and call
+  `resetModemHardware()`. This sets RESET LOW for 200 ms and sets DTR LOW.
+- **Observability:** Write the events `watchdog_init`, `watchdog_boot`,
+  `watchdog_boot_count`, `watchdog_safe_mode`, `watchdog_stall_trigger`,
+  `watchdog_trigger`, and `watchdog_stable_clear`. Provide
+  `GET /api/watchdog {safe_mode,boot_count,timeout_sec,last_reset_reason,uptime_ms}`
+  and Digest-authenticated `POST /api/watchdog/clear`. `bootTrace` already
+  records the reset reason.
+- **Prevent false resets:** `WifiManager::testStationCandidate` calls
+  `watchdog::feedLoop()` during each `delay(100)` iteration. SMTP, modem, and
+  ZTE tasks feed the watchdog during each `vTaskDelay` slice.
+
+`sms_gate.ino` calls `watchdog::begin()` first after `Serial.begin()`. It calls
+`feedLoop()` and `loop()` at the start of `loopFirmware()`.
 
 ## Alternatives Considered
 
-### Only Arduino loop WDT
+### Only the Arduino loop WDT
 
-Нет покрытия poll-задач, нет модем-RESET, нет safe-mode. Отклонён: не решает зависание `modem_lock`.
+This option does not cover poll tasks. It does not reset the modem and does
+not provide safe mode. It does not prevent a `modem_lock` stall. Rejected.
 
-### External HW watchdog
+### External hardware watchdog
 
-Требует плату и GPIO — отсутствует, YAGNI.
+This option requires a watchdog chip and a GPIO. The board has neither. It is
+not needed for this scope. Rejected.
 
-### Full task health monitoring (heap, Wi-Fi RSSI, SMTP queue)
+### Full task health monitoring
 
-Дало бы больше сигналов, но увеличивает ложные рестарты и код. Отложено: покрывается TWDT + существующими `event=*_error`.
+This option would monitor heap use, Wi-Fi RSSI, and the SMTP queue. It would
+provide more signals, but it would increase code size and false restarts.
+Existing `event=*_error` events cover the related errors. Deferred.
 
 ## Consequences
 
-- **Positive:** зависший loop/poll перезапускает ≤60 с (TWDT panic) или ≤180 с (супервизор); модем ресетится перед ESP; флэппинг (3 × watchdog без 5 мин стабильности) не уходит в boot-loop — остаётся AP+HTTP для `clear`.
-- **Negative / trade-offs:** RTC_NOINIT теряется при полном обесточивании — тогда счётчик сбрасывается (приемлемо, т.к. питание уже сбросило модем). TWDT panic пишет coredump в существующий партишн `coredump 0xFF0000 0x10000` — читать `esptool read_flash`. Добавляет ~2 КБ flash.
-- **Accepted risks:** TWDT panic = hard fault, `Serial.flush()` может не успеть — логируем до RESET узким `printf`. Компиляция требует `esp_task_wdt.h` из Arduino-ESP32 3.x (API `esp_task_wdt_config_t`).
+- **Positive:** A stalled loop or poll task restarts within 60 s through TWDT,
+  or within 180 s through the supervisor. The modem resets before the ESP.
+  Three watchdog resets without a stable five-minute window lead to AP and
+  HTTP safe mode instead of an endless boot loop.
+- **Negative / trade-offs:** `RTC_NOINIT` data is lost when power is removed.
+  The counter then resets. This is acceptable because the power removal also
+  resets the modem. TWDT panic writes a coredump to the existing
+  `coredump 0xFF0000 0x10000` partition. Read it with `esptool read_flash`.
+  The module adds about 2 KiB of flash use.
+- **Accepted risks:** A TWDT panic is a hard fault. `Serial.flush()` might not
+  complete. Log the event with a narrow `printf` before RESET. Compilation
+  requires `esp_task_wdt.h` from Arduino-ESP32 3.x and the
+  `esp_task_wdt_config_t` API.
