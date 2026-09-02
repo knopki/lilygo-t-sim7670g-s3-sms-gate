@@ -4,7 +4,7 @@
 // - Renders SMS metadata and content into shared SMTP subjects and bodies.
 // - NOT: Reading modem messages or sending email.
 // INVARIANTS:
-// - Sender text in subjects is printable ASCII and capped at 40 characters.
+// - Dynamic subject text is printable ASCII; sender text is capped at 40 characters.
 // - ZTE and SIM7670G messages use the same subject/body layout.
 // #endregion MODULE_CONTRACT
 
@@ -13,18 +13,17 @@
 #include "modem/modem_client.h"
 #include "zte/zte_client.h"
 
-// #region FUNC_sanitizeSenderForSubject
-// PURPOSE: Reduces a sender field to printable ASCII so it can travel in
-// an SMTP subject safely; control bytes become spaces, non-ASCII becomes
-// '?', empty input maps to "unknown sender" and the result is capped at
-// 40 characters.
-String sanitizeSenderForSubject(const char* sender) {
+namespace {
+
+// #region FUNC_sanitizeSubjectText
+// PURPOSE: Removes control and non-ASCII bytes from dynamic SMTP subject text.
+String sanitizeSubjectText(const char* value) {
   String clean;
-  if (sender == nullptr) {
-    return F("unknown sender");
+  if (value == nullptr) {
+    return clean;
   }
-  clean.reserve(strlen(sender));
-  for (const char* p = sender; *p != '\0'; ++p) {
+  clean.reserve(strlen(value));
+  for (const char* p = value; *p != '\0'; ++p) {
     const unsigned char ch = static_cast<unsigned char>(*p);
     if (ch < 32 || ch > 126) {
       clean += ch < 32 ? ' ' : '?';
@@ -33,6 +32,19 @@ String sanitizeSenderForSubject(const char* sender) {
     }
   }
   clean.trim();
+  return clean;
+}
+// #endregion FUNC_sanitizeSubjectText
+
+}  // namespace
+
+// #region FUNC_sanitizeSenderForSubject
+// PURPOSE: Reduces a sender field to printable ASCII so it can travel in
+// an SMTP subject safely; control bytes become spaces, non-ASCII becomes
+// '?', empty input maps to "unknown sender" and the result is capped at
+// 40 characters.
+String sanitizeSenderForSubject(const char* sender) {
+  const String clean = sanitizeSubjectText(sender);
   if (clean.length() == 0) {
     return F("unknown sender");
   }
@@ -50,8 +62,10 @@ void buildSmsEmailFromParts(const char* senderRaw, const String& label, const ch
                             String& body) {
   const String sender = sanitizeSenderForSubject(senderRaw != nullptr ? senderRaw : "");
   if (!concatComplete) {
-    const char* rec = (received != nullptr && received[0] != '\0') ? received : "?";
-    const char* tot = (total != nullptr && total[0] != '\0') ? total : "?";
+    const String receivedClean = sanitizeSubjectText(received);
+    const String totalClean = sanitizeSubjectText(total);
+    const String rec = receivedClean.length() > 0 ? receivedClean : String(F("?"));
+    const String tot = totalClean.length() > 0 ? totalClean : String(F("?"));
     subject = F("[INCOMPLETE ");
     subject += rec;
     subject += '/';

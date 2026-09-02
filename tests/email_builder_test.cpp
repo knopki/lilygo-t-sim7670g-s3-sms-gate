@@ -40,6 +40,14 @@ static bool contains(const String& h, const char* needle) {
   return std::string(h.c_str()).find(needle) != std::string::npos;
 }
 
+static bool containsNonPrintable(const String& value) {
+  for (const char* p = value.c_str(); *p != '\0'; ++p) {
+    const unsigned char ch = static_cast<unsigned char>(*p);
+    if (ch < 32 || ch > 126) return true;
+  }
+  return false;
+}
+
 int main() {
   // sanitizeSenderForSubject
   EXPECT(String(sanitizeSenderForSubject(nullptr).c_str()) == String("unknown sender"),
@@ -100,6 +108,15 @@ int main() {
                            body);
     EXPECT(String(subject.c_str()) == String("[Work] [INCOMPLETE 1/3] SMS from Alice"),
            "alias + incomplete subject");
+  }
+  // concat counters cannot inject SMTP headers or terminate DATA
+  {
+    String subject, body;
+    buildSmsEmailFromParts("Alice", "", "7", "2024-01-02", "frag", false, "\r\nTo:", "\r\n.\r\nX",
+                           subject, body);
+    EXPECT(String(subject.c_str()) == String("[INCOMPLETE To:/.  X] SMS from Alice"),
+           "concat controls replaced");
+    EXPECT(!containsNonPrintable(subject), "concat subject printable only");
   }
   // null text/id/date
   {
