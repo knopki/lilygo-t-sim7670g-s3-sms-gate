@@ -66,7 +66,7 @@ class ModemService {
   // #endregion METHOD_ModemService_readStatus
 
   bool isPollCycleActive() const { return pollCycleActive_; }
-  bool isSendRunning() const { return sendRunning_; }
+  bool isSendRunning() const;
 
   // #region METHOD_ModemService_shouldRunTask
   // PURPOSE: Gates task creation on a loaded, enabled modem profile.
@@ -125,8 +125,11 @@ class ModemService {
 
   String sendTo_;
   String sendText_;
-  volatile bool sendRunning_ = false;
-  volatile bool sendDone_ = false;
+  // All send-result fields are read by HTTP on a different core. This lock
+  // publishes them as one snapshot; it is never held during modem I/O.
+  mutable portMUX_TYPE sendStatusMux_ = portMUX_INITIALIZER_UNLOCKED;
+  bool sendRunning_ = false;
+  bool sendDone_ = false;
   bool sendSuccess_ = false;
   String sendMessage_;
   ModemConcatCache concatCache_;

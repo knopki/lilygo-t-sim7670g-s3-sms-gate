@@ -185,17 +185,26 @@ void ModemService::publishStatus(const ModemStatus& status) { statusCache_.publi
 ModemStatus ModemService::readStatus() const { return statusCache_.read(); }
 // #endregion METHOD_ModemService_readStatus
 
+bool ModemService::isSendRunning() const {
+  portENTER_CRITICAL(&sendStatusMux_);
+  const bool running = sendRunning_;
+  portEXIT_CRITICAL(&sendStatusMux_);
+  return running;
+}
+
 // #region METHOD_ModemService_sendStatus
 // PURPOSE: Exposes async send progress as plain data, so the UI polls
 // completion without blocking or joining the send task.
 WebAsyncOp ModemService::sendStatus() const {
   WebAsyncOp op;
+  portENTER_CRITICAL(&sendStatusMux_);
   op.running = sendRunning_;
   op.done = sendDone_;
   if (sendDone_) {
     op.result = sendSuccess_ ? "success" : "failed";
     op.message = sendMessage_;
   }
+  portEXIT_CRITICAL(&sendStatusMux_);
   return op;
 }
 // #endregion METHOD_ModemService_sendStatus
@@ -211,7 +220,7 @@ bool ModemService::shouldRunSms(const ModemStatus& snapshot) const {
     return false;
   if (WiFi.status() != WL_CONNECTED) return false;
   if (!snapshot.present || strcmp(snapshot.cpin, "READY") != 0) return false;
-  if (sendRunning_) return false;
+  if (isSendRunning()) return false;
   return true;
 }
 // #endregion METHOD_ModemService_shouldRunSmsForSnapshot
@@ -564,7 +573,7 @@ void ModemService::runPollTask() {
           publishStatus(absent);
           Serial.printf("event=modem_error stage=%s\n", safeStage.c_str());
         }
-        if (!sendRunning_) {
+        if (!isSendRunning()) {
           const ModemStatus snapshot = readStatus();
           if (shouldRunSms(snapshot)) {
             runPollCycle(client);
@@ -649,7 +658,7 @@ bool ModemService::startSend(const String& to, const String& text, String& error
     error = F("The internal modem module is disabled.");
     return false;
   }
-  if (sendRunning_) {
+  if (isSendRunning()) {
     error = F("An SMS send is already in progress.");
     return false;
   }
@@ -689,13 +698,17 @@ bool ModemService::startSend(const String& to, const String& text, String& error
   }
   sendTo_ = to;
   sendText_ = text;
+  portENTER_CRITICAL(&sendStatusMux_);
   sendDone_ = false;
   sendMessage_ = "";
   sendSuccess_ = false;
   sendRunning_ = true;
+  portEXIT_CRITICAL(&sendStatusMux_);
   if (xTaskCreatePinnedToCore(sendTask, "modem_send", kServiceTaskStack, this, 1, nullptr, 0) !=
       pdPASS) {
+    portENTER_CRITICAL(&sendStatusMux_);
     sendRunning_ = false;
+    portEXIT_CRITICAL(&sendStatusMux_);
     Serial.println("event=modem_send_failed reason=task_create");
     error = F("The send could not be started. Try again.");
     return false;
@@ -801,10 +814,12 @@ void ModemService::runSend() {
   free(scratch);
   // Publish final send state BEFORE restoring the poll task so the first new
   // poll cycle never observes a still-active send.
+  portENTER_CRITICAL(&sendStatusMux_);
   sendMessage_ = message;
   sendSuccess_ = lockHeld && result == ModemResult::kSuccess;
   sendRunning_ = false;
   sendDone_ = true;
+  portEXIT_CRITICAL(&sendStatusMux_);
   Serial.printf("event=modem_send_complete result=%s stage=%s elapsed_ms=%lu heap=%u\n",
                 resultToken, stage, millis() - startedAt, static_cast<unsigned>(ESP.getFreeHeap()));
   // Restore the poll lifecycle on every outcome of a clean stop; after a
