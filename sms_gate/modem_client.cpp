@@ -21,6 +21,7 @@
 #endif
 
 #include "codec.h"
+#include "system/calendar_validate.h"
 #include "system/sms_validate.h"
 
 namespace {
@@ -191,10 +192,10 @@ bool cclkToEpochMs(const char* cclk, int64_t& epochMsOut) {
     else if (tzSign != '+')
       return false;
   }
-  if (yy < 0 || yy > 99 || mm < 1 || mm > 12 || dd < 1 || dd > 31 || hh < 0 || hh > 23 || mi < 0 ||
+  const int fullYear = yy + (yy < 70 ? 2000 : 1900);
+  if (yy < 0 || yy > 99 || !isValidCalendarDate(fullYear, mm, dd) || hh < 0 || hh > 23 || mi < 0 ||
       mi > 59 || ss < 0 || ss > 59 || tzQuarters < -48 || tzQuarters > 48)
     return false;
-  int fullYear = yy + (yy < 70 ? 2000 : 1900);
   auto daysFromCivil = [](int y, int m, int d) -> int64_t {
     y -= m <= 2;
     const int era = (y >= 0 ? y : y - 399) / 400;

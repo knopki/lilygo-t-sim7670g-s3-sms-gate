@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "modem/modem_client.h"
+#include "system/calendar_validate.h"
 #ifdef ARDUINO
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -49,11 +50,7 @@ bool parseGpsDateTime(const char* date, const char* utcTime, int& year, int& mon
   hour = (utcTime[0] - '0') * 10 + utcTime[1] - '0';
   minute = (utcTime[2] - '0') * 10 + utcTime[3] - '0';
   second = (utcTime[4] - '0') * 10 + utcTime[5] - '0';
-  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 60) return false;
-
-  const bool leapYear = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-  const int daysInMonth[] = {0, 31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  return day >= 1 && day <= daysInMonth[month];
+  return hour <= 23 && minute <= 59 && second <= 60 && isValidCalendarDate(year, month, day);
 }
 // #endregion FUNC_parseGpsDateTime
 

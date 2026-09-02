@@ -187,6 +187,9 @@ void testCclkToEpoch() {
   assert(ms == makeEpochMs(2025, 8, 25, 12, 34, 56));
   assert(cclkToEpochMs("25/08/25,00:00:00-04", ms));  // -1h
   assert(ms == makeEpochMs(2025, 8, 25, 1, 0, 0));
+  assert(cclkToEpochMs("24/02/29,12:00:00+00", ms));  // Gregorian leap day
+  assert(!cclkToEpochMs("25/02/29,12:00:00+00", ms));
+  assert(!cclkToEpochMs("26/02/31,12:00:00+00", ms));
   assert(!cclkToEpochMs("bad", ms));
   puts("testCclkToEpoch ok");
 }
