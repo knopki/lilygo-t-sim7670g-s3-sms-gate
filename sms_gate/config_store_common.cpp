@@ -51,17 +51,19 @@ bool constantTimeEquals(const String& left, const String& right) {
 // PURPOSE: Rejects unsafe scheduler intervals before they reach persisted source profiles.
 bool parsePollInterval(const String& raw, uint16_t& out, uint16_t min, uint16_t max,
                        String& error) {
+  const String rangeError = String(F("Poll interval must be a number between ")) + String(min) +
+                            F(" and ") + String(max) + F(" seconds.");
   String trimmed = raw;
   trimmed.trim();
   if (trimmed.length() == 0) {
-    error = F("Poll interval must be a number between 5 and 300 seconds.");
+    error = rangeError;
     return false;
   }
   char* end = nullptr;
   const long parsed = strtol(trimmed.c_str(), &end, 10);
   if (end == nullptr || *end != '\0' || parsed < static_cast<long>(min) ||
       parsed > static_cast<long>(max)) {
-    error = F("Poll interval must be a number between 5 and 300 seconds.");
+    error = rangeError;
     return false;
   }
   out = static_cast<uint16_t>(parsed);

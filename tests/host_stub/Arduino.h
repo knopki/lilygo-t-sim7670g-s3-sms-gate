@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cstring>
 
+using std::max;
+
 #ifndef F
 #define F(x) (x)
 #endif
