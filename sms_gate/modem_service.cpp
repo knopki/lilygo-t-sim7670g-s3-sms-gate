@@ -368,8 +368,13 @@ void ModemService::runPollCycle(ModemClient& client) {
       snprintf(sms.storage, sizeof(sms.storage), "%s", activeStorage);
       ModemConcatInfo concat;
       if (client.probeConcat(sms.id, concat) != ModemResult::kSuccess) {
-        scanOk = false;
-        break;
+        // CMGR already marked this record read. A malformed sender-controlled
+        // UDH must not stop this bounded candidate scan and starve newer SMS.
+        String safeStage = String(client.failedStage());
+        safeStage.replace("=", "_");
+        Serial.printf("event=modem_concat_probe_skipped id=%s stage=%s\n", sms.id,
+                      safeStage.c_str());
+        continue;
       }
       if (!concat.present) {
         found = true;

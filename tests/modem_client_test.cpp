@@ -616,6 +616,18 @@ void testExtractConcatFromDeliverPdu() {
   assert(!concat.present);
   assert(!extractConcatFromDeliverPdu("00440B912143658709F100080000", concat));
   assert(!extractConcatFromDeliverPdu("00440B912143658709F10008000000000000000Z", concat));
+  // Sender-controlled malformed UDH variants must be rejected by the probe;
+  // ModemService skips such a record and continues with later candidates.
+  assert(!extractConcatFromDeliverPdu("00440B912143658709F100080000000000000002000041", concat));
+  assert(!extractConcatFromDeliverPdu("00440B912143658709F10008000000000000000403000353", concat));
+  assert(!extractConcatFromDeliverPdu("00440B912143658709F1000800000000000000080500035300010041",
+                                      concat));
+  assert(!extractConcatFromDeliverPdu("00440B912143658709F1000800000000000000080500035302000041",
+                                      concat));
+  assert(!extractConcatFromDeliverPdu("00440B912143658709F1000800000000000000080500035301020041",
+                                      concat));
+  assert(!extractConcatFromDeliverPdu(
+      "00440B912143658709F10008000000000000000D0A000353020100035402010041", concat));
 
   // A 16-bit concatenation IE retains both reference octets. A 16-bit
   // reference that shares the same high byte with another set must not merge.
