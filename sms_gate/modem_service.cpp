@@ -596,13 +596,17 @@ void ModemService::pollTask(void* param) {
 // #endregion METHOD_ModemService_pollTask
 
 // #region METHOD_ModemService_syncTask
-// PURPOSE: Ensures modem poll task runs only when moduleEnabled.
+// PURPOSE: Ensures modem poll task runs only when its profile permits it outside safe mode.
 void ModemService::syncTask() {
   if (taskHandle_ != nullptr) {
     if (!task_control::stopTask(taskHandle_, taskStopRequested_)) {
       Serial.println("event=modem_task_stop_timeout");
       return;
     }
+  }
+  if (watchdog::isSafeMode()) {
+    Serial.println("event=modem_task_stopped reason=safe_mode");
+    return;
   }
   if (!shouldRunTask()) {
     Serial.println("event=modem_task_stopped reason=module_disabled");

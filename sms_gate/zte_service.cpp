@@ -301,13 +301,17 @@ bool ZteService::startSend(const String& to, const String& text, String& error) 
 // #endregion METHOD_ZteService_startSend
 
 // #region METHOD_ZteService_syncPollTask
-// PURPOSE: Aligns poll task with shouldRun (moduleEnabled gate).
+// PURPOSE: Aligns poll task with source policy while preserving safe-mode containment.
 void ZteService::syncPollTask(bool shouldRun) {
   if (pollHandle_ != nullptr) {
     if (!task_control::stopTask(pollHandle_, pollStopRequested_)) {
       Serial.println("event=zte_poll_stop_timeout");
       return;
     }
+  }
+  if (watchdog::isSafeMode()) {
+    Serial.println("event=zte_poll_task state=stopped reason=safe_mode");
+    return;
   }
   if (!shouldRun) {
     Serial.println("event=zte_poll_task state=stopped");

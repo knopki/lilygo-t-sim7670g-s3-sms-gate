@@ -44,6 +44,7 @@ unsigned long lastSerialHeartbeatAt = 0;
 String bootTrace;
 bool bootTraceCollecting = true;
 bool bootTraceReplayed = false;
+bool safeModeWasActive = false;
 
 // #region FUNC_recordBootStage
 // PURPOSE: Preserves startup events until native USB CDC becomes ready.
@@ -59,6 +60,17 @@ void recordBootStage(const String& event) {
 }
 // #endregion FUNC_recordBootStage
 
+// #region FUNC_resumeServicesAfterSafeMode
+// PURPOSE: Restores normal Wi-Fi and poll-service lifecycles only after safe mode exits.
+void resumeServicesAfterSafeMode() {
+  recordBootStage(F("event=watchdog_safe_mode_services_resume"));
+  wifiManager.beginStationAttempt(config);
+  zteService.syncPollTask(zteService.shouldRunModule());
+  modemService.syncTask();
+  gpsService.syncTask();
+}
+// #endregion FUNC_resumeServicesAfterSafeMode
+
 // #region FUNC_setupFirmware
 // PURPOSE: Starts the web server and either joins the verified Wi-Fi
 // profile or exposes the first-time captive portal.
@@ -66,6 +78,7 @@ void setupFirmware() {
   Serial.begin(115200);
   delay(kBootDelayMs);
   watchdog::begin();
+  safeModeWasActive = watchdog::isSafeMode();
   recordBootStage(String(F("event=boot_started reset_reason=")) +
                   String(static_cast<int>(esp_reset_reason())));
   if (watchdog::isSafeMode()) {
@@ -80,8 +93,16 @@ void setupFirmware() {
   recordBootStage(F("event=boot_config_load_begin"));
 
   if (configStore.load(config)) {
-    recordBootStage(F("event=boot_config_loaded action=station_connect"));
-    wifiManager.beginStationAttempt(config);
+    if (watchdog::isSafeMode()) {
+      recordBootStage(F("event=boot_config_loaded action=safe_mode_ap"));
+      wifiManager.setConnectionState(WifiManager::ConnectionState::kFallbackAp);
+      wifiManager.startAccessPoint(config);
+      recordBootStage(String(F("event=watchdog_safe_mode_ap active=")) +
+                      (wifiManager.accessPointActive() ? F("true") : F("false")));
+    } else {
+      recordBootStage(F("event=boot_config_loaded action=station_connect"));
+      wifiManager.beginStationAttempt(config);
+    }
   } else {
     recordBootStage(F("event=boot_config_missing action=initial_ap"));
     config = RuntimeConfig{};
@@ -172,6 +193,10 @@ void setupFirmware() {
 void loopFirmware() {
   watchdog::feedLoop();
   watchdog::loop();
+  if (safeModeWasActive && !watchdog::isSafeMode()) {
+    safeModeWasActive = false;
+    resumeServicesAfterSafeMode();
+  }
   httpServer.handleClient();
   wifiManager.handleDns();
 

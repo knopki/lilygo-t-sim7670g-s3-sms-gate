@@ -265,13 +265,17 @@ void GpsService::pollTask(void* param) {
 // #endregion METHOD_GpsService_pollTask
 
 // #region METHOD_GpsService_syncTask
-// PURPOSE: Starts or stops polling to match the stored profile.
+// PURPOSE: Starts or stops polling to match the stored profile outside safe mode.
 void GpsService::syncTask() {
   if (taskHandle_ != nullptr) {
     if (!task_control::stopTask(taskHandle_, taskStopRequested_)) {
       Serial.println("event=gps_task_stop_timeout");
       return;
     }
+  }
+  if (watchdog::isSafeMode()) {
+    Serial.println("event=gps_task_stopped reason=safe_mode");
+    return;
   }
   if (!shouldRunTask()) {
     Serial.println("event=gps_task_stopped reason=module_disabled");

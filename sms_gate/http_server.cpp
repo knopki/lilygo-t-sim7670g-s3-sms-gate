@@ -654,11 +654,16 @@ void HttpServer::handleWatchdogStatusRequest() {
 // #endregion METHOD_handleWatchdogStatusRequest
 
 // #region METHOD_handleWatchdogClearRequest
-// PURPOSE: Clears safe-mode counter via POST /api/watchdog/clear.
+// PURPOSE: Requests exit from safe mode via POST /api/watchdog/clear.
 void HttpServer::handleWatchdogClearRequest() {
   if (!requireAuthentication()) return;
+  if (!watchdog::isSafeMode()) {
+    sendJson(server_, kHttpOk, renderMessageJson(F("Watchdog safe mode is already inactive.")));
+    return;
+  }
   watchdog::clearSafeMode();
-  sendJson(server_, kHttpOk, renderMessageJson(F("Watchdog safe-mode cleared.")));
+  sendJson(server_, kHttpOk,
+           renderMessageJson(F("Watchdog safe mode cleared. Services restarting.")));
 }
 // #endregion METHOD_handleWatchdogClearRequest
 // #region METHOD_handleSmsSendStart

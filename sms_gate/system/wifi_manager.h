@@ -5,6 +5,7 @@
 // - NOT: HTTP routes, persistence, protocol dialogs, or boot tracing.
 // INVARIANTS:
 // - Fallback AP is protected;
+// - safe mode keeps the fallback AP active for local diagnostics;
 // - mDNS follows station connection;
 // - DNS is served only while AP is active;
 // - errors never contain credentials.

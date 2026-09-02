@@ -19,7 +19,7 @@ Product page: <https://lilygo.cc/products/t-sim-7670g-s3>
 - Keeps time from GNSS when available, with SNTP and mobile-network time as fallbacks. It can serve time to local NTP clients.
 - Protects the configured interface with an administrator password and can fall back to its own Wi-Fi access point when the saved network is unavailable.
 - Stores configuration separately from the firmware, so a forgotten setup can be reset over USB without erasing the application.
-- Uses a watchdog and a safe mode to keep the device reachable if repeated failures occur.
+- Uses a watchdog and safe mode: after repeated watchdog failures it keeps a protected local access point and HTTP diagnostics available while poll services stay stopped.
 
 ## First-time setup
 

@@ -83,7 +83,7 @@ class GpsService {
 
   void setTimeSync(TimeSync* timeSync) { timeSync_ = timeSync; }
   // #region METHOD_GpsService_syncTask
-  // PURPOSE: Applies profile changes without rebooting the gateway.
+  // PURPOSE: Applies profile changes without rebooting while safe mode blocks polling.
   void syncTask();
   // #endregion METHOD_GpsService_syncTask
 

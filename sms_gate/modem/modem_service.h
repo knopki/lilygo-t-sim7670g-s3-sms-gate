@@ -98,7 +98,7 @@ class ModemService {
   // #endregion METHOD_ModemService_startSend
 
   // #region METHOD_ModemService_syncTask
-  // PURPOSE: Applies modem profile changes without rebooting the gateway.
+  // PURPOSE: Applies modem profile changes without rebooting while safe mode blocks polling.
   void syncTask();
   // #endregion METHOD_ModemService_syncTask
 

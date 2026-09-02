@@ -292,6 +292,9 @@ bool WifiManager::testStationCandidate(const RuntimeConfig& candidate,
 // PURPOSE: Advances STA/AP recovery without blocking other services.
 void WifiManager::loop(const RuntimeConfig& config) {
   handleDns();
+  if (watchdog::isSafeMode()) {
+    return;
+  }
   const unsigned long now = millis();
   if (connectionState_ == ConnectionState::kConnecting) {
     if (WiFi.status() == WL_CONNECTED) {

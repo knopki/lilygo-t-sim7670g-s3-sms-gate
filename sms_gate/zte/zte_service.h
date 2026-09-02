@@ -92,7 +92,7 @@ class ZteService {
   // #endregion METHOD_ZteService_startSend
 
   // #region METHOD_ZteService_syncPollTask
-  // PURPOSE: Applies ZTE profile changes without rebooting the gateway.
+  // PURPOSE: Applies ZTE profile changes without rebooting while safe mode blocks polling.
   void syncPollTask(bool shouldRun);
   // #endregion METHOD_ZteService_syncPollTask
   void setSmtpService(SmtpService* smtp) { smtp_ = smtp; }
