@@ -198,7 +198,6 @@ void loopFirmware() {
     resumeServicesAfterSafeMode();
   }
   httpServer.handleClient();
-  wifiManager.handleDns();
 
   const unsigned long now = millis();
   if (!bootTraceReplayed && now >= kSerialHeartbeatIntervalMs) {
