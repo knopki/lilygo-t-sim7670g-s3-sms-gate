@@ -205,8 +205,9 @@ WebAsyncOp ModemService::sendStatus() const {
 // the poll cycle never starts a delivery it cannot complete.
 bool ModemService::shouldRunSms(const ModemStatus& snapshot) const {
   if (!shouldRunSms()) return false;
-  if (smtp_ == nullptr || !smtp_->isLoaded() || smtp_->config().host.length() == 0 ||
-      smtp_->config().password.length() == 0)
+  const SmtpConfigRecord smtpConfig = smtp_ != nullptr ? smtp_->configRecord() : SmtpConfigRecord{};
+  if (smtp_ == nullptr || !smtp_->isLoaded() || smtpConfig.host[0] == '\0' ||
+      smtpConfig.password[0] == '\0')
     return false;
   if (WiFi.status() != WL_CONNECTED) return false;
   if (!snapshot.present || strcmp(snapshot.cpin, "READY") != 0) return false;
@@ -230,7 +231,7 @@ bool ModemService::forwardSms(const ModemSms& sms) {
   String subject;
   String body;
   ::buildModemSmsEmail(sms, stored_.label, subject, body);
-  const SmtpConfigRecord record = buildSmtpConfigRecord(smtp_->config());
+  const SmtpConfigRecord record = smtp_->configRecord();
   const SmtpSendResult result =
       client.sendMail(record, wifi_->mdnsHostname().c_str(), subject.c_str(), body.c_str());
   Serial.printf(

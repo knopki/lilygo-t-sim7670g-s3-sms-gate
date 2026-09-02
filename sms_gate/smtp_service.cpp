@@ -71,8 +71,14 @@ void logSmtpStage(const char* stage, int code) {
 // #region METHOD_SmtpService_load
 // PURPOSE: Makes stored SMTP policy available before tests or forwarding.
 bool SmtpService::load() {
-  loaded_ = store_.load(stored_);
-  return loaded_;
+  RuntimeSmtpConfig candidate;
+  const bool loaded = store_.load(candidate);
+  const SmtpConfigRecord record = loaded ? buildSmtpConfigRecord(candidate) : SmtpConfigRecord{};
+  portENTER_CRITICAL(&configMux_);
+  stored_ = record;
+  loaded_ = loaded;
+  portEXIT_CRITICAL(&configMux_);
+  return loaded;
 }
 // #endregion METHOD_SmtpService_load
 
@@ -82,28 +88,67 @@ bool SmtpService::save(const RuntimeSmtpConfig& candidate) {
   if (!store_.save(candidate)) {
     return false;
   }
-  stored_ = candidate;
+  const SmtpConfigRecord record = buildSmtpConfigRecord(candidate);
+  portENTER_CRITICAL(&configMux_);
+  stored_ = record;
   loaded_ = true;
-  testDone_ = false;
-  testMessage_ = "";
+  portEXIT_CRITICAL(&configMux_);
   return true;
 }
 // #endregion METHOD_SmtpService_save
 
+bool SmtpService::isLoaded() const {
+  portENTER_CRITICAL(&configMux_);
+  const bool loaded = loaded_;
+  portEXIT_CRITICAL(&configMux_);
+  return loaded;
+}
+
+// #region METHOD_SmtpService_configRecord
+// PURPOSE: Copies the fixed-size SMTP profile before a task uses its fields.
+SmtpConfigRecord SmtpService::configRecord() const {
+  portENTER_CRITICAL(&configMux_);
+  const SmtpConfigRecord snapshot = stored_;
+  portEXIT_CRITICAL(&configMux_);
+  return snapshot;
+}
+// #endregion METHOD_SmtpService_configRecord
+
+// #region METHOD_SmtpService_config
+// PURPOSE: Builds a String-owned profile only after the shared record is copied.
+RuntimeSmtpConfig SmtpService::config() const {
+  const SmtpConfigRecord record = configRecord();
+  RuntimeSmtpConfig snapshot;
+  snapshot.host = record.host;
+  snapshot.port = record.port;
+  snapshot.securityMode = static_cast<SmtpSecurityMode>(record.securityMode);
+  snapshot.username = record.username;
+  snapshot.password = record.password;
+  snapshot.fromAddress = record.fromAddress;
+  snapshot.recipientAddress = record.recipientAddress;
+  return snapshot;
+}
+// #endregion METHOD_SmtpService_config
+
 // #region METHOD_SmtpService_webConfig
 // PURPOSE: Snapshots the stored profile for the JSON API without the password.
 WebSmtpConfig SmtpService::webConfig() const {
+  const SmtpConfigRecord record = configRecord();
+  const bool present = isLoaded() && record.host[0] != '\0';
   WebSmtpConfig web;
-  web.present = loaded_ && stored_.host.length() > 0;
-  web.host = web.present ? stored_.host : String();
-  web.port = web.present ? stored_.port
-                         : (stored_.securityMode == SmtpSecurityMode::kImplicitTls ? 465 : 587);
-  web.security =
-      web.present ? String(smtpSecurityName(stored_.securityMode)) : String(F("starttls"));
-  web.username = web.present ? stored_.username : String();
-  web.passwordSet = web.present && stored_.password.length() > 0;
-  web.fromAddress = web.present ? stored_.fromAddress : String();
-  web.recipientAddress = web.present ? stored_.recipientAddress : String();
+  web.present = present;
+  web.host = present ? String(record.host) : String();
+  web.port =
+      present ? record.port
+              : (record.securityMode == static_cast<uint8_t>(SmtpSecurityMode::kImplicitTls) ? 465
+                                                                                             : 587);
+  web.security = present
+                     ? String(smtpSecurityName(static_cast<SmtpSecurityMode>(record.securityMode)))
+                     : String(F("starttls"));
+  web.username = present ? String(record.username) : String();
+  web.passwordSet = present && record.password[0] != '\0';
+  web.fromAddress = present ? String(record.fromAddress) : String();
+  web.recipientAddress = present ? String(record.recipientAddress) : String();
   return web;
 }
 // #endregion METHOD_SmtpService_webConfig
@@ -165,11 +210,12 @@ bool SmtpService::readSmtpForm(WebServer& server, RuntimeSmtpConfig& candidate, 
 
   candidate.password = server.arg("password");
   if (candidate.password.length() == 0) {
-    if (!loaded_ || stored_.password.length() == 0) {
+    const RuntimeSmtpConfig stored = config();
+    if (!isLoaded() || stored.password.length() == 0) {
       error = F("Enter the SMTP password.");
       return false;
     }
-    candidate.password = stored_.password;
+    candidate.password = stored.password;
   } else if (candidate.password.length() > kMaxSmtpPasswordLength ||
              !isPrintableAscii(candidate.password)) {
     error = F("SMTP password must contain 1–95 printable ASCII characters.");

@@ -68,8 +68,14 @@ ZteService::ZteService() = default;
 // #region METHOD_ZteService_load
 // PURPOSE: Makes stored ZTE policy available before task decisions.
 bool ZteService::load() {
-  loaded_ = store_.load(stored_);
-  return loaded_;
+  RuntimeZteConfig candidate;
+  const bool loaded = store_.load(candidate);
+  const ZteConfigRecord record = loaded ? buildZteConfigRecord(candidate) : ZteConfigRecord{};
+  portENTER_CRITICAL(&configMux_);
+  stored_ = record;
+  loaded_ = loaded;
+  portEXIT_CRITICAL(&configMux_);
+  return loaded;
 }
 // #endregion METHOD_ZteService_load
 
@@ -79,25 +85,60 @@ bool ZteService::save(const RuntimeZteConfig& candidate) {
   if (!store_.save(candidate)) {
     return false;
   }
-  stored_ = candidate;
+  const ZteConfigRecord record = buildZteConfigRecord(candidate);
+  portENTER_CRITICAL(&configMux_);
+  stored_ = record;
   loaded_ = true;
-  testDone_ = false;
-  testMessage_ = "";
+  portEXIT_CRITICAL(&configMux_);
   return true;
 }
 // #endregion METHOD_ZteService_save
 
+bool ZteService::isLoaded() const {
+  portENTER_CRITICAL(&configMux_);
+  const bool loaded = loaded_;
+  portEXIT_CRITICAL(&configMux_);
+  return loaded;
+}
+
+// #region METHOD_ZteService_configRecord
+// PURPOSE: Copies the fixed-size ZTE profile before a task uses its fields.
+ZteConfigRecord ZteService::configRecord() const {
+  portENTER_CRITICAL(&configMux_);
+  const ZteConfigRecord snapshot = stored_;
+  portEXIT_CRITICAL(&configMux_);
+  return snapshot;
+}
+// #endregion METHOD_ZteService_configRecord
+
+// #region METHOD_ZteService_config
+// PURPOSE: Builds a String-owned profile only after the shared record is copied.
+RuntimeZteConfig ZteService::config() const {
+  const ZteConfigRecord record = configRecord();
+  RuntimeZteConfig snapshot;
+  snapshot.moduleEnabled = record.moduleEnabled == 1;
+  snapshot.forwardEnabled = record.forwardEnabled == 1;
+  snapshot.host = record.host;
+  snapshot.password = record.password;
+  snapshot.label = record.label;
+  snapshot.pollIntervalSec = record.pollIntervalSec;
+  return snapshot;
+}
+// #endregion METHOD_ZteService_config
+
 // #region METHOD_ZteService_webConfig
 // PURPOSE: Snapshots stored profile without password.
 WebZteConfig ZteService::webConfig() const {
+  const ZteConfigRecord record = configRecord();
+  const bool present = isLoaded() && record.host[0] != '\0';
   WebZteConfig web;
-  web.present = loaded_ && stored_.host.length() > 0;
-  web.moduleEnabled = web.present && stored_.moduleEnabled;
-  web.forwardEnabled = web.present && stored_.forwardEnabled;
-  web.host = web.present ? stored_.host : String();
-  web.passwordSet = web.present && stored_.password.length() > 0;
-  web.label = web.present ? stored_.label : String();
-  web.pollIntervalSec = web.present ? stored_.pollIntervalSec : kDefaultZtePollSec;
+  web.present = present;
+  web.moduleEnabled = present && record.moduleEnabled == 1;
+  web.forwardEnabled = present && record.forwardEnabled == 1;
+  web.host = present ? String(record.host) : String();
+  web.passwordSet = present && record.password[0] != '\0';
+  web.label = present ? String(record.label) : String();
+  web.pollIntervalSec = present ? record.pollIntervalSec : kDefaultZtePollSec;
   web.lastStatus = statusCache_.readString();
   return web;
 }
@@ -120,11 +161,12 @@ bool ZteService::readForm(WebServer& server, RuntimeZteConfig& out, String& erro
   }
   out.password = server.arg("password");
   if (out.password.length() == 0) {
-    if (!loaded_ || stored_.password.length() == 0) {
+    const RuntimeZteConfig stored = config();
+    if (!isLoaded() || stored.password.length() == 0) {
       error = F("Enter the modem web password.");
       return false;
     }
-    out.password = stored_.password;
+    out.password = stored.password;
   } else if (out.password.length() > kMaxZtePasswordLength || !isPrintableAscii(out.password)) {
     error = F("The modem web password must contain 1–63 printable ASCII characters.");
     return false;
@@ -173,7 +215,8 @@ bool ZteService::readSendForm(WebServer& server, String& to, String& text, Strin
 // #region METHOD_ZteService_pollIntervalMs
 // PURPOSE: Protects the scheduler from corrupt persisted intervals.
 unsigned long ZteService::pollIntervalMs() const {
-  const uint16_t sec = loaded_ ? stored_.pollIntervalSec : kDefaultZtePollSec;
+  const ZteConfigRecord record = configRecord();
+  const uint16_t sec = isLoaded() ? record.pollIntervalSec : kDefaultZtePollSec;
   if (!isValidZtePollInterval(sec)) return kDefaultZtePollSec * 1000UL;
   return static_cast<unsigned long>(sec) * 1000UL;
 }
@@ -222,14 +265,17 @@ void ZteService::releaseOperation(ZteOperation completed) {
 // #region METHOD_ZteService_shouldRunModule
 // PURPOSE: Gates all ZTE work on a loaded, enabled profile.
 bool ZteService::shouldRunModule() const {
-  return loaded_ && stored_.moduleEnabled && stored_.host.length() > 0;
+  const ZteConfigRecord record = configRecord();
+  return isLoaded() && record.moduleEnabled == 1 && record.host[0] != '\0';
 }
 // #endregion METHOD_ZteService_shouldRunModule
 
 // #region METHOD_ZteService_shouldRunPoll
 // PURPOSE: Gates polling on source readiness and forwarding dependencies.
 bool ZteService::shouldRunPoll(bool smtpReady) const {
-  return shouldRunModule() && stored_.forwardEnabled && smtpReady;
+  const ZteConfigRecord record = configRecord();
+  return isLoaded() && record.moduleEnabled == 1 && record.forwardEnabled == 1 &&
+         record.host[0] != '\0' && smtpReady;
 }
 // #endregion METHOD_ZteService_shouldRunPoll
 
@@ -376,11 +422,12 @@ bool ZteService::forwardSms(const ZteSms& sms) {
   SecureSmtpChannel channel(watchdog::reset);
   SmtpClient client(channel);
   client.setStageListener(logSmtpStage);
+  const ZteConfigRecord configSnapshot = configRecord();
   String subject;
   String body;
-  buildZteSmsEmail(sms, stored_.label, subject, body);
+  buildZteSmsEmail(sms, String(configSnapshot.label), subject, body);
   if (smtp_ == nullptr || wifi_ == nullptr) return false;
-  const SmtpConfigRecord record = buildSmtpConfigRecord(smtp_->config());
+  const SmtpConfigRecord record = smtp_->configRecord();
   const SmtpSendResult result =
       client.sendMail(record, wifi_->mdnsHostname().c_str(), subject.c_str(), body.c_str());
   Serial.printf(
@@ -394,10 +441,11 @@ bool ZteService::forwardSms(const ZteSms& sms) {
 // #region METHOD_ZteService_runPollCycle
 // PURPOSE: Completes one at-least-once forwarding cycle without losing failed deliveries.
 void ZteService::runPollCycle(ZteModem& modem) {
+  const ZteConfigRecord configSnapshot = configRecord();
   // #region BLOCK_login
-  Serial.printf("event=zte_poll_begin host=%s heap=%u\n", stored_.host.c_str(),
+  Serial.printf("event=zte_poll_begin host=%s heap=%u\n", configSnapshot.host,
                 static_cast<unsigned>(ESP.getFreeHeap()));
-  ZteResult result = modem.login(stored_.host.c_str(), stored_.password.c_str());
+  ZteResult result = modem.login(configSnapshot.host, configSnapshot.password);
   if (result != ZteResult::kSuccess) {
     publishStatus((String(F("Poll failed: ")) + modem.failedStage()).c_str());
     Serial.printf("event=zte_poll_complete result=login_failed stage=%s\n", modem.failedStage());
@@ -484,8 +532,10 @@ void ZteService::runPollTask() {
     }
     waitingForStation = false;
     // Only poll when forwarding enabled and smtp ready; otherwise idle.
-    bool smtpReady = smtp_ != nullptr && smtp_->isLoaded() && smtp_->config().host.length() > 0 &&
-                     smtp_->config().password.length() > 0;
+    const SmtpConfigRecord smtpConfig =
+        smtp_ != nullptr ? smtp_->configRecord() : SmtpConfigRecord{};
+    const bool smtpReady = smtp_ != nullptr && smtp_->isLoaded() && smtpConfig.host[0] != '\0' &&
+                           smtpConfig.password[0] != '\0';
     if (!shouldRunPoll(smtpReady)) {
       // idle wait without polling
       watchdog::reset();
@@ -569,9 +619,9 @@ void ZteService::runSend() {
   char* scratch = static_cast<char*>(malloc(kZteScratchSize));
   NetworkZteChannel channel;
   ZteModem modem(channel, scratch, scratch == nullptr ? 0 : kZteScratchSize);
-  ZteResult result = scratch == nullptr
-                         ? ZteResult::kProtocolError
-                         : modem.login(stored_.host.c_str(), stored_.password.c_str());
+  const ZteConfigRecord configSnapshot = configRecord();
+  ZteResult result = scratch == nullptr ? ZteResult::kProtocolError
+                                        : modem.login(configSnapshot.host, configSnapshot.password);
   bool confirmed = false;
   bool statusFailed = false;
   if (result == ZteResult::kSuccess) {

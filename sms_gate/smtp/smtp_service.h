@@ -17,6 +17,7 @@
 
 #include <Arduino.h>
 #include <WebServer.h>
+#include <freertos/FreeRTOS.h>
 
 #include "persistence/config_store_smtp.h"
 #include "smtp/smtp_client.h"
@@ -42,8 +43,15 @@ class SmtpService {
   // PURPOSE: Persists a validated SMTP profile for future delivery.
   bool save(const RuntimeSmtpConfig& candidate);
   // #endregion METHOD_SmtpService_save
-  bool isLoaded() const { return loaded_; }
-  const RuntimeSmtpConfig& config() const { return stored_; }
+  bool isLoaded() const;
+  // #region METHOD_SmtpService_config
+  // PURPOSE: Gives tasks an independent String-owned profile snapshot.
+  RuntimeSmtpConfig config() const;
+  // #endregion METHOD_SmtpService_config
+  // #region METHOD_SmtpService_configRecord
+  // PURPOSE: Gives forwarding tasks a heap-free SMTP record snapshot.
+  SmtpConfigRecord configRecord() const;
+  // #endregion METHOD_SmtpService_configRecord
   // #region METHOD_SmtpService_webConfig
   // PURPOSE: Projects stored SMTP settings without exposing the password.
   WebSmtpConfig webConfig() const;
@@ -74,7 +82,8 @@ class SmtpService {
 
  private:
   SmtpConfigStore store_;
-  RuntimeSmtpConfig stored_;
+  mutable portMUX_TYPE configMux_ = portMUX_INITIALIZER_UNLOCKED;
+  SmtpConfigRecord stored_{};
   bool loaded_ = false;
 
   RuntimeSmtpConfig testCandidate_;

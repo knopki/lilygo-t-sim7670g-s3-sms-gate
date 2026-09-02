@@ -37,8 +37,15 @@ class ZteService {
   // PURPOSE: Keeps validated ZTE policy across reboot.
   bool save(const RuntimeZteConfig& candidate);
   // #endregion METHOD_ZteService_save
-  bool isLoaded() const { return loaded_; }
-  const RuntimeZteConfig& config() const { return stored_; }
+  bool isLoaded() const;
+  // #region METHOD_ZteService_config
+  // PURPOSE: Gives callers an independent String-owned profile snapshot.
+  RuntimeZteConfig config() const;
+  // #endregion METHOD_ZteService_config
+  // #region METHOD_ZteService_configRecord
+  // PURPOSE: Gives worker tasks a heap-free ZTE record snapshot.
+  ZteConfigRecord configRecord() const;
+  // #endregion METHOD_ZteService_configRecord
   // #region METHOD_ZteService_webConfig
   // PURPOSE: Lets the UI inspect ZTE policy without store access.
   WebZteConfig webConfig() const;
@@ -110,7 +117,8 @@ class ZteService {
 
  private:
   ZteConfigStore store_;
-  RuntimeZteConfig stored_;
+  mutable portMUX_TYPE configMux_ = portMUX_INITIALIZER_UNLOCKED;
+  ZteConfigRecord stored_{};
   bool loaded_ = false;
 
   // Status cache for the web UI (160 bytes, portMUX).
