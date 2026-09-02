@@ -35,6 +35,9 @@ function stopAllPollers() {
 
 function handleUnauthorized() {
 	stopAllPollers();
+	// The current poll may finish successfully after this handler returns.
+	// It must not treat the authentication banner as a reachability banner.
+	reachabilityBanner = false;
 	setBanner("error", "Authentication required. Reload the page to sign in.");
 }
 
