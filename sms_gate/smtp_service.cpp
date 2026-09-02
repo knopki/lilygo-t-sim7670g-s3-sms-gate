@@ -328,7 +328,9 @@ void SmtpService::runTest() {
       smtpResultName(testResult_), client.failedStage(), client.lastReplyCode(),
       channel.readDetail(), channel.lastErrno(), millis() - startedAt,
       static_cast<unsigned>(ESP.getFreeHeap()));
-  testRunning_ = false;
+  // Publish completion before admitting another test, so its start cannot
+  // clear this result and then receive a stale done flag.
   testDone_ = true;
+  testRunning_ = false;
 }
 // #endregion METHOD_SmtpService_runTest

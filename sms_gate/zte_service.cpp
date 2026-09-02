@@ -595,8 +595,10 @@ void ZteService::runTest() {
   testSuccess_ = result == ZteResult::kSuccess;
   Serial.printf("event=zte_test_complete result=%s stage=%s\n", zteResultName(result),
                 modem.failedStage());
-  releaseOperation(ZteOperation::kTest);
+  // Publish completion before releasing the reservation, so a new test cannot
+  // clear this result and then receive a stale done flag.
   testDone_ = true;
+  releaseOperation(ZteOperation::kTest);
 }
 
 // #region METHOD_ZteService_sendTask
@@ -717,6 +719,8 @@ void ZteService::runSend() {
   Serial.printf("event=zte_send_complete result=%s confirmed=%s stage=%s elapsed_ms=%lu\n",
                 zteResultName(result), confirmed ? "true" : "false", sendStage.c_str(),
                 millis() - startedAt);
-  releaseOperation(ZteOperation::kSend);
+  // Publish completion before releasing the reservation, so a new send cannot
+  // clear this result and then receive a stale done flag.
   sendDone_ = true;
+  releaseOperation(ZteOperation::kSend);
 }
