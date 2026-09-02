@@ -89,9 +89,9 @@ inline bool isConfigRecordV1Valid(const ConfigRecordV1& record) {
   }
   // ssid may be empty (initial setup) — only check NUL-termination via printable range
   // but allow empty string; wifi/admin passwords checked at higher layer.
-  if (!codec::isPrintableRange(record.ssid, kMaxSsidLength)) return false;
-  if (!codec::isPrintableRange(record.wifiPassword, kMaxPasswordLength)) return false;
-  if (!codec::isPrintableRange(record.adminPassword, kMaxPasswordLength)) return false;
+  if (!codec::isPrintableRange(record.ssid, sizeof(record.ssid))) return false;
+  if (!codec::isPrintableRange(record.wifiPassword, sizeof(record.wifiPassword))) return false;
+  if (!codec::isPrintableRange(record.adminPassword, sizeof(record.adminPassword))) return false;
   return true;
 }
 // #endregion FUNC_isConfigRecordV1Valid
@@ -103,11 +103,11 @@ inline bool isConfigRecordValid(const ConfigRecord& record) {
       record.checksum != calculateConfigChecksum(record)) {
     return false;
   }
-  if (!codec::isPrintableRange(record.ssid, kMaxSsidLength)) return false;
-  if (!codec::isPrintableRange(record.wifiPassword, kMaxPasswordLength)) return false;
-  if (!codec::isPrintableRange(record.adminPassword, kMaxPasswordLength)) return false;
-  if (!codec::isPrintableRange(record.ntpServer1, kMaxNtpServerLength)) return false;
-  if (!codec::isPrintableRange(record.ntpServer2, kMaxNtpServerLength)) return false;
+  if (!codec::isPrintableRange(record.ssid, sizeof(record.ssid))) return false;
+  if (!codec::isPrintableRange(record.wifiPassword, sizeof(record.wifiPassword))) return false;
+  if (!codec::isPrintableRange(record.adminPassword, sizeof(record.adminPassword))) return false;
+  if (!codec::isPrintableRange(record.ntpServer1, sizeof(record.ntpServer1))) return false;
+  if (!codec::isPrintableRange(record.ntpServer2, sizeof(record.ntpServer2))) return false;
   if (record.ntpEnabled != 0 && record.ntpEnabled != 1) return false;
   return true;
 }

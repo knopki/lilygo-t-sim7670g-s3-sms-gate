@@ -223,9 +223,12 @@ ZteConfigRecordV3 makeV3Record() {
   record.magic = kZteConfigMagic;
   record.version = 3;
   record.enabled = 1;
-  strcpy(record.host, "192.168.0.1");
-  strcpy(record.password, "modem-pass");
-  strcpy(record.label, "+79990000000");
+  memset(record.host, 'h', kMaxZteHostLength);
+  record.host[kMaxZteHostLength] = '\0';
+  memset(record.password, 'p', kMaxZtePasswordLength);
+  record.password[kMaxZtePasswordLength] = '\0';
+  memset(record.label, 'l', kMaxZteLabelLength);
+  record.label[kMaxZteLabelLength] = '\0';
   record.pollIntervalSec = kDefaultZtePollSec;
   const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
   uint32_t hash = 2166136261UL;
@@ -245,6 +248,16 @@ void testRecordValidation() {
   assert(isZteConfigRecordValid(record));
 
   strcpy(record.label, "+79990000000 (ZTE)");
+  record.checksum = calculateZteConfigChecksum(record);
+  assert(isZteConfigRecordValid(record));
+
+  record = makeRecord();
+  memset(record.host, 'h', kMaxZteHostLength);
+  record.host[kMaxZteHostLength] = '\0';
+  memset(record.password, 'p', kMaxZtePasswordLength);
+  record.password[kMaxZtePasswordLength] = '\0';
+  memset(record.label, 'l', kMaxZteLabelLength);
+  record.label[kMaxZteLabelLength] = '\0';
   record.checksum = calculateZteConfigChecksum(record);
   assert(isZteConfigRecordValid(record));
 

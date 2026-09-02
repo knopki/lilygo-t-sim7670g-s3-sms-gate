@@ -84,14 +84,14 @@ inline bool isZteConfigRecordValid(const ZteConfigRecord& record) {
   if (record.forwardEnabled != 0 && record.forwardEnabled != 1) {
     return false;
   }
-  if (!codec::isPrintableRange(record.host, kMaxZteHostLength) || record.host[0] == '\0') {
+  if (!codec::isPrintableRange(record.host, sizeof(record.host)) || record.host[0] == '\0') {
     return false;
   }
-  if (!codec::isPrintableRange(record.password, kMaxZtePasswordLength) ||
+  if (!codec::isPrintableRange(record.password, sizeof(record.password)) ||
       record.password[0] == '\0') {
     return false;
   }
-  if (!codec::isPrintableRange(record.label, kMaxZteLabelLength)) {
+  if (!codec::isPrintableRange(record.label, sizeof(record.label))) {
     return false;
   }
   return isValidZtePollInterval(record.pollIntervalSec);
@@ -126,12 +126,12 @@ inline bool isZteConfigRecordV3Valid(const ZteConfigRecordV3& record) {
     return false;
   }
   if (record.enabled != 0 && record.enabled != 1) return false;
-  if (!codec::isPrintableRange(record.host, kMaxZteHostLength) || record.host[0] == '\0')
+  if (!codec::isPrintableRange(record.host, sizeof(record.host)) || record.host[0] == '\0')
     return false;
-  if (!codec::isPrintableRange(record.password, kMaxZtePasswordLength) ||
+  if (!codec::isPrintableRange(record.password, sizeof(record.password)) ||
       record.password[0] == '\0')
     return false;
-  if (!codec::isPrintableRange(record.label, kMaxZteLabelLength)) return false;
+  if (!codec::isPrintableRange(record.label, sizeof(record.label))) return false;
   return isValidZtePollInterval(record.pollIntervalSec);
 }
 // #endregion FUNC_isZteConfigRecordV3Valid

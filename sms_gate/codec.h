@@ -23,8 +23,8 @@ namespace codec {
 // #region FUNC_isPrintableRange
 // PURPOSE: Shares the printable ASCII rule of the checksummed configuration
 // records so binary garbage cannot survive validation.
-inline bool isPrintableRange(const char* value, size_t maxLength) {
-  for (size_t index = 0; index < maxLength; ++index) {
+inline bool isPrintableRange(const char* value, size_t fieldSize) {
+  for (size_t index = 0; index < fieldSize; ++index) {
     const char character = value[index];
     if (character == '\0') {
       return true;
@@ -33,7 +33,7 @@ inline bool isPrintableRange(const char* value, size_t maxLength) {
       return false;
     }
   }
-  return false;  // Not null-terminated within the field limit.
+  return false;  // Not null-terminated within the field capacity.
 }
 // #endregion FUNC_isPrintableRange
 

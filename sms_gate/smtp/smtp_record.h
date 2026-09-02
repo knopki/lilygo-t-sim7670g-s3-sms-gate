@@ -78,23 +78,24 @@ inline bool isSmtpConfigRecordValid(const SmtpConfigRecord& record) {
        record.securityMode != static_cast<uint8_t>(SmtpSecurityMode::kImplicitTls))) {
     return false;
   }
-  if (!codec::isPrintableRange(record.host, kMaxSmtpHostLength) || record.host[0] == '\0') {
+  if (!codec::isPrintableRange(record.host, sizeof(record.host)) || record.host[0] == '\0') {
     return false;
   }
-  if (!codec::isPrintableRange(record.username, kMaxSmtpUserLength) || record.username[0] == '\0') {
+  if (!codec::isPrintableRange(record.username, sizeof(record.username)) ||
+      record.username[0] == '\0') {
     return false;
   }
-  if (!codec::isPrintableRange(record.password, kMaxSmtpPasswordLength) ||
+  if (!codec::isPrintableRange(record.password, sizeof(record.password)) ||
       record.password[0] == '\0') {
     return false;
   }
-  if (!codec::isPrintableRange(record.fromAddress, kMaxSmtpAddressLength) ||
-      !codec::containsCharacter(record.fromAddress, kMaxSmtpAddressLength, '@') ||
+  if (!codec::isPrintableRange(record.fromAddress, sizeof(record.fromAddress)) ||
+      !codec::containsCharacter(record.fromAddress, sizeof(record.fromAddress), '@') ||
       record.fromAddress[0] == '\0') {
     return false;
   }
-  if (!codec::isPrintableRange(record.recipientAddress, kMaxSmtpAddressLength) ||
-      !codec::containsCharacter(record.recipientAddress, kMaxSmtpAddressLength, '@') ||
+  if (!codec::isPrintableRange(record.recipientAddress, sizeof(record.recipientAddress)) ||
+      !codec::containsCharacter(record.recipientAddress, sizeof(record.recipientAddress), '@') ||
       record.recipientAddress[0] == '\0') {
     return false;
   }

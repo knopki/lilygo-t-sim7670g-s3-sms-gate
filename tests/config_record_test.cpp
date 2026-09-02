@@ -63,6 +63,21 @@ int main() {
   assert(kMaxPasswordLength == 63);
   assert(kMaxNtpServerLength == 64);
 
+  // Every field accepts its documented maximum content length plus trailing NUL.
+  record = makeRecord();
+  memset(record.ssid, 's', kMaxSsidLength);
+  record.ssid[kMaxSsidLength] = '\0';
+  memset(record.wifiPassword, 'w', kMaxPasswordLength);
+  record.wifiPassword[kMaxPasswordLength] = '\0';
+  memset(record.adminPassword, 'a', kMaxPasswordLength);
+  record.adminPassword[kMaxPasswordLength] = '\0';
+  memset(record.ntpServer1, 'n', kMaxNtpServerLength);
+  record.ntpServer1[kMaxNtpServerLength] = '\0';
+  memset(record.ntpServer2, 't', kMaxNtpServerLength);
+  record.ntpServer2[kMaxNtpServerLength] = '\0';
+  record.checksum = calculateConfigChecksum(record);
+  assert(isConfigRecordValid(record));
+
   // ntpEnabled 0/1 valid
   record = makeRecord();
   record.ntpEnabled = 0;

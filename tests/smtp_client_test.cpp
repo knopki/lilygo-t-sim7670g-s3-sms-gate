@@ -153,6 +153,22 @@ void testRecordValidation() {
   assert(!isSmtpConfigRecordValid(record));
 
   record = makeRecord();
+  memset(record.host, 'h', kMaxSmtpHostLength);
+  record.host[kMaxSmtpHostLength] = '\0';
+  memset(record.username, 'u', kMaxSmtpUserLength);
+  record.username[kMaxSmtpUserLength] = '\0';
+  memset(record.password, 'p', kMaxSmtpPasswordLength);
+  record.password[kMaxSmtpPasswordLength] = '\0';
+  memset(record.fromAddress, 'f', kMaxSmtpAddressLength);
+  record.fromAddress[1] = '@';
+  record.fromAddress[kMaxSmtpAddressLength] = '\0';
+  memset(record.recipientAddress, 'r', kMaxSmtpAddressLength);
+  record.recipientAddress[1] = '@';
+  record.recipientAddress[kMaxSmtpAddressLength] = '\0';
+  record.checksum = calculateSmtpConfigChecksum(record);
+  assert(isSmtpConfigRecordValid(record));
+
+  record = makeRecord();
   record.host[0] = '\0';
   record.checksum = calculateSmtpConfigChecksum(record);
   assert(!isSmtpConfigRecordValid(record));
