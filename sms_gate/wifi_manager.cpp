@@ -111,6 +111,8 @@ void WifiManager::stopAccessPoint() {
   accessPointActive_ = false;
   accessPointShutdownScheduled_ = false;
   accessPointShutdownAt_ = 0;
+  accessPointRestartScheduled_ = false;
+  accessPointRestartAt_ = 0;
   Serial.println("event=ap_stopped");
 }
 // #endregion METHOD_WifiManager_stopAccessPoint
