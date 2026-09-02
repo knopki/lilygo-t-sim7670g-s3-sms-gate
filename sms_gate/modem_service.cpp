@@ -541,7 +541,8 @@ void ModemService::runPollTask() {
               static_cast<unsigned>(status.smsTotalMe), static_cast<unsigned>(status.smsUsedSm),
               static_cast<unsigned>(status.smsTotalSm), status.cclk,
               static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
-          if (shouldTimeSync() && timeSync_ != nullptr && status.cclk[0] != '\0') {
+          if (shouldTimeSync() && timeSync_ != nullptr && isModemNetworkRegistered(status) &&
+              status.cclk[0] != '\0') {
             int64_t epochMs = 0;
             if (cclkToEpochMs(status.cclk, epochMs)) {
               timeSync_->feedNitzSample(epochMs, 1500);

@@ -200,6 +200,21 @@ void testParseCreg() {
 }
 // #endregion FUNC_testParseCreg
 
+// #region FUNC_testNetworkRegistrationGate
+// PURPOSE: Keeps NITZ blocked until either circuit or packet registration is home or roaming.
+void testNetworkRegistrationGate() {
+  ModemStatus status{};
+  assert(!isModemNetworkRegistered(status));
+  status.ceregStat = 1;
+  assert(isModemNetworkRegistered(status));
+  status.ceregStat = 0;
+  status.cregStat = 5;
+  assert(isModemNetworkRegistered(status));
+  status.cregStat = 2;
+  assert(!isModemNetworkRegistered(status));
+}
+// #endregion FUNC_testNetworkRegistrationGate
+
 // #region FUNC_testParseCops
 // PURPOSE: Preserves operator and access-technology extraction.
 void testParseCops() {
@@ -1566,6 +1581,7 @@ int main() {
   testParseCsq();
   testParseCesq();
   testParseCreg();
+  testNetworkRegistrationGate();
   testParseCops();
   testParseCpms();
   testParseCclk();

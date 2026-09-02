@@ -56,6 +56,12 @@ struct ModemStatus {
 };
 // #endregion STRUCT_ModemStatus
 
+// #region FUNC_isModemNetworkRegistered
+// PURPOSE: Shares the home-or-roaming registration gate required before
+// trusting network-provided modem data such as NITZ.
+bool isModemNetworkRegistered(const ModemStatus& status);
+// #endregion FUNC_isModemNetworkRegistered
+
 // #region STRUCT_ModemSms
 // PURPOSE: Keeps modem SMS compatible with the shared forwarding pipeline.
 struct ModemSms {

@@ -34,6 +34,15 @@ constexpr int kModemMaxLines = 30;
 constexpr int kModemCmglMaxReadAttempts = 128;
 }  // namespace
 
+// #region FUNC_isModemNetworkRegistered
+// PURPOSE: Accepts home and roaming packet or circuit registration before
+// callers trust network-provided data.
+bool isModemNetworkRegistered(const ModemStatus& status) {
+  return status.ceregStat == 1 || status.ceregStat == 5 || status.cregStat == 1 ||
+         status.cregStat == 5;
+}
+// #endregion FUNC_isModemNetworkRegistered
+
 // #region FUNC_parseCpinLine
 // PURPOSE: Parses the +CPIN code so the READY send/forward gate and the
 // status UI share one tested parser; unknown codes surface verbatim
