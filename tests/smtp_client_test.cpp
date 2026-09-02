@@ -425,6 +425,23 @@ void testRecipientRejected() {
 }
 // #endregion FUNC_testRecipientRejected
 
+// #region FUNC_testBareReplyCode
+// PURPOSE: Accepts a three-digit SMTP reply without reading past its terminator.
+void testBareReplyCode() {
+  FakeChannel channel;
+  channel.enqueueReply("500");
+
+  SmtpClient client(channel);
+  const SmtpSendResult result = client.sendMail(makeRecord(), "sms-gate.local", "Relay", "hi");
+  assert(result == SmtpSendResult::kDialogFailed);
+  assert(strcmp(client.failedStage(), "banner") == 0);
+  assert(client.lastReplyCode() == 500);
+  assert(channel.stopCalledOnce());
+  assert(channel.written()[0] == '\0');
+  printf("testBareReplyCode ok\n");
+}
+// #endregion FUNC_testBareReplyCode
+
 }  // namespace
 
 int main() {
@@ -436,6 +453,7 @@ int main() {
   testTlsUpgradeFailed();
   testAuthRejected();
   testRecipientRejected();
+  testBareReplyCode();
   printf("all smtp tests passed\n");
   return 0;
 }

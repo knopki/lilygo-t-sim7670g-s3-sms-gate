@@ -45,7 +45,7 @@ int readReplyLine(SmtpChannel& channel, char* line, size_t lineSize, char* separ
       line[2] < '0' || line[2] > '9') {
     return -1;
   }
-  *separator = length == 3 ? ' ' : line[3];
+  *separator = length == 3 ? '\0' : line[3];
   return (line[0] - '0') * 100 + (line[1] - '0') * 10 + (line[2] - '0');
 }
 // #endregion FUNC_readReplyLine
