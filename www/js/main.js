@@ -196,8 +196,8 @@ export async function submitSettingsForm(path, fields, onOk) {
 // #endregion FUNC_submitSettingsForm
 
 // Starts a long-running device operation (test or SMS send) and polls its
-// status endpoint every 1.5 s until the result envelope arrives; the UI stays
-// busy for the whole dialog.
+// status endpoint every 1.5 s. The UI stays busy only while the operation
+// reports running; lost, malformed, or rejected status releases the controls.
 // #region FUNC_runAsyncOperation
 /**
  * @purpose Keeps long device operations observable without blocking the page.
@@ -226,15 +226,37 @@ export async function runAsyncOperation(path, fields, pollPath = path) {
 		return;
 	}
 	setBanner("ok", started.payload?.message || "The operation is running…");
-	const controller = poll(
+	let controller;
+	const stopPolling = (message) => {
+		controller.stop();
+		setBusy(false);
+		if (message) {
+			setBanner("error", message);
+		}
+	};
+	controller = poll(
 		async () => {
-			const { response, payload } = await apiFetch(pollPath);
-			if (response.status === 401) {
-				controller.stop();
-				setBusy(false);
+			let response;
+			let payload;
+			try {
+				({ response, payload } = await apiFetch(pollPath));
+			} catch (_error) {
+				stopPolling("The operation status could not be read. Try again.");
 				return;
 			}
-			if (!response.ok || !payload || payload.running || !payload.done) {
+			if (response.status === 401) {
+				stopPolling();
+				return;
+			}
+			if (!response.ok || !payload) {
+				stopPolling("The operation status could not be read. Try again.");
+				return;
+			}
+			if (payload.running === true) {
+				return;
+			}
+			if (payload.done !== true) {
+				stopPolling("The operation was interrupted. Try again.");
 				return;
 			}
 			controller.stop();
