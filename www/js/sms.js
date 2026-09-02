@@ -10,11 +10,13 @@ import { apiFetch, fillList, runAsyncOperation, setBanner } from "/js/main.js";
 
 const MAX_UNITS = 335;
 const UNITS_PER_SEGMENT = 67;
+const CHANNEL_RETRY_DELAY_MS = 5000;
 
 const smsForm = document.getElementById("sms-form");
 const viaSelect = document.getElementById("via-select");
 const textInput = document.getElementById("sms-text");
 const counter = document.getElementById("sms-counter");
+const channelLoadHint = document.getElementById("sms-load-hint");
 
 function channelLabel(base, payload) {
 	return payload.label ? `${base} — ${payload.label}` : base;
@@ -25,32 +27,41 @@ function channelLabel(base, payload) {
  * @purpose Exposes only usable modem routes so sends cannot target disabled channels.
  */
 async function loadChannels() {
-	const [modem, zte] = await Promise.all([
-		apiFetch("/api/modem/source"),
-		apiFetch("/api/zte"),
-	]);
-	const channels = [];
-	if (modem.response.ok && modem.payload?.module_enabled) {
-		channels.push({
-			id: "modem",
-			label: channelLabel("Internal modem", modem.payload),
+	try {
+		const [modem, zte] = await Promise.all([
+			apiFetch("/api/modem/source"),
+			apiFetch("/api/zte"),
+		]);
+		if (!modem.response.ok || !zte.response.ok) {
+			throw new Error("SMS channel request failed");
+		}
+		const channels = [];
+		if (modem.response.ok && modem.payload?.module_enabled) {
+			channels.push({
+				id: "modem",
+				label: channelLabel("Internal modem", modem.payload),
+			});
+		}
+		if (zte.response.ok && zte.payload?.module_enabled) {
+			channels.push({
+				id: "zte",
+				label: channelLabel("ZTE MF79RU", zte.payload),
+			});
+		}
+		channelLoadHint.hidden = true;
+		if (channels.length === 0) {
+			document.getElementById("sms-disabled-hint").hidden = false;
+			return;
+		}
+		fillList(viaSelect, "via-option", channels, (node, channel) => {
+			node.value = channel.id;
+			node.textContent = channel.label;
 		});
+		smsForm.hidden = false;
+	} catch (_error) {
+		channelLoadHint.hidden = false;
+		window.setTimeout(loadChannels, CHANNEL_RETRY_DELAY_MS);
 	}
-	if (zte.response.ok && zte.payload?.module_enabled) {
-		channels.push({
-			id: "zte",
-			label: channelLabel("ZTE MF79RU", zte.payload),
-		});
-	}
-	if (channels.length === 0) {
-		document.getElementById("sms-disabled-hint").hidden = false;
-		return;
-	}
-	fillList(viaSelect, "via-option", channels, (node, channel) => {
-		node.value = channel.id;
-		node.textContent = channel.label;
-	});
-	smsForm.hidden = false;
 }
 // #endregion FUNC_loadChannels
 
