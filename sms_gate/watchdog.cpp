@@ -55,8 +55,6 @@ RTC_NOINIT_ATTR RtcState rtcState;
 
 bool gSafeMode = false;
 bool gTwdtInitialised = false;
-unsigned long gLastFeedLoopMs = 0;
-bool gLoopFedOnce = false;
 uint32_t gLastResetReason = 0;
 
 // #region FUNC_resetModemHardware
@@ -176,8 +174,6 @@ void begin() {
     }
   }
 #endif
-  gLastFeedLoopMs = millis();
-  gLoopFedOnce = false;
 }
 // #endregion FUNC_begin
 
@@ -187,10 +183,8 @@ bool isSafeMode() { return gSafeMode; }
 // #endregion FUNC_isSafeMode
 
 // #region FUNC_feedLoop
-// PURPOSE: Proves the main loop is alive to both watchdog layers.
+// PURPOSE: Proves the main loop is alive to the task watchdog.
 void feedLoop() {
-  gLastFeedLoopMs = millis();
-  gLoopFedOnce = true;
 #ifdef ARDUINO
   if (gTwdtInitialised) {
     esp_task_wdt_reset();
@@ -238,22 +232,11 @@ void reset() {
 // #endregion FUNC_reset
 
 // #region FUNC_loop
-// PURPOSE: Detects stalls and clears the boot-loop counter after stability.
+// PURPOSE: Clears retained boot-loop recovery state after stable uptime.
 void loop() {
   const unsigned long now = millis();
-  if (!gLoopFedOnce) return;
 
-  // Stall supervisor — 180 s without a loop feed → modem RESET + reboot.
-  // TWDT (60 s) normally fires first; this is the fallback when TWDT is
-  // mis-configured or a task feeds TWDT but loop is still stuck logically.
-  if (now - gLastFeedLoopMs > kWatchdogSupervisorStallMs) {
-    Serial.printf("event=watchdog_stall_trigger elapsed=%lu threshold=%u\n", now - gLastFeedLoopMs,
-                  static_cast<unsigned>(kWatchdogSupervisorStallMs));
-    triggerRestart("loop_stall");
-    return;
-  }
-
-  // Stable window: after 5 min of uninterrupted loop, clear boot-loop counter.
+  // Stable window: after 5 min of uptime, clear boot-loop recovery state.
   if (now > kWatchdogStableMs && rtcState.bootCount != 0) {
     Serial.printf("event=watchdog_stable_clear uptime=%lu boot_count=%u\n", now,
                   static_cast<unsigned>(rtcState.bootCount));

@@ -57,12 +57,11 @@ Add `system/watchdog.*`. This module is the only owner of
   starts. It calls `reset()` during each 250 ms idle wait and calls
   `removeCurrentTask()` before `vTaskDelete`.
 - **Feed the loop task:** Call `watchdog::feedLoop()` at the start of
-  `loopFirmware()`. The function calls `esp_task_wdt_reset()` and updates
-  `lastFeedLoopMs`.
-- **Supervisor:** Call `watchdog::loop()` during every `loopFirmware()` call.
-  If `now - lastFeedLoopMs > 180 s`, call `triggerRestart("loop_stall")` as a
-  fallback if TWDT does not act. If `millis() > 5 min`, clear the RTC
-  `bootCount` and `safeMode` values.
+  `loopFirmware()`. The function calls `esp_task_wdt_reset()`.
+- **Stable recovery:** Call `watchdog::loop()` during every `loopFirmware()`
+  call. If `millis() > 5 min`, clear the RTC `bootCount` and `safeMode` values.
+  TWDT is the sole stall detector: a same-task software check cannot observe a
+  stalled loop before it resumes.
 - **Boot-loop protection:** Store
   `RTC_NOINIT_ATTR RtcState {magic, bootCount, lastWasWatchdog, safeMode}`.
   In `begin()`, increment `bootCount` only when `lastWasWatchdog == 1` or the
@@ -80,8 +79,8 @@ Add `system/watchdog.*`. This module is the only owner of
   Before each `esp_restart()`, set `lastWasWatchdog=1` and call
   `resetModemHardware()`. This sets RESET LOW for 200 ms and sets DTR LOW.
 - **Observability:** Write the events `watchdog_init`, `watchdog_boot`,
-  `watchdog_boot_count`, `watchdog_safe_mode`, `watchdog_stall_trigger`,
-  `watchdog_trigger`, and `watchdog_stable_clear`. Provide
+  `watchdog_boot_count`, `watchdog_safe_mode`, `watchdog_trigger`, and
+  `watchdog_stable_clear`. Provide
   `GET /api/watchdog {safe_mode,boot_count,timeout_sec,last_reset_reason,uptime_ms}`
   and Digest-authenticated `POST /api/watchdog/clear`. `bootTrace` already
   records the reset reason.
@@ -112,9 +111,9 @@ Existing `event=*_error` events cover the related errors. Deferred.
 
 ## Consequences
 
-- **Positive:** A stalled loop or poll task restarts within 60 s through TWDT,
-  or within 180 s through the supervisor. The modem resets before the ESP.
-  Three watchdog resets without a stable five-minute window lead to AP and
+- **Positive:** A stalled loop or poll task restarts within 60 s through TWDT.
+  The modem resets before the ESP. Three watchdog resets without a stable
+  five-minute window lead to AP and
   HTTP safe mode instead of an endless boot loop.
 - **Negative / trade-offs:** `RTC_NOINIT` data is lost when power is removed.
   The counter then resets. This is acceptable because the power removal also

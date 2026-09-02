@@ -20,7 +20,6 @@ namespace watchdog {
 
 // Tunables — compile-time, justified in ADR-0006.
 constexpr uint32_t kWatchdogTimeoutSec = 60;
-constexpr uint32_t kWatchdogSupervisorStallMs = 180UL * 1000UL;
 constexpr uint32_t kWatchdogStableMs = 5UL * 60UL * 1000UL;
 constexpr uint32_t kWatchdogBootLoopThreshold = 3;
 
@@ -35,7 +34,7 @@ bool isSafeMode();
 // #endregion FUNC_isSafeMode
 
 // #region FUNC_feedLoop
-// PURPOSE: Proves the main loop is alive to the recovery supervisor.
+// PURPOSE: Proves the main loop is alive to the task watchdog.
 void feedLoop();
 // #endregion FUNC_feedLoop
 
@@ -55,7 +54,7 @@ void reset();
 // #endregion FUNC_reset
 
 // #region FUNC_loop
-// PURPOSE: Detects main-loop stalls and records stable recovery progress.
+// PURPOSE: Clears retained boot-loop recovery state after stable uptime.
 void loop();
 // #endregion FUNC_loop
 
