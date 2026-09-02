@@ -628,6 +628,11 @@ void testExtractConcatFromDeliverPdu() {
                                       concat));
   assert(!extractConcatFromDeliverPdu(
       "00440B912143658709F10008000000000000000D0A000353020100035402010041", concat));
+  // TP-UD is limited to 140 octets, including TP-UDHL. Reject a malformed
+  // 141-octet payload before copying its 140-octet header into the fixed buffer.
+  std::string oversizedUdh = "00440B912143658709F10008000000000000008D8C";
+  oversizedUdh.append(280, '0');
+  assert(!extractConcatFromDeliverPdu(oversizedUdh.c_str(), concat));
 
   // A 16-bit concatenation IE retains both reference octets. A 16-bit
   // reference that shares the same high byte with another set must not merge.

@@ -645,7 +645,8 @@ bool extractConcatFromDeliverPdu(const char* pduHex, ModemConcatInfo& out) {
   if (!byteAt(pos++, udl)) return false;
   if ((firstOctet & 0x40) == 0) return true;  // TP-UDHI absent: single SMS.
   uint8_t udhl = 0;
-  if (!byteAt(pos, udhl) || udhl == 0 || static_cast<size_t>(udhl) + 1 > udl ||
+  // TP-UD is at most 140 octets, including the TP-UDHL octet.
+  if (!byteAt(pos, udhl) || udhl == 0 || udhl > 139 || static_cast<size_t>(udhl) + 1 > udl ||
       pos + 1 + static_cast<size_t>(udhl) > bytes)
     return false;
   char udhHex[281] = "";  // UDHL is one octet, maximum UDH is 140 octets.
