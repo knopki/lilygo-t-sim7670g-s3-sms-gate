@@ -189,6 +189,36 @@ String ZteService::lastStatus() const { return statusCache_.readString(); }
 void ZteService::publishStatus(const char* status) { statusCache_.publish(status); }
 // #endregion METHOD_ZteService_publishStatus
 
+// #region METHOD_ZteService_activeOperation
+// PURPOSE: Snapshots the owner of the ZTE HTTP dialog without racing worker tasks.
+ZteService::ZteOperation ZteService::activeOperation() const {
+  portENTER_CRITICAL(&operationMux_);
+  const ZteOperation active = activeOperation_;
+  portEXIT_CRITICAL(&operationMux_);
+  return active;
+}
+// #endregion METHOD_ZteService_activeOperation
+
+// #region METHOD_ZteService_reserveOperation
+// PURPOSE: Atomically claims the ZTE HTTP dialog before an operation starts.
+bool ZteService::reserveOperation(ZteOperation requested, ZteOperation& conflict) {
+  portENTER_CRITICAL(&operationMux_);
+  conflict = activeOperation_;
+  if (conflict == ZteOperation::kNone) activeOperation_ = requested;
+  portEXIT_CRITICAL(&operationMux_);
+  return conflict == ZteOperation::kNone;
+}
+// #endregion METHOD_ZteService_reserveOperation
+
+// #region METHOD_ZteService_releaseOperation
+// PURPOSE: Releases the ZTE HTTP dialog only for its current owner.
+void ZteService::releaseOperation(ZteOperation completed) {
+  portENTER_CRITICAL(&operationMux_);
+  if (activeOperation_ == completed) activeOperation_ = ZteOperation::kNone;
+  portEXIT_CRITICAL(&operationMux_);
+}
+// #endregion METHOD_ZteService_releaseOperation
+
 // #region METHOD_ZteService_shouldRunModule
 // PURPOSE: Gates all ZTE work on a loaded, enabled profile.
 bool ZteService::shouldRunModule() const {
@@ -207,7 +237,7 @@ bool ZteService::shouldRunPoll(bool smtpReady) const {
 // PURPOSE: Lets the UI poll connection tests without joining their worker task.
 WebAsyncOp ZteService::testStatus() const {
   WebAsyncOp op;
-  op.running = testRunning_;
+  op.running = isTestRunning();
   op.done = testDone_;
   if (testDone_) {
     op.result = testSuccess_ ? "success" : "failed";
@@ -221,7 +251,7 @@ WebAsyncOp ZteService::testStatus() const {
 // PURPOSE: Lets the UI poll sends without joining their worker task.
 WebAsyncOp ZteService::sendStatus() const {
   WebAsyncOp op;
-  op.running = sendRunning_;
+  op.running = isSendRunning();
   op.done = sendDone_;
   if (sendDone_) {
     op.result = sendSuccess_ ? "success" : "failed";
@@ -234,25 +264,23 @@ WebAsyncOp ZteService::sendStatus() const {
 // #region METHOD_ZteService_startTest
 // PURPOSE: Keeps connection tests non-blocking and single-flight.
 bool ZteService::startTest(const RuntimeZteConfig& candidate, String& error) {
-  if (testRunning_) {
-    error = F("A connection test is already in progress.");
-    return false;
-  }
-  if (sendRunning_) {
-    error = F("An SMS send is in progress; try again in a few seconds.");
-    return false;
-  }
-  if (pollCycleActive_) {
-    error = F("A poll cycle is in progress; try again in a few seconds.");
+  ZteOperation conflict = ZteOperation::kNone;
+  if (!reserveOperation(ZteOperation::kTest, conflict)) {
+    if (conflict == ZteOperation::kTest) {
+      error = F("A connection test is already in progress.");
+    } else if (conflict == ZteOperation::kSend) {
+      error = F("An SMS send is in progress; try again in a few seconds.");
+    } else {
+      error = F("A poll cycle is in progress; try again in a few seconds.");
+    }
     return false;
   }
   testCandidate_ = candidate;
   testDone_ = false;
   testMessage_ = "";
-  testRunning_ = true;
   if (xTaskCreatePinnedToCore(testTask, "zte_test", kServiceTaskStack, this, 1, nullptr, 0) !=
       pdPASS) {
-    testRunning_ = false;
+    releaseOperation(ZteOperation::kTest);
     Serial.println("event=zte_test_failed reason=task_create");
     error = F("The test could not be started. Try again.");
     return false;
@@ -268,30 +296,28 @@ bool ZteService::startSend(const String& to, const String& text, String& error) 
     error = F("The ZTE modem module is disabled.");
     return false;
   }
-  if (sendRunning_) {
-    error = F("An SMS send is already in progress.");
-    return false;
-  }
-  if (testRunning_) {
-    error = F("A connection test is in progress; try again in a few seconds.");
-    return false;
-  }
-  if (pollCycleActive_) {
-    error = F("A poll cycle is in progress; try again in a few seconds.");
-    return false;
-  }
   if (time(nullptr) < kEpochSynced) {
     error = F("Waiting for the internet time sync; try again in a minute.");
+    return false;
+  }
+  ZteOperation conflict = ZteOperation::kNone;
+  if (!reserveOperation(ZteOperation::kSend, conflict)) {
+    if (conflict == ZteOperation::kSend) {
+      error = F("An SMS send is already in progress.");
+    } else if (conflict == ZteOperation::kTest) {
+      error = F("A connection test is in progress; try again in a few seconds.");
+    } else {
+      error = F("A poll cycle is in progress; try again in a few seconds.");
+    }
     return false;
   }
   sendTo_ = to;
   sendText_ = text;
   sendDone_ = false;
   sendMessage_ = "";
-  sendRunning_ = true;
   if (xTaskCreatePinnedToCore(sendTask, "zte_send", kServiceTaskStack, this, 1, nullptr, 0) !=
       pdPASS) {
-    sendRunning_ = false;
+    releaseOperation(ZteOperation::kSend);
     Serial.println("event=zte_send_failed reason=task_create");
     error = F("The send could not be started. Try again.");
     return false;
@@ -457,11 +483,6 @@ void ZteService::runPollTask() {
       continue;
     }
     waitingForStation = false;
-    if (testRunning_ || sendRunning_) {
-      watchdog::reset();
-      vTaskDelay(pdMS_TO_TICKS(500));
-      continue;
-    }
     // Only poll when forwarding enabled and smtp ready; otherwise idle.
     bool smtpReady = smtp_ != nullptr && smtp_->isLoaded() && smtp_->config().host.length() > 0 &&
                      smtp_->config().password.length() > 0;
@@ -471,9 +492,14 @@ void ZteService::runPollTask() {
       vTaskDelay(pdMS_TO_TICKS(2000));
       continue;
     }
-    pollCycleActive_ = true;
+    ZteOperation conflict = ZteOperation::kNone;
+    if (!reserveOperation(ZteOperation::kPoll, conflict)) {
+      watchdog::reset();
+      vTaskDelay(pdMS_TO_TICKS(500));
+      continue;
+    }
     runPollCycle(modem);
-    pollCycleActive_ = false;
+    releaseOperation(ZteOperation::kPoll);
     const unsigned long intervalMs = pollIntervalMs();
     for (unsigned long waited = 0; waited < intervalMs && !pollStopRequested_;
          waited += kPollSliceMs) {
@@ -519,7 +545,7 @@ void ZteService::runTest() {
   testSuccess_ = result == ZteResult::kSuccess;
   Serial.printf("event=zte_test_complete result=%s stage=%s\n", zteResultName(result),
                 modem.failedStage());
-  testRunning_ = false;
+  releaseOperation(ZteOperation::kTest);
   testDone_ = true;
 }
 
@@ -641,6 +667,6 @@ void ZteService::runSend() {
   Serial.printf("event=zte_send_complete result=%s confirmed=%s stage=%s elapsed_ms=%lu\n",
                 zteResultName(result), confirmed ? "true" : "false", sendStage.c_str(),
                 millis() - startedAt);
-  sendRunning_ = false;
+  releaseOperation(ZteOperation::kSend);
   sendDone_ = true;
 }

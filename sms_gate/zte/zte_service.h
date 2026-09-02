@@ -68,9 +68,9 @@ class ZteService {
   void publishStatus(const char* status);
   // #endregion METHOD_ZteService_publishStatus
 
-  bool isPollCycleActive() const { return pollCycleActive_; }
-  bool isTestRunning() const { return testRunning_; }
-  bool isSendRunning() const { return sendRunning_; }
+  bool isPollCycleActive() const { return activeOperation() == ZteOperation::kPoll; }
+  bool isTestRunning() const { return activeOperation() == ZteOperation::kTest; }
+  bool isSendRunning() const { return activeOperation() == ZteOperation::kSend; }
   // #region METHOD_ZteService_testStatus
   // PURPOSE: Lets the UI follow connection tests without blocking routes.
   WebAsyncOp testStatus() const;
@@ -117,14 +117,18 @@ class ZteService {
   static constexpr size_t kStatusLength = 160;
   task_control::StringStatusCache<kStatusLength> statusCache_;
 
+  // The reservation is set before a worker task starts its HTTP dialog, so
+  // polling, test, and send can never each observe the modem as idle.
+  enum class ZteOperation : uint8_t { kNone, kPoll, kTest, kSend };
+  mutable portMUX_TYPE operationMux_ = portMUX_INITIALIZER_UNLOCKED;
+  volatile ZteOperation activeOperation_ = ZteOperation::kNone;
+
   // Poll lifecycle
   TaskHandle_t pollHandle_ = nullptr;
   volatile bool pollStopRequested_ = false;
-  volatile bool pollCycleActive_ = false;
 
   // Test lifecycle
   RuntimeZteConfig testCandidate_;
-  volatile bool testRunning_ = false;
   volatile bool testDone_ = false;
   bool testSuccess_ = false;
   String testMessage_;
@@ -132,7 +136,6 @@ class ZteService {
   // Send lifecycle
   String sendTo_;
   String sendText_;
-  volatile bool sendRunning_ = false;
   volatile bool sendDone_ = false;
   bool sendSuccess_ = false;
   String sendMessage_;
@@ -142,6 +145,18 @@ class ZteService {
   static void pollTask(void* param);
   static void testTask(void* param);
   static void sendTask(void* param);
+  // #region METHOD_ZteService_reserveOperation
+  // PURPOSE: Claims the ZTE HTTP dialog before a worker begins using it.
+  bool reserveOperation(ZteOperation requested, ZteOperation& conflict);
+  // #endregion METHOD_ZteService_reserveOperation
+  // #region METHOD_ZteService_releaseOperation
+  // PURPOSE: Makes the ZTE HTTP dialog available after its owner exits.
+  void releaseOperation(ZteOperation completed);
+  // #endregion METHOD_ZteService_releaseOperation
+  // #region METHOD_ZteService_activeOperation
+  // PURPOSE: Snapshots the active ZTE dialog for status and admission checks.
+  ZteOperation activeOperation() const;
+  // #endregion METHOD_ZteService_activeOperation
   void runPollTask();
   void runTest();
   void runSend();
